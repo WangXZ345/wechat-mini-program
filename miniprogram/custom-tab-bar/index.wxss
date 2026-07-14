@@ -141,6 +141,26 @@
   transform: translateY(-1rpx);
 }
 
+.icon-wrap.is-bouncing > .tab-icon {
+  transform-origin: center bottom;
+  animation: tab-icon-soft-bounce 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes tab-icon-soft-bounce {
+  0% {
+    transform: translateY(-1rpx) scale(1);
+  }
+  38% {
+    transform: translateY(-7rpx) scale(1.04, 0.96);
+  }
+  68% {
+    transform: translateY(1rpx) scale(0.98, 1.02);
+  }
+  100% {
+    transform: translateY(-1rpx) scale(1);
+  }
+}
+
 .icon-bag {
   width: 31rpx;
   height: 31rpx;
@@ -328,6 +348,7 @@
 @media (prefers-reduced-motion: reduce) {
   .tabbar-item,
   .active-pill,
+  .icon-wrap.is-bouncing > .tab-icon,
   .tab-icon {
     animation: none !important;
     transition: none !important;

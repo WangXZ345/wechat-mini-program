@@ -4,6 +4,7 @@ const { initOrientation, cleanupOrientation } = require("../utils/orientation");
 Component({
   data: {
     selected: 0,
+    bouncingIndex: -1,
     cartBadge: 0,
     visible: true,
     isLandscape: false,
@@ -62,7 +63,10 @@ Component({
     },
 
     setSelected(selected) {
-      this.setData({ selected: Number(selected || 0) });
+      const nextSelected = Number(selected || 0);
+      this.setData({ selected: nextSelected, bouncingIndex: -1 }, () => {
+        this.setData({ bouncingIndex: nextSelected });
+      });
       this.refreshVisibility();
     },
 

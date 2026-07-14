@@ -8,7 +8,7 @@
       bindtap="switchTab"
     >
       <view wx:if="{{selected === index}}" class="active-pill motion-tab-pill"></view>
-      <view class="icon-wrap">
+      <view class="icon-wrap {{bouncingIndex === index ? 'is-bouncing' : ''}}">
         <view wx:if="{{item.icon === 'bag'}}" class="tab-icon icon-bag">
           <view class="bag-handle"></view>
         </view>
