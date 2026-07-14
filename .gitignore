@@ -27,6 +27,7 @@ project.private.config.json
 .codex-runtime/
 .codex-cloudfunction-deploy/
 .superpowers/
+.worktrees/
 
 # Logs and generated operation reports
 *.log
@@ -42,4 +43,3 @@ Thumbs.db
 Desktop.ini
 *.swp
 *.tmp
-
