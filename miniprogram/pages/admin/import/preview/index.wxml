@@ -1,0 +1,100 @@
+<view class="page admin-responsive-page import-preview-page fade-in {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="preview-hero section">
+    <view class="hero-copy">
+      <view class="hero-kicker">导入前确认</view>
+      <view class="hero-title">导入预览</view>
+      <view class="hero-desc">请逐行确认解析结果。价格按“分”存储，新商品默认不上架。</view>
+    </view>
+    <button class="btn btn-primary hero-action" loading="{{importing}}" disabled="{{importing || !items.length}}" bindtap="confirmImport">
+      {{importing ? '导入中' : '确认导入'}}
+    </button>
+  </view>
+
+  <view class="summary-grid section">
+    <view class="summary-card">
+      <view class="summary-label">预览行数</view>
+      <view class="summary-value">{{previewSummary.total || 0}}</view>
+    </view>
+    <view class="summary-card">
+      <view class="summary-label">将导入</view>
+      <view class="summary-value">{{previewSummary.selected || 0}}</view>
+    </view>
+    <view class="summary-card">
+      <view class="summary-label">跳过</view>
+      <view class="summary-value">{{previewSummary.skipped || 0}}</view>
+    </view>
+  </view>
+
+  <view wx:if="{{importProgress}}" class="notice notice-success progress">{{importProgress}}</view>
+  <view wx:if="{{renderNotice}}" class="notice notice-warning render-notice">{{renderNotice}}</view>
+
+  <view wx:if="{{!items.length}}" class="card empty empty-panel">
+    <view class="empty-title">暂无可预览商品行</view>
+    <view class="empty-desc">{{emptyMessage || '当前没有可预览的商品行。可能是解析没有拿到数据，或页面刷新后预览缓存已失效。请返回重新选择库存表和报价单。'}}</view>
+    <button class="btn btn-secondary empty-action" bindtap="backToImport">重新选择文件</button>
+  </view>
+
+  <view wx:if="{{items.length}}" class="queue-title section">
+    <view>
+      <view class="subtitle">商品队列</view>
+      <view class="muted">长列表只展示前 120 行，确认导入会按全部解析结果执行。</view>
+    </view>
+    <view class="tag">共 {{previewSummary.total || 0}} 行</view>
+  </view>
+
+  <view wx:for="{{items}}" wx:key="id" class="card import-row">
+    <view class="row-head">
+      <label class="row check">
+        <checkbox-group data-index="{{index}}" bindchange="onSelectedChange">
+          <checkbox value="selected" checked="{{item ? item.selected : false}}"></checkbox>
+        </checkbox-group>
+        <text>第 {{item.rowNo || index + 1}} 行</text>
+      </label>
+      <view class="tag match-tag">{{item.matchLevel || '无匹配'}}</view>
+    </view>
+
+    <view class="raw-panel">
+      <view class="raw-line">
+        <text class="raw-label">库存原文</text>
+        <text class="raw-text">{{item.rawInventoryName ? item.rawInventoryName : '-'}}</text>
+      </view>
+      <view class="raw-line">
+        <text class="raw-label">报价原文</text>
+        <text class="raw-text">{{item.rawPriceName ? item.rawPriceName : '-'}}</text>
+      </view>
+    </view>
+
+    <view class="field-grid">
+      <input class="input" value="{{item.finalName}}" placeholder="最终商品名称" data-index="{{index}}" data-key="finalName" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.brand}}" placeholder="品牌" data-index="{{index}}" data-key="brand" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.category}}" placeholder="品类" data-index="{{index}}" data-key="category" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.specification}}" placeholder="规格，如 400ml" data-index="{{index}}" data-key="specification" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.productionDate}}" placeholder="生产日期 YYYY-MM 或 YYYY-MM-DD" data-index="{{index}}" data-key="productionDate" bindinput="onFieldInput"></input>
+      <input class="input" type="number" value="{{item.stock}}" placeholder="库存" data-index="{{index}}" data-key="stock" bindinput="onFieldInput"></input>
+      <input class="input" type="number" value="{{item.price}}" placeholder="价格，单位为分，可由报价单自动填充" data-index="{{index}}" data-key="price" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.productIndex}}" placeholder="商品索引 productIndex" data-index="{{index}}" data-key="productIndex" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.skuCode}}" placeholder="skuCode" data-index="{{index}}" data-key="skuCode" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.tagsText}}" placeholder="前台标签：新货 瑕疵 热销" data-index="{{index}}" data-key="tagsText" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.internalTagsText}}" placeholder="内部标签，可用空格或逗号分隔" data-index="{{index}}" data-key="internalTagsText" bindinput="onFieldInput"></input>
+      <input class="input" value="{{item.defectDescription}}" placeholder="瑕疵说明" data-index="{{index}}" data-key="defectDescription" bindinput="onFieldInput"></input>
+    </view>
+
+    <picker mode="selector" range="{{actions}}" range-key="label" value="{{item.actionIndex}}" data-index="{{index}}" bindchange="onActionChange">
+      <view class="picker action-picker">处理方式：{{item.actionLabel}}</view>
+    </picker>
+
+    <view wx:if="{{item.matchedProductName}}" class="match-panel">匹配商品：{{item.matchedProductName}}</view>
+    <view wx:if="{{item.candidates && item.candidates.length}}" class="candidates">
+      <view class="candidate-title">可能匹配</view>
+      <view wx:for="{{item.candidates}}" wx:for-item="candidate" wx:key="productId" class="candidate-line">
+        {{candidate.name}} {{candidate.specification}} {{candidate.productionDate}} / 库存 {{candidate.stock}}
+      </view>
+    </view>
+    <view wx:if="{{item.warningMessage}}" class="notice notice-warning row-warning">{{item.warningMessage}}</view>
+    <view wx:if="{{item.errorMessage}}" class="notice notice-danger row-error">{{item.errorMessage}}</view>
+  </view>
+
+  <button wx:if="{{items.length}}" class="btn btn-primary sticky bottom-bar-enter" loading="{{importing}}" disabled="{{importing}}" bindtap="confirmImport">
+    {{importing ? '导入中' : '确认导入'}}
+  </button>
+</view>

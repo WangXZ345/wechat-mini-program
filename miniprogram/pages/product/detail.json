@@ -1,0 +1,7 @@
+{
+  "navigationBarTitleText": "商品详情",
+  "usingComponents": {
+    "ui-empty": "/components/ui-empty/index",
+    "ui-skeleton": "/components/ui-skeleton/index"
+  }
+}

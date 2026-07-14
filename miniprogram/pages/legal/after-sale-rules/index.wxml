@@ -1,0 +1,146 @@
+<view class="page legal-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="legal-title">售后规则</view>
+  <view class="card legal-content">
+    <view class="paragraph">本页面说明本小程序的售后申请条件、流程和注意事项。请您在申请售后前仔细阅读，以便更快地处理您的售后请求。</view>
+
+    <view class="paragraph legal-heading">一、可申请售后的情况</view>
+
+    <view class="paragraph">以下情况您可以申请售后：</view>
+    <view class="paragraph">• 商品错发（收到的商品与订单不符）</view>
+    <view class="paragraph">• 商品少发（实际收到数量少于订单数量）</view>
+    <view class="paragraph">• 商品破损（运输或包装导致的破损）</view>
+    <view class="paragraph">• 商品与订单描述不符</view>
+    <view class="paragraph">• 商品质量异常（如过期、变质、质量问题等）</view>
+    <view class="paragraph">• 其他经我们确认的合理售后原因</view>
+
+    <view class="paragraph legal-heading">二、售后申请要求</view>
+
+    <view class="paragraph">为确保您的售后申请能够顺利审核，请在申请时提供以下信息：</view>
+
+    <view class="paragraph legal-subheading">1. 订单信息</view>
+    <view class="paragraph">请在订单详情页面提交售后申请，系统会自动关联订单信息。</view>
+
+    <view class="paragraph legal-subheading">2. 详细售后原因</view>
+    <view class="paragraph">必须明确说明售后原因，包括：</view>
+    <view class="paragraph">• 具体问题描述（如"收到的商品A01规格错误，订单为50ml，实际收到30ml"）</view>
+    <view class="paragraph">• 涉及的商品名称和规格</view>
+    <view class="paragraph">• 问题数量</view>
+    <view class="paragraph">• 收到商品的时间</view>
+    <view class="paragraph">• 其他有助于审核的信息</view>
+
+    <view class="paragraph">请不要提交过于简短或模糊的原因，例如：</view>
+    <view class="paragraph">• "退款"、"不要了"、"有问题"等过短描述</view>
+    <view class="paragraph">• 没有说明具体问题的笼统描述</view>
+
+    <view class="paragraph">原因不明确的售后申请可能无法通过审核。</view>
+
+    <view class="paragraph legal-subheading">3. 商品凭证</view>
+    <view class="paragraph">根据售后原因，您可能需要提供以下凭证：</view>
+    <view class="paragraph">• 商品照片或视频（清晰显示问题）</view>
+    <view class="paragraph">• 外包装照片（如涉及破损或运输问题）</view>
+    <view class="paragraph">• 生产日期或批次照片（如涉及过期或批次问题）</view>
+    <view class="paragraph">• 物流签收照片（如涉及配送问题）</view>
+
+    <view class="paragraph">凭证应真实、清晰、完整，不得伪造或篡改。</view>
+
+    <view class="paragraph legal-heading">三、售后审核流程</view>
+
+    <view class="paragraph">所有售后申请均需经过人工审核，流程如下：</view>
+
+    <view class="paragraph legal-subheading">1. 提交售后申请</view>
+    <view class="paragraph">您在订单详情页面提交售后申请，填写售后原因并上传必要凭证。</view>
+
+    <view class="paragraph legal-subheading">2. 进入人工审核</view>
+    <view class="paragraph">售后申请提交后，客服或管理员会对申请进行审核，核实售后原因和凭证的真实性、合理性。</view>
+
+    <view class="paragraph legal-subheading">3. 审核结果</view>
+    <view class="paragraph">审核结果分为以下几种：</view>
+    <view class="paragraph">• 审核通过：进入退款、退货、补发或其他处理流程</view>
+    <view class="paragraph">• 审核拒绝：售后申请不符合条件，会在审核备注中说明拒绝原因</view>
+    <view class="paragraph">• 需要补充信息：客服可能联系您补充凭证或说明</view>
+
+    <view class="paragraph legal-subheading">4. 后续处理</view>
+    <view class="paragraph">审核通过后，根据具体情况进行以下处理：</view>
+    <view class="paragraph">• 退款：财务处理已审核通过的退款申请</view>
+    <view class="paragraph">• 退货：您需要按要求将商品寄回，验货后处理退款或换货</view>
+    <view class="paragraph">• 补发：我们重新发货补齐少发或错发的商品</view>
+    <view class="paragraph">• 其他协商方案：如部分退款、折扣补偿等</view>
+
+    <view class="paragraph legal-heading">四、退款规则</view>
+
+    <view class="paragraph">退款需遵循以下规则：</view>
+
+    <view class="paragraph legal-subheading">1. 退款需基于审核通过结果</view>
+    <view class="paragraph">只有售后申请审核通过后，才能进入退款流程。财务只处理已审核通过的退款申请。</view>
+
+    <view class="paragraph legal-subheading">2. 退款金额限制</view>
+    <view class="paragraph">退款金额受以下限制：</view>
+    <view class="paragraph">• 不超过订单实际已付款金额</view>
+    <view class="paragraph">• 不超过审核通过的退款金额</view>
+    <view class="paragraph">• 部分商品售后时，退款金额按该商品实际付款金额计算</view>
+
+    <view class="paragraph legal-subheading">3. 退款时效</view>
+    <view class="paragraph">退款时间受以下因素影响：</view>
+    <view class="paragraph">• 财务审核和处理时间</view>
+    <view class="paragraph">• 退货验货时间（如涉及退货）</view>
+    <view class="paragraph">• 支付渠道退款到账时间</view>
+
+    <view class="paragraph">我们会尽快处理退款，但无法保证实时到账。具体到账时间以支付渠道实际情况为准。</view>
+
+    <view class="paragraph legal-subheading">4. 不支持自动退款</view>
+    <view class="paragraph">本小程序当前不支持自动退款功能。所有退款均需经过售后审核和财务人工处理。</view>
+
+    <view class="paragraph legal-heading">五、退货规则</view>
+
+    <view class="paragraph">涉及退货的售后申请需遵循以下规则：</view>
+
+    <view class="paragraph legal-subheading">1. 退货要求</view>
+    <view class="paragraph">需要退货时，您应按照客服或后台审核人员的要求将商品寄回指定地址。退货时请注意：</view>
+    <view class="paragraph">• 妥善包装，避免运输中二次损坏</view>
+    <view class="paragraph">• 保留退货物流单号和凭证</view>
+    <view class="paragraph">• 不要向非指定地址退货</view>
+
+    <view class="paragraph legal-subheading">2. 验货和退款</view>
+    <view class="paragraph">我们收到退货后会进行验货，确认商品状态和售后原因。验货通过后，才会处理退款。</view>
+
+    <view class="paragraph legal-subheading">3. 库存恢复</view>
+    <view class="paragraph">退回商品的库存恢复遵循以下原则：</view>
+    <view class="paragraph">• 确认可售的商品恢复为普通可售库存</view>
+    <view class="paragraph">• 开封、破损、过期、污染或无法二次销售的商品不恢复为普通可售库存</view>
+    <view class="paragraph">• 不可售商品可能计入瑕疵库存或报废处理</view>
+
+    <view class="paragraph legal-subheading">4. 因用户原因造成的损坏</view>
+    <view class="paragraph">如退回商品经验货发现因用户使用、保管不当造成损坏，售后结果以审核为准，可能拒绝退款或调整退款金额。</view>
+
+    <view class="paragraph legal-heading">六、售后时效</view>
+
+    <view class="paragraph">建议您在收到商品后尽快检查，如有问题及时申请售后。超过合理时间的售后申请可能因无法核实原因而被拒绝。</view>
+
+    <view class="paragraph">具体售后时效以实际情况和双方协商为准。</view>
+
+    <view class="paragraph legal-heading">七、不支持售后的情况</view>
+
+    <view class="paragraph">以下情况可能无法申请售后或通过审核：</view>
+    <view class="paragraph">• 已明确标注为瑕疵商品，且售后原因为已标注的瑕疵</view>
+    <view class="paragraph">• 用户主观不喜欢、改变主意等非质量问题</view>
+    <view class="paragraph">• 用户自行拆封、使用后的主观评价问题</view>
+    <view class="paragraph">• 无凭证或凭证不足以支持售后原因</view>
+    <view class="paragraph">• 恶意售后或虚假售后</view>
+    <view class="paragraph">• 超过合理售后时效</view>
+
+    <view class="paragraph legal-heading">八、注意事项</view>
+
+    <view class="paragraph">• 请如实填写售后原因，不得虚构或夸大问题</view>
+    <view class="paragraph">• 请保留商品原包装和凭证，便于售后验证</view>
+    <view class="paragraph">• 售后申请提交后，请耐心等待审核，不要重复提交</view>
+    <view class="paragraph">• 如有疑问，请及时联系客服沟通</view>
+    <view class="paragraph">• 不要在售后审核前擅自退货或丢弃商品</view>
+
+    <view class="paragraph legal-heading">九、联系我们</view>
+
+    <view class="paragraph">如您在售后过程中遇到任何问题，请通过以下方式联系我们：</view>
+    <view class="paragraph">联系电话：13631669161</view>
+
+    <view class="paragraph legal-footnote">本规则自2026年7月5日起生效。如有疑问，请联系：13631669161。</view>
+  </view>
+</view>

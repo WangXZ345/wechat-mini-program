@@ -1,0 +1,103 @@
+<view class="page page-enter after-sale-apply-page">
+  <ui-skeleton wx:if="{{loading}}" count="{{3}}" showThumb="{{false}}"></ui-skeleton>
+  <ui-empty wx:if="{{!loading && !order}}" icon="!" title="订单不存在" description="请返回订单详情重新进入"></ui-empty>
+
+  <block wx:if="{{!loading && order}}">
+    <view class="after-sale-header">
+      <view class="after-sale-header-copy">
+        <view class="eyebrow">售后服务</view>
+        <view class="page-title">申请售后</view>
+        <view class="muted">提交后进入客服人工审核，请保留问题凭证</view>
+      </view>
+      <view class="after-sale-state-pill">待提交</view>
+    </view>
+
+    <view class="card section after-sale-summary-card">
+      <view class="section-kicker">订单摘要</view>
+      <view class="summary-head">
+        <view class="summary-order">
+          <view class="subtitle">订单信息</view>
+          <view class="muted order-no">订单号 {{order.orderNo}}</view>
+        </view>
+        <view class="summary-amount">
+          <view class="muted">可退金额</view>
+          <view class="price">￥{{order.refundableText}}</view>
+        </view>
+      </view>
+      <view class="summary-metrics">
+        <view class="summary-metric"><text class="summary-metric-label">订单金额</text><text class="summary-metric-value">￥{{order.totalText}}</text></view>
+        <view class="summary-metric"><text class="summary-metric-label">已付金额</text><text class="summary-metric-value">￥{{order.paidText}}</text></view>
+        <view class="summary-metric"><text class="summary-metric-label">已退金额</text><text class="summary-metric-value">￥{{order.refundedText}}</text></view>
+      </view>
+    </view>
+
+    <view class="card section after-sale-form-card">
+      <view class="section-kicker">申请信息</view>
+      <view class="application-option-grid">
+        <view class="option-field">
+          <view class="field-label">售后类型</view>
+          <picker mode="selector" range="{{typeOptions}}" range-key="label" value="{{typeIndex}}" bindchange="onTypeChange">
+            <view class="picker-row">{{typeOptions[typeIndex].label}}</view>
+          </picker>
+        </view>
+        <view class="option-field">
+          <view class="field-label">售后原因</view>
+          <picker mode="selector" range="{{reasonOptions}}" range-key="label" value="{{reasonIndex}}" bindchange="onReasonChange">
+            <view class="picker-row">{{reasonOptions[reasonIndex].label}}</view>
+          </picker>
+        </view>
+      </view>
+      <view class="reason-head detail-reason-head">
+        <view class="subtitle">详细原因</view>
+        <view class="reason-count {{reasonCharCount < minReasonLength ? 'reason-count-warning' : ''}}">{{reasonCharCount}}/300，至少{{minReasonLength}}字</view>
+      </view>
+      <textarea class="textarea" maxlength="300" value="{{customerReasonDetail}}" data-field="customerReasonDetail" bindinput="onInput" placeholder="至少填写 5 个字，例如：拍错了商品、客户取消订单、商品临时缺货。"></textarea>
+      <input class="input remark-input" value="{{customerRemark}}" data-field="customerRemark" bindinput="onInput" placeholder="客户备注，可选" />
+    </view>
+
+    <view class="card section after-sale-form-card">
+      <view class="section-kicker">售后范围</view>
+      <view class="range-head">
+        <view class="subtitle">选择商品</view>
+        <view class="muted">{{items.length}} 件</view>
+      </view>
+      <view wx:for="{{items}}" wx:key="productId" class="item-row {{item.selected ? 'item-selected' : ''}}">
+        <view class="check" bindtap="toggleItem" data-index="{{index}}">{{item.selected ? "✓" : ""}}</view>
+        <view class="item-main">
+          <view class="item-name">{{item.productName}}</view>
+          <view class="muted">{{item.specification || "无规格"}}｜￥{{item.unitPriceText}}</view>
+          <view class="muted">已购 {{item.quantity}}，可申请 {{item.availableQuantity}}</view>
+        </view>
+        <input class="qty-input" type="number" value="{{item.applyQuantity}}" data-index="{{index}}" bindinput="onQuantityInput" />
+      </view>
+      <view class="refund-block">
+        <view class="reason-head">
+          <view class="subtitle">申请退款金额</view>
+          <view class="amount-limit">最高 ￥{{order.refundableText}}</view>
+        </view>
+        <input class="input" type="digit" value="{{refundAmountYuan}}" data-field="refundAmountYuan" bindinput="onInput" placeholder="请输入退款金额，单位元" />
+      </view>
+    </view>
+
+    <view class="card section after-sale-form-card evidence-card">
+      <view class="section-kicker">问题凭证</view>
+      <view class="row between evidence-head">
+        <view class="subtitle">图片凭证</view>
+        <button class="btn btn-secondary btn-xs mini-btn" bindtap="chooseImages">上传</button>
+      </view>
+      <view class="muted amount-tip">售后图片仅用于核对商品问题、退换货处理和退款审核。</view>
+      <view class="image-grid">
+        <view wx:for="{{evidenceImages}}" wx:key="*this" class="image-box">
+          <image class="evidence-image" src="{{item}}" mode="aspectFill"></image>
+          <view class="remove" bindtap="removeImage" data-index="{{index}}">×</view>
+        </view>
+      </view>
+      <view class="muted amount-tip">最多 6 张，破损、错发、少件、质量问题建议上传。</view>
+    </view>
+
+    <view class="after-sale-submit-shell">
+      <button class="btn btn-primary submit-btn" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">{{submitting ? '提交中' : '提交售后申请'}}</button>
+      <view class="submit-note">提交后请等待客服审核，退款不会自动完成。</view>
+    </view>
+  </block>
+</view>

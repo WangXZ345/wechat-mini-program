@@ -1,0 +1,39 @@
+<view class="page after-sale-list-page page-enter">
+  <view class="after-list-hero section">
+    <view>
+      <view class="section-kicker">售后服务</view>
+      <view class="page-title">我的售后</view>
+      <view class="page-desc">查看申请进度、退款状态和处理结果。</view>
+    </view>
+    <view class="after-count-pill">{{afterSales.length}} 单</view>
+  </view>
+
+  <ui-skeleton wx:if="{{loading}}" count="{{4}}" showThumb="{{false}}"></ui-skeleton>
+  <ui-empty wx:if="{{initialized && !loading && !afterSales.length}}" icon="售" title="暂无售后申请" description="可从订单详情页发起售后"></ui-empty>
+
+  <view wx:for="{{afterSales}}" wx:key="_id" class="card section after-card tap-card" bindtap="goDetail" data-id="{{item._id}}">
+    <view class="after-card-accent"></view>
+    <view class="row between after-card-head">
+      <view class="after-no">{{item.afterSaleNo}}</view>
+      <view class="status-pill">{{item.statusText}}</view>
+    </view>
+    <view class="order-no">订单号：{{item.orderNo}}</view>
+    <view class="after-summary-grid">
+      <view class="summary-item">
+        <view class="summary-label">售后类型</view>
+        <view class="summary-value">{{item.typeText}}</view>
+      </view>
+      <view class="summary-item">
+        <view class="summary-label">退款状态</view>
+        <view class="summary-value">{{item.refundText}}</view>
+      </view>
+    </view>
+    <view class="row between amount-row">
+      <view>
+        <view class="summary-label">申请金额</view>
+        <view class="created">提交时间：{{item.createdAtText}}</view>
+      </view>
+      <view class="price">￥{{item.amountText}}</view>
+    </view>
+  </view>
+</view>

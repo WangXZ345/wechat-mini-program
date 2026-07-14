@@ -1,0 +1,156 @@
+<view class="page unsold-page page-enter">
+  <view class="unsold-hero section">
+    <view class="hero-copy">
+      <view class="hero-kicker">商品运营</view>
+      <view class="hero-title">未售商品分析</view>
+      <view class="hero-desc">{{rangeText || '按时间范围筛出未售商品，集中处理关注、清仓、调价、调库存和下架。'}}</view>
+    </view>
+    <button class="btn btn-primary export-btn" loading="{{exporting}}" disabled="{{exporting}}" bindtap="exportExcel">导出 Excel</button>
+  </view>
+
+  <view class="summary-grid section">
+    <view class="summary-card">
+      <view class="summary-num">{{summary.todayUnsoldCount || 0}}</view>
+      <view class="summary-label">今日未售</view>
+    </view>
+    <view class="summary-card">
+      <view class="summary-num">{{summary.threeDaysUnsoldCount || 0}}</view>
+      <view class="summary-label">近 3 天</view>
+    </view>
+    <view class="summary-card">
+      <view class="summary-num">{{summary.sevenDaysUnsoldCount || 0}}</view>
+      <view class="summary-label">近 7 天</view>
+    </view>
+    <view class="summary-card active-summary">
+      <view class="summary-num">{{summary.currentResultCount || total || 0}}</view>
+      <view class="summary-label">当前结果</view>
+    </view>
+  </view>
+
+  <view class="card section range-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">时间范围</view>
+        <view class="card-desc">快速查看不同时间窗口内仍未售出的商品。</view>
+      </view>
+    </view>
+    <scroll-view scroll-x="true" enable-flex="true" class="range-scroll">
+      <view class="range-tabs">
+        <button class="tab {{rangeType === 'today' ? 'active-tab' : ''}}" bindtap="setRange" data-range="today">今日未售</button>
+        <button class="tab {{rangeType === '3days' ? 'active-tab' : ''}}" bindtap="setRange" data-range="3days">近 3 天</button>
+        <button class="tab {{rangeType === '7days' ? 'active-tab' : ''}}" bindtap="setRange" data-range="7days">近 7 天</button>
+        <button class="tab {{rangeType === 'custom' ? 'active-tab' : ''}}" bindtap="setRange" data-range="custom">自定义</button>
+      </view>
+    </scroll-view>
+
+    <view wx:if="{{rangeType === 'custom'}}" class="custom-row">
+      <picker mode="date" value="{{startDate}}" bindchange="onDateChange" data-key="startDate">
+        <view class="picker-box">开始：{{startDate || '选择日期'}}</view>
+      </picker>
+      <picker mode="date" value="{{endDate}}" bindchange="onDateChange" data-key="endDate">
+        <view class="picker-box">结束：{{endDate || '选择日期'}}</view>
+      </picker>
+      <button class="btn btn-primary query-btn" bindtap="queryCustom">查询</button>
+    </view>
+  </view>
+
+  <view class="card section filter-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">筛选和排序</view>
+        <view class="card-desc">按关键词、索引、SKU、分类、库存、售价和生产日期收窄队列。</view>
+      </view>
+    </view>
+    <input class="input filter-input" placeholder="商品关键词" value="{{keyword}}" data-key="keyword" bindinput="onInput"></input>
+    <view class="filter-grid">
+      <input class="input filter-field" placeholder="productIndex" value="{{productIndex}}" data-key="productIndex" bindinput="onInput"></input>
+      <input class="input filter-field" placeholder="SKU" value="{{skuCode}}" data-key="skuCode" bindinput="onInput"></input>
+      <input class="input filter-field" placeholder="分类" value="{{category}}" data-key="category" bindinput="onInput"></input>
+      <picker class="filter-field" mode="selector" range="{{activeOptions}}" range-key="label" value="{{activeIndex}}" bindchange="onActiveChange">
+        <view class="picker-box">{{activeOptions[activeIndex].label}}</view>
+      </picker>
+      <input class="input filter-field" type="number" placeholder="最小库存" value="{{minStock}}" data-key="minStock" bindinput="onInput"></input>
+      <input class="input filter-field" type="number" placeholder="最大库存" value="{{maxStock}}" data-key="maxStock" bindinput="onInput"></input>
+      <input class="input filter-field" type="digit" placeholder="最低售价（元）" value="{{minPrice}}" data-key="minPrice" bindinput="onInput"></input>
+      <input class="input filter-field" type="digit" placeholder="最高售价（元）" value="{{maxPrice}}" data-key="maxPrice" bindinput="onInput"></input>
+      <picker class="filter-field" mode="date" value="{{productionDateStart}}" bindchange="onDateChange" data-key="productionDateStart">
+        <view class="picker-box">生产起：{{productionDateStart || '不限'}}</view>
+      </picker>
+      <picker class="filter-field" mode="date" value="{{productionDateEnd}}" bindchange="onDateChange" data-key="productionDateEnd">
+        <view class="picker-box">生产止：{{productionDateEnd || '不限'}}</view>
+      </picker>
+    </view>
+    <view class="filter-footer">
+      <picker class="sort-picker" mode="selector" range="{{sortOptions}}" range-key="label" value="{{sortIndex}}" bindchange="onSortChange">
+        <view class="picker-box sort-box">排序：{{sortOptions[sortIndex].label}}</view>
+      </picker>
+      <button class="btn btn-secondary clear-btn" bindtap="resetFilters">清空筛选</button>
+    </view>
+  </view>
+
+  <view class="list-head section">
+    <view>
+      <view class="section-kicker">商品队列</view>
+      <view class="list-title">{{total || 0}} 个结果</view>
+    </view>
+    <view class="list-range">{{rangeText || '等待查询'}}</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="empty loading-panel">加载中...</view>
+  <view wx:elif="{{!products.length}}" class="empty loading-panel">当前时间范围内暂无未售商品</view>
+
+  <view wx:for="{{products}}" wx:key="productId" class="card product unsold-product">
+    <view class="product-head">
+      <image wx:if="{{item.imageUrl}}" class="thumb" src="{{item.imageUrl}}" mode="aspectFill" lazy-load="true"></image>
+      <view wx:else class="thumb placeholder">无图</view>
+      <view class="info">
+        <view class="name-row">
+          <view class="name">{{item.name}}</view>
+          <view class="tag {{item.isActive ? 'active' : 'inactive'}}">{{item.isActive ? '已上架' : '未上架'}}</view>
+        </view>
+        <view class="small-text">索引：{{item.productIndex || '-'}} / SKU：{{item.skuCode || '-'}}</view>
+        <view class="small-text">{{item.category || '未分类'}} / {{item.specification || '-'}}</view>
+        <view class="marker-row">
+          <view wx:if="{{item.unsoldWatch}}" class="marker">重点关注</view>
+          <view wx:if="{{item.clearanceTag}}" class="marker clearance">清仓</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="meta-grid">
+      <view class="meta-cell"><view class="meta-label">生产日期</view><view class="meta-value">{{item.productionDate || '-'}}</view></view>
+      <view class="meta-cell"><view class="meta-label">库存</view><view class="meta-value">{{item.stock}}</view></view>
+      <view class="meta-cell"><view class="meta-label">售价</view><view class="meta-value">￥{{item.priceText}}</view></view>
+      <view class="meta-cell"><view class="meta-label">最近售出</view><view class="meta-value">{{item.lastSoldAtText}}</view></view>
+      <view class="meta-cell"><view class="meta-label">近 7 天销量</view><view class="meta-value">{{item.sales7d}}</view></view>
+      <view class="meta-cell"><view class="meta-label">近 30 天销量</view><view class="meta-value">{{item.sales30d}}</view></view>
+      <view class="meta-cell"><view class="meta-label">未售天数</view><view class="meta-value">{{item.unsoldDaysText || '-'}}</view></view>
+      <view class="meta-cell"><view class="meta-label">标记</view><view class="meta-value">{{item.unsoldWatch ? '关注' : '无'}} {{item.clearanceTag ? '清仓' : ''}}</view></view>
+    </view>
+
+    <view wx:if="{{item.reminders.length}}" class="reminders">
+      <view wx:for="{{item.reminders}}" wx:for-item="tip" wx:key="*this" class="reminder">{{tip}}</view>
+    </view>
+
+    <view class="edit-panel">
+      <view class="edit-line">
+        <input class="input edit-input" type="digit" placeholder="新售价（元）" value="{{item.newPrice}}" data-id="{{item.productId}}" data-key="newPrice" bindinput="onRowInput"></input>
+        <button class="btn btn-primary edit-btn" bindtap="savePrice" data-id="{{item.productId}}">改价</button>
+      </view>
+      <view class="edit-line">
+        <input class="input edit-input" type="number" placeholder="新库存数量" value="{{item.newStock}}" data-id="{{item.productId}}" data-key="newStock" bindinput="onRowInput"></input>
+        <button class="btn btn-primary edit-btn" bindtap="saveStock" data-id="{{item.productId}}">调库存</button>
+      </view>
+    </view>
+
+    <view class="actions">
+      <button class="btn btn-secondary action-btn" bindtap="viewProduct" data-id="{{item.productId}}">看详情</button>
+      <button class="btn btn-secondary action-btn" bindtap="toggleFlag" data-id="{{item.productId}}" data-flag="unsoldWatch">{{item.unsoldWatch ? '取消关注' : '重点关注'}}</button>
+      <button class="btn btn-secondary action-btn" bindtap="toggleFlag" data-id="{{item.productId}}" data-flag="clearanceTag">{{item.clearanceTag ? '移出清仓' : '加入清仓'}}</button>
+      <button class="btn btn-danger action-btn" bindtap="deactivate" data-id="{{item.productId}}">下架</button>
+    </view>
+  </view>
+
+  <view wx:if="{{loadingMore}}" class="empty small-empty">继续加载...</view>
+  <view wx:elif="{{products.length && !hasMore}}" class="empty small-empty">已加载全部</view>
+</view>

@@ -1,0 +1,219 @@
+<view class="page page-enter products-page admin-responsive-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="section products-hero">
+    <view class="products-hero-copy">
+      <view class="eyebrow">商品工作台</view>
+      <view class="products-title">商品管理</view>
+      <view class="muted products-subtitle">维护商品资料、库存预警、标签和批量调价</view>
+    </view>
+    <view class="products-hero-panel">
+      <view class="hero-metric">
+        <view class="hero-value">{{total}}</view>
+        <view class="hero-label">当前商品</view>
+      </view>
+      <view class="hero-metric">
+        <view class="hero-value">{{selectedIds.length}}</view>
+        <view class="hero-label">已选商品</view>
+      </view>
+      <view class="hero-filter-pill">
+        {{specialFilter === 'expiring' ? '临期商品' : '全部商品'}} · {{stockStatusFilter === 'warning' ? '库存预警' : stockStatusFilter === 'out_of_stock' ? '已缺货' : stockStatusFilter === 'normal' ? '库存正常' : '全部库存'}}
+      </view>
+    </view>
+    <button class="btn btn-secondary mini hero-action" bindtap="newProduct">新建</button>
+  </view>
+
+  <view wx:if="{{showForm}}" class="card section product-form-card fade-up">
+    <view class="panel-head">
+      <view>
+        <view class="section-kicker">PRODUCT FORM</view>
+        <view class="subtitle">{{form._id ? '编辑商品' : '新建商品'}}</view>
+      </view>
+      <view class="panel-note">仅后台维护，不改变前台下单流程</view>
+    </view>
+    <view class="form-grid">
+    <input class="input" placeholder="商品名称" value="{{form.name}}" data-key="name" bindinput="onInput"></input>
+    <input class="input" placeholder="商品基础名称（可选）" value="{{form.baseName}}" data-key="baseName" bindinput="onInput"></input>
+    <input class="input" placeholder="商品索引（为空自动生成）" value="{{form.productIndex}}" data-key="productIndex" bindinput="onInput"></input>
+    <input class="input" placeholder="货号编码（可选）" value="{{form.skuCode}}" data-key="skuCode" bindinput="onInput"></input>
+    <input class="input" placeholder="商品图片地址" value="{{form.imageUrl}}" data-key="imageUrl" bindinput="onInput"></input>
+    <input class="input" placeholder="规格" value="{{form.specification}}" data-key="specification" bindinput="onInput"></input>
+    <input class="input" type="number" placeholder="单价，单位为分" value="{{form.price}}" data-key="price" bindinput="onInput"></input>
+    <input class="input" placeholder="生产日期" value="{{form.productionDate}}" data-key="productionDate" bindinput="onInput"></input>
+    <input class="input" type="number" placeholder="库存数量" value="{{form.stock}}" data-key="stock" bindinput="onInput"></input>
+    <input class="input" type="number" placeholder="最低库存预警值，默认 10" value="{{form.warningStock}}" data-key="warningStock" bindinput="onInput"></input>
+    <input class="input" placeholder="关键词，用空格或逗号分隔" value="{{form.keywordsText}}" data-key="keywordsText" bindinput="onInput"></input>
+    <textarea class="input area form-wide" placeholder="商品说明" value="{{form.description}}" data-key="description" bindinput="onInput"></textarea>
+    <view class="tag-editor form-wide">
+      <view class="muted">前台快捷标签</view>
+      <checkbox-group class="tag-checks" bindchange="onFormTagsChange">
+        <label wx:for="{{tagOptions}}" wx:key="name" class="tag-check">
+          <checkbox value="{{item.name}}" checked="{{!!item.checked}}"></checkbox>
+          <text>{{item.name}}</text>
+        </label>
+      </checkbox-group>
+    </view>
+    <input class="input" placeholder="内部标签，用空格或逗号分隔" value="{{form.internalTagsText}}" data-key="internalTagsText" bindinput="onInput"></input>
+    <textarea class="input area small-area" placeholder="瑕疵说明，例如：外盒轻微压痕，不影响使用" value="{{form.defectDescription}}" data-key="defectDescription" bindinput="onInput"></textarea>
+    <view class="form-switches form-wide">
+      <label class="row active"><switch checked="{{form.isActive}}" bindchange="onActiveChange"></switch><text>上架</text></label>
+      <label class="row active"><switch checked="{{form.autoHideWhenOutOfStock}}" bindchange="onAutoHideChange"></switch><text>库存为 0 自动下架</text></label>
+    </view>
+    <button class="btn btn-primary form-submit form-wide" bindtap="saveProduct">保存商品</button>
+    </view>
+  </view>
+
+  <view class="card section product-control-card fade-up">
+    <view class="panel-head">
+      <view>
+        <view class="section-kicker">FILTERS</view>
+        <view class="subtitle">商品索引搜索</view>
+      </view>
+      <view class="filter-summary-pill">{{keyword ? '关键词筛选' : '全部商品'}} · {{products.length}} / {{total}}</view>
+    </view>
+    <view class="row search-row">
+      <input class="input search-input" placeholder="商品索引、货号、名称、规格、日期" value="{{keyword}}" bindinput="onSearchInput"></input>
+      <button class="btn btn-primary search-btn" bindtap="searchNow">搜索</button>
+      <button wx:if="{{keyword}}" class="btn btn-secondary clear-btn" bindtap="clearSearch">清空</button>
+    </view>
+    <view class="muted search-meta">共 {{total}} 个商品</view>
+    <view class="filter-label">商品状态</view>
+    <view class="filter-row">
+      <button class="filter-btn {{specialFilter === 'all' ? 'active-filter' : ''}}" data-filter="all" bindtap="onSpecialFilterChange">全部商品</button>
+      <button class="filter-btn {{specialFilter === 'expiring' ? 'active-filter' : ''}}" data-filter="expiring" bindtap="onSpecialFilterChange">临期商品</button>
+    </view>
+    <view class="filter-label">库存状态</view>
+    <view class="filter-row">
+      <button class="filter-btn {{stockStatusFilter === 'all' ? 'active-filter' : ''}}" data-status="all" bindtap="onStockStatusFilterChange">全部</button>
+      <button class="filter-btn {{stockStatusFilter === 'normal' ? 'active-filter' : ''}}" data-status="normal" bindtap="onStockStatusFilterChange">库存正常</button>
+      <button class="filter-btn {{stockStatusFilter === 'warning' ? 'active-filter' : ''}}" data-status="warning" bindtap="onStockStatusFilterChange">库存预警</button>
+      <button class="filter-btn {{stockStatusFilter === 'out_of_stock' ? 'active-filter' : ''}}" data-status="out_of_stock" bindtap="onStockStatusFilterChange">已缺货</button>
+    </view>
+    <view class="filter-label">前台标签</view>
+    <view class="filter-row">
+      <button class="filter-btn {{tagFilter === 'all' ? 'active-filter' : ''}}" data-tag="all" bindtap="onTagFilterChange">全部标签</button>
+      <button class="filter-btn {{tagFilter === 'new' ? 'active-filter' : ''}}" data-tag="new" bindtap="onTagFilterChange">新货</button>
+      <button class="filter-btn {{tagFilter === 'defective' ? 'active-filter' : ''}}" data-tag="defective" bindtap="onTagFilterChange">瑕疵</button>
+      <button class="filter-btn {{tagFilter === 'hot' ? 'active-filter' : ''}}" data-tag="hot" bindtap="onTagFilterChange">热销</button>
+    </view>
+    <view class="filter-label">瑕疵说明</view>
+    <view class="filter-row">
+      <button class="filter-btn {{defectDescriptionFilter === 'all' ? 'active-filter' : ''}}" data-value="all" bindtap="onDefectFilterChange">全部说明</button>
+      <button class="filter-btn {{defectDescriptionFilter === 'has' ? 'active-filter' : ''}}" data-value="has" bindtap="onDefectFilterChange">有瑕疵说明</button>
+      <button class="filter-btn {{defectDescriptionFilter === 'none' ? 'active-filter' : ''}}" data-value="none" bindtap="onDefectFilterChange">无瑕疵说明</button>
+    </view>
+    <input class="input" placeholder="按内部标签筛选" value="{{internalTagFilter}}" bindinput="onInternalTagFilterInput"></input>
+  </view>
+
+  <view class="card section product-batch-card fade-up">
+    <view class="panel-head">
+      <view>
+        <view class="section-kicker">BATCH TOOLS</view>
+        <view class="subtitle">批量工具</view>
+      </view>
+      <view class="filter-summary-pill">已选 {{selectedIds.length}} 个</view>
+    </view>
+    <view class="row between batch-row">
+      <button class="btn btn-secondary batch-btn" loading="{{selectingAll}}" disabled="{{selectingAll}}" bindtap="toggleSelectAll">{{allSelected ? '取消全选' : '选择全部 ' + total}}</button>
+      <button class="btn btn-primary batch-btn" loading="{{activating}}" disabled="{{activating}}" bindtap="bulkActivate">批量上架 {{selectedIds.length ? '(' + selectedIds.length + ')' : ''}}</button>
+    </view>
+    <view class="batch-price">
+      <view class="tool-title">批量调价</view>
+      <radio-group class="type-list" bindchange="onBatchTypeChange">
+        <label><radio value="set" checked="{{batchType === 'set'}}"></radio>设价</label>
+        <label><radio value="increase_amount" checked="{{batchType === 'increase_amount'}}"></radio>加金额</label>
+        <label><radio value="decrease_amount" checked="{{batchType === 'decrease_amount'}}"></radio>减金额</label>
+        <label><radio value="increase_percent" checked="{{batchType === 'increase_percent'}}"></radio>涨%</label>
+        <label><radio value="decrease_percent" checked="{{batchType === 'decrease_percent'}}"></radio>降%</label>
+      </radio-group>
+      <input class="input" type="digit" placeholder="金额填元，百分比填数字" value="{{batchValue}}" data-key="batchValue" bindinput="onBatchInput"></input>
+      <input class="input" placeholder="调价原因（可选）" value="{{batchReason}}" data-key="batchReason" bindinput="onBatchInput"></input>
+      <button class="btn btn-danger" bindtap="runBatchPrice">批量调价 {{selectedIds.length ? '(' + selectedIds.length + ')' : ''}}</button>
+    </view>
+    <view class="batch-price">
+      <view class="tool-title">预警与自动下架</view>
+      <input class="input" type="number" placeholder="批量设置预警库存" value="{{batchWarningStock}}" data-key="batchWarningStock" bindinput="onBatchInput"></input>
+      <label class="row active"><switch checked="{{batchAutoHideWhenOutOfStock}}" bindchange="onBatchAutoHideChange"></switch><text>库存为 0 自动下架</text></label>
+      <button class="btn btn-primary" bindtap="runBatchWarningStock">批量修改预警值 {{selectedIds.length ? '(' + selectedIds.length + ')' : ''}}</button>
+    </view>
+    <view class="batch-price">
+      <view class="subtitle small-subtitle">批量标签</view>
+      <view class="batch-tag-grid">
+        <button class="btn btn-secondary tag-batch-btn" data-flag="isNew" data-value="true" data-tag="新货" bindtap="runBatchTag">设为新货</button>
+        <button class="btn btn-secondary tag-batch-btn" data-flag="isNew" data-value="false" data-tag="新货" bindtap="runBatchTag">取消新货</button>
+        <button class="btn btn-secondary tag-batch-btn" data-flag="isDefective" data-value="true" data-tag="瑕疵" bindtap="runBatchTag">设为瑕疵</button>
+        <button class="btn btn-secondary tag-batch-btn" data-flag="isDefective" data-value="false" data-tag="瑕疵" bindtap="runBatchTag">取消瑕疵</button>
+        <button class="btn btn-secondary tag-batch-btn" data-flag="isHot" data-value="true" data-tag="热销" bindtap="runBatchTag">设为热销</button>
+        <button class="btn btn-secondary tag-batch-btn" data-flag="isHot" data-value="false" data-tag="热销" bindtap="runBatchTag">取消热销</button>
+      </view>
+      <input class="input" placeholder="内部标签" value="{{batchInternalTag}}" data-key="batchInternalTag" bindinput="onBatchInput"></input>
+      <view class="row batch-row">
+        <button class="btn btn-secondary batch-btn" data-action="add" bindtap="runBatchInternalTag">批量添加内部标签</button>
+        <button class="btn btn-secondary batch-btn" data-action="remove" bindtap="runBatchInternalTag">批量移除内部标签</button>
+      </view>
+    </view>
+    <button class="btn btn-secondary index-btn" loading="{{indexGenerating}}" disabled="{{indexGenerating}}" bindtap="generateIndexes">{{indexGenerating ? '正在补齐...' : '补齐商品索引和搜索文本'}}</button>
+  </view>
+
+  <view wx:if="{{loading && !products.length}}" class="empty">加载中...</view>
+  <view wx:elif="{{initialized && !products.length}}" class="empty">{{keyword ? '未找到相关商品' : '暂无商品'}}</view>
+
+  <view wx:if="{{products.length}}" class="products-section-heading fade-up">
+    <view>
+      <view class="section-kicker">PRODUCT QUEUE</view>
+      <view class="section-title">商品队列</view>
+    </view>
+    <view class="products-section-note">价格、库存和标签集中处理</view>
+  </view>
+
+  <checkbox-group class="product-list-grid" bindchange="onProductSelect">
+    <view wx:for="{{products}}" wx:key="_id" class="card product admin-product-card">
+      <view class="product-card-accent"></view>
+      <view class="row between product-card-header">
+        <label class="row select-label">
+          <checkbox value="{{item._id}}" checked="{{!!item.checked}}"></checkbox>
+          <image wx:if="{{item.imageUrl}}" class="product-thumb" src="{{item.imageUrl}}" mode="aspectFill" lazy-load="true"></image>
+          <view wx:else class="product-thumb product-thumb-placeholder">货</view>
+          <view class="product-title-block">
+            <view class="subtitle product-name">{{item.name}}</view>
+            <view class="muted product-index">索引：{{item.productIndex || '未生成'}} / 货号：{{item.skuCode || '-'}}</view>
+          </view>
+        </label>
+        <view class="tag product-status {{item.isActive ? 'product-status-on' : 'product-status-off'}}">{{item.isActive ? '已上架' : '未上架'}}</view>
+      </view>
+      <view class="product-meta-grid">
+        <view class="info-panel">
+          <view class="info-label">规格与日期</view>
+          <view class="info-main">{{item.specification || '无规格'}}</view>
+          <view class="muted info-sub">生产日期：{{item.productionDate || '未设置'}}</view>
+        </view>
+        <view class="info-panel">
+          <view class="info-label">标签</view>
+          <view class="info-main">{{item.tagsText || '-'}}</view>
+          <view class="muted info-sub">内部：{{item.internalTagsText || '-'}}</view>
+        </view>
+      </view>
+      <view class="muted defect-line">{{item.defectDescriptionStatus}}</view>
+      <view class="product-price-panel">
+        <view>
+          <view class="price-main">￥{{item.priceText}}</view>
+          <view class="muted">缺货自动下架：{{item.autoHideWhenOutOfStock ? '是' : '否'}}</view>
+        </view>
+        <view class="stock-stack">
+          <view class="stock-number">库存 {{item.stock}}</view>
+          <view class="muted">预警值 {{item.warningStock === undefined ? 10 : item.warningStock}}</view>
+          <view class="stock-status {{item.stockStatus}}">{{item.stockStatusText}}</view>
+        </view>
+      </view>
+      <view class="row price-edit">
+        <input class="input price-input" type="digit" placeholder="新售价（元）" value="{{item.newPrice}}" data-id="{{item._id}}" bindinput="onNewPriceInput"></input>
+        <button class="btn btn-primary price-btn" bindtap="savePrice" data-id="{{item._id}}">保存售价</button>
+      </view>
+      <view class="row actions">
+        <button class="btn btn-secondary small" bindtap="editProduct" data-id="{{item._id}}">编辑</button>
+        <button class="btn btn-danger small" bindtap="deleteProduct" data-id="{{item._id}}">下架</button>
+      </view>
+    </view>
+  </checkbox-group>
+
+  <view wx:if="{{loadingMore}}" class="empty small-empty">继续加载...</view>
+  <view wx:elif="{{products.length && !hasMore}}" class="empty small-empty">已加载全部</view>
+</view>

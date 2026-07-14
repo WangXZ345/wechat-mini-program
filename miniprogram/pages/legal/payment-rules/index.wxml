@@ -1,0 +1,118 @@
+<view class="page legal-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="legal-title">付款说明</view>
+  <view class="card legal-content">
+    <view class="paragraph">本页面说明本小程序支持的付款方式、付款流程和注意事项。请您在付款前仔细阅读，确保付款顺利完成。</view>
+
+    <view class="paragraph legal-heading">一、支持的付款方式</view>
+
+    <view class="paragraph">当前主要支持以下线下付款方式：</view>
+    <view class="paragraph">• 收款码付款（微信、支付宝等）</view>
+    <view class="paragraph">• 银行转账</view>
+    <view class="paragraph">• 其他协商确认的线下付款方式</view>
+
+    <view class="paragraph">具体收款账号和收款码由客服或订单页面提供。请务必核对收款方信息，避免转账错误。</view>
+
+    <view class="paragraph legal-heading">二、付款流程</view>
+
+    <view class="paragraph">完整的付款流程如下：</view>
+
+    <view class="paragraph legal-subheading">1. 提交订单</view>
+    <view class="paragraph">您在小程序中提交订单后，订单进入审核流程。</view>
+
+    <view class="paragraph legal-subheading">2. 订单审核通过</view>
+    <view class="paragraph">订单审核通过后，您可以查看订单金额和付款信息。</view>
+
+    <view class="paragraph legal-subheading">3. 按订单金额付款</view>
+    <view class="paragraph">请按照订单显示的应付金额，通过指定的收款账号或收款码完成付款。</view>
+
+    <view class="paragraph legal-subheading">4. 上传付款凭证</view>
+    <view class="paragraph">付款完成后，请在订单页面上传付款截图。截图应清晰完整，包含必要的付款信息。</view>
+
+    <view class="paragraph legal-subheading">5. 财务核对</view>
+    <view class="paragraph">财务人员会核对您上传的付款凭证和实际到账情况。</view>
+
+    <view class="paragraph legal-subheading">6. 付款确认</view>
+    <view class="paragraph">财务审核通过后，订单付款状态会更新为已付款，订单进入发货或自提流程。</view>
+
+    <view class="paragraph legal-heading">三、付款凭证要求</view>
+
+    <view class="paragraph">为确保财务能够准确核对您的付款，请上传的付款截图包含以下信息：</view>
+    <view class="paragraph">• 付款金额（应与订单金额一致）</view>
+    <view class="paragraph">• 付款时间</view>
+    <view class="paragraph">• 收款方信息（收款账号、收款人或商户名称）</view>
+    <view class="paragraph">• 交易状态（如"转账成功"、"支付成功"）</view>
+    <view class="paragraph">• 截图应清晰完整，不得裁剪关键信息</view>
+
+    <view class="paragraph">请不要提交以下类型的凭证：</view>
+    <view class="paragraph">• 虚假或伪造的付款截图</view>
+    <view class="paragraph">• 模糊不清、无法辨认的截图</view>
+    <view class="paragraph">• 与订单无关的付款截图</view>
+    <view class="paragraph">• 他人的付款截图（除非能明确对应您的订单）</view>
+
+    <view class="paragraph legal-heading">四、财务确认规则</view>
+
+    <view class="paragraph">请注意以下重要事项：</view>
+
+    <view class="paragraph legal-subheading">1. 上传凭证不等于付款成功</view>
+    <view class="paragraph">您上传付款凭证后，订单付款状态会显示为"待财务确认"。只有财务审核通过并确认到账后，付款状态才会更新为"已付款"。</view>
+
+    <view class="paragraph legal-subheading">2. 金额核对</view>
+    <view class="paragraph">财务会核对付款金额与订单金额是否一致：</view>
+    <view class="paragraph">• 付款金额不足：订单可能标记为部分付款，需要补款</view>
+    <view class="paragraph">• 付款金额超出：请联系客服处理多付款项</view>
+    <view class="paragraph">• 付款金额一致：正常确认</view>
+
+    <view class="paragraph legal-subheading">3. 凭证异常处理</view>
+    <view class="paragraph">如财务发现凭证存在以下问题，可能会驳回您的付款凭证：</view>
+    <view class="paragraph">• 截图模糊或不完整</view>
+    <view class="paragraph">• 付款金额与订单不符</view>
+    <view class="paragraph">• 收款方信息错误</view>
+    <view class="paragraph">• 付款时间明显异常</view>
+    <view class="paragraph">• 存在伪造或篡改迹象</view>
+
+    <view class="paragraph">凭证被驳回后，您需要重新上传符合要求的付款凭证，或联系客服说明情况。</view>
+
+    <view class="paragraph legal-heading">五、异常情况处理</view>
+
+    <view class="paragraph legal-subheading">1. 付款金额不一致</view>
+    <view class="paragraph">如您发现付款金额与订单金额不一致，请及时联系客服核对订单并说明情况。</view>
+
+    <view class="paragraph legal-subheading">2. 重复付款</view>
+    <view class="paragraph">如您不慎对同一订单重复付款，请保留付款凭证并联系客服处理退款事宜。</view>
+
+    <view class="paragraph legal-subheading">3. 付款截图错误</view>
+    <view class="paragraph">如您上传了错误的付款截图（如其他订单的截图），请及时在订单页面重新上传正确的凭证。</view>
+
+    <view class="paragraph legal-subheading">4. 收款未到账</view>
+    <view class="paragraph">如您已付款但长时间未到账，可能是以下原因：</view>
+    <view class="paragraph">• 收款账号错误</view>
+    <view class="paragraph">• 银行转账延迟</view>
+    <view class="paragraph">• 支付渠道异常</view>
+
+    <view class="paragraph">请联系客服并提供完整的付款凭证，我们会协助核查处理。</view>
+
+    <view class="paragraph legal-subheading">5. 付款后订单取消</view>
+    <view class="paragraph">如您已付款但订单因库存、商品下架等原因被取消，我们会协助您办理退款。退款需经过售后流程和财务审核，具体请参考"售后规则"页面。</view>
+
+    <view class="paragraph legal-heading">六、付款时效</view>
+
+    <view class="paragraph">为保证库存和订单有效性，请您在订单审核通过后的合理时间内完成付款。长时间未付款的订单可能被取消。</view>
+
+    <view class="paragraph">如您需要延期付款或分期付款，请提前联系客服协商。</view>
+
+    <view class="paragraph legal-heading">七、注意事项</view>
+
+    <view class="paragraph">• 请务必核对收款方信息，避免转账到错误账号</view>
+    <view class="paragraph">• 付款时请在备注中填写订单号，便于财务快速核对</view>
+    <view class="paragraph">• 请保留付款凭证原件，以备后续核对或纠纷处理</view>
+    <view class="paragraph">• 不要向非官方指定的账号付款</view>
+    <view class="paragraph">• 如遇付款问题，请及时联系客服，不要擅自多次付款</view>
+
+    <view class="paragraph legal-heading">八、联系我们</view>
+
+    <view class="paragraph">如您在付款过程中遇到任何问题，请通过以下方式联系我们：</view>
+    <view class="paragraph">联系电话：13631669161</view>
+
+    <view class="paragraph legal-footnote">本说明自2026年7月5日起生效。如有疑问，请联系：13631669161。</view>
+  </view>
+</view>

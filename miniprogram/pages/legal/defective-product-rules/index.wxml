@@ -1,0 +1,118 @@
+<view class="page legal-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="legal-title">瑕疵商品说明</view>
+  <view class="card legal-content">
+    <view class="paragraph">本页面说明瑕疵商品的定义、购买提示、售后边界和库存恢复规则。请您在购买瑕疵商品前仔细阅读。</view>
+
+    <view class="paragraph legal-heading">一、瑕疵商品定义</view>
+
+    <view class="paragraph">瑕疵商品是指存在以下情况但不影响正常使用的商品：</view>
+    <view class="paragraph">• 外包装轻微磨损或压痕</view>
+    <view class="paragraph">• 外盒有轻微划痕、褪色或印刷瑕疵</view>
+    <view class="paragraph">• 标签部分破损或粘贴不平整</view>
+    <view class="paragraph">• 临期商品（接近保质期但仍在有效期内）</view>
+    <view class="paragraph">• 特殊批次商品（包装版本较旧、赠品缺失等）</view>
+    <view class="paragraph">• 商品页面明确标注的其他外观瑕疵</view>
+
+    <view class="paragraph legal-subheading legal-subheading-spaced">重要说明：</view>
+    <view class="paragraph">瑕疵商品不包括以下情况：</view>
+    <view class="paragraph">• 已过期或不符合安全标准的商品</view>
+    <view class="paragraph">• 质量不合格或存在安全隐患的商品</view>
+    <view class="paragraph">• 法规要求禁止销售的商品</view>
+    <view class="paragraph">• 严重影响使用或外观的损坏商品</view>
+
+    <view class="paragraph">以上情况不应作为普通瑕疵商品销售。如您发现商品存在安全或质量问题，请及时联系客服并申请售后。</view>
+
+    <view class="paragraph legal-heading">二、购买提示</view>
+
+    <view class="paragraph legal-subheading">1. 瑕疵标注</view>
+    <view class="paragraph">瑕疵商品会在以下位置进行标注：</view>
+    <view class="paragraph">• 商品标题或标签中标注"瑕疵"、"临期"、"包装瑕疵"等字样</view>
+    <view class="paragraph">• 商品详情页面说明具体瑕疵情况</view>
+    <view class="paragraph">• 商品图片展示瑕疵部位（如适用）</view>
+
+    <view class="paragraph legal-subheading">2. 下单前请仔细查看</view>
+    <view class="paragraph">下单前，请您务必：</view>
+    <view class="paragraph">• 仔细阅读商品标题和详情中的瑕疵说明</view>
+    <view class="paragraph">• 确认瑕疵情况是否在您可接受的范围内</view>
+    <view class="paragraph">• 查看商品生产日期或保质期信息（如页面提供）</view>
+    <view class="paragraph">• 如有疑问，在下单前联系客服确认</view>
+
+    <view class="paragraph legal-subheading">3. 价格和库存</view>
+    <view class="paragraph">瑕疵商品的价格、库存和售后规则可能与普通商品不同：</view>
+    <view class="paragraph">• 价格通常低于普通商品</view>
+    <view class="paragraph">• 库存数量可能有限</view>
+    <view class="paragraph">• 售后边界与普通商品有所区别（详见下文）</view>
+
+    <view class="paragraph legal-heading">三、售后边界</view>
+
+    <view class="paragraph">瑕疵商品的售后遵循以下原则：</view>
+
+    <view class="paragraph legal-subheading">1. 已标注瑕疵不作为同一售后原因</view>
+    <view class="paragraph">如商品页面已明确标注某项瑕疵（如"外盒有压痕"），您收到的商品确实存在该瑕疵，则不能以该瑕疵为原因申请售后。</view>
+
+    <view class="paragraph">例如：</view>
+    <view class="paragraph">• 商品标注"外包装有轻微磨损"，实际收到的商品外包装确有轻微磨损 → 不支持以"外包装磨损"为由售后</view>
+    <view class="paragraph">• 商品标注"临期商品，保质期至2026年8月"，实际收到商品保质期为2026年8月 → 不支持以"临期"为由售后</view>
+
+    <view class="paragraph legal-subheading">2. 未标注的新问题可以申请售后</view>
+    <view class="paragraph">如商品存在以下情况，您可以申请售后：</view>
+    <view class="paragraph">• 未标注的新瑕疵或问题</view>
+    <view class="paragraph">• 实际瑕疵程度严重超出标注描述</view>
+    <view class="paragraph">• 商品错发、少发</view>
+    <view class="paragraph">• 商品破损（运输中造成的新破损）</view>
+    <view class="paragraph">• 商品质量问题或安全隐患</view>
+    <view class="paragraph">• 商品过期（超出标注的保质期）</view>
+
+    <view class="paragraph legal-subheading">3. 售后以人工审核结果为准</view>
+    <view class="paragraph">所有瑕疵商品的售后申请均需人工审核。审核人员会根据以下因素综合判断：</view>
+    <view class="paragraph">• 商品页面标注的瑕疵内容</view>
+    <view class="paragraph">• 您申请售后的具体原因</view>
+    <view class="paragraph">• 您提供的凭证（照片、视频等）</view>
+    <view class="paragraph">• 实际瑕疵情况与标注描述的对比</view>
+
+    <view class="paragraph">审核结果可能为通过、拒绝或需要补充信息。</view>
+
+    <view class="paragraph legal-heading">四、库存恢复规则</view>
+
+    <view class="paragraph">退回商品的库存恢复遵循以下规则：</view>
+
+    <view class="paragraph legal-subheading">1. 验货确认</view>
+    <view class="paragraph">退回的瑕疵商品需要经过验货，确认商品状态和是否符合二次销售条件。</view>
+
+    <view class="paragraph legal-subheading">2. 可售商品恢复库存</view>
+    <view class="paragraph">验货后确认符合以下条件的商品，可恢复为普通可售库存或瑕疵可售库存：</view>
+    <view class="paragraph">• 商品未开封或轻微开封但内容物完好</view>
+    <view class="paragraph">• 商品在保质期内且保存良好</view>
+    <view class="paragraph">• 商品外观和包装符合销售标准</view>
+    <view class="paragraph">• 商品功能和质量未受影响</view>
+
+    <view class="paragraph legal-subheading">3. 不可售商品不恢复普通库存</view>
+    <view class="paragraph">以下情况的退回商品不恢复为普通可售库存：</view>
+    <view class="paragraph">• 已开封且无法确认内容物完整性</view>
+    <view class="paragraph">• 商品破损、污染或变质</view>
+    <view class="paragraph">• 商品过期或接近过期无法销售</view>
+    <view class="paragraph">• 包装严重损坏影响二次销售</view>
+    <view class="paragraph">• 商品存在安全隐患或质量问题</view>
+    <view class="paragraph">• 因用户使用或保管不当造成的损坏</view>
+
+    <view class="paragraph">这类商品可能计入不可售库存、报废库存或其他特殊库存类型，不再作为普通商品销售。</view>
+
+    <view class="paragraph legal-subheading">4. 库存恢复不影响退款</view>
+    <view class="paragraph">售后审核通过的退款不受库存恢复结果影响。即使退回商品无法恢复为可售库存，已审核通过的退款仍会正常处理。</view>
+
+    <view class="paragraph legal-heading">五、特别提示</view>
+
+    <view class="paragraph">• 瑕疵商品适合对外观要求不高、注重性价比的客户</view>
+    <view class="paragraph">• 如您对商品外观有较高要求，建议选择普通商品</view>
+    <view class="paragraph">• 瑕疵商品一经售出，页面已标注的瑕疵不作为退换货理由</view>
+    <view class="paragraph">• 临期商品请在有效期内尽快使用或销售</view>
+    <view class="paragraph">• 如对瑕疵商品有任何疑问，请在下单前联系客服确认</view>
+
+    <view class="paragraph legal-heading">六、联系我们</view>
+
+    <view class="paragraph">如您对瑕疵商品有任何疑问，请通过以下方式联系我们：</view>
+    <view class="paragraph">联系电话：13631669161</view>
+
+    <view class="paragraph legal-footnote">本说明自2026年7月5日起生效。如有疑问，请联系：13631669161。</view>
+  </view>
+</view>

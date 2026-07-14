@@ -1,0 +1,138 @@
+<view class="page admin-responsive-page delivery-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="delivery-hero">
+    <view class="delivery-hero-copy">
+      <view class="eyebrow">DELIVERY DESK</view>
+      <view class="delivery-title">发货工作台</view>
+      <view class="delivery-subtitle">管理发货、自提和完成状态</view>
+    </view>
+    <view class="delivery-hero-panel">
+      <view class="hero-metric">
+        <view class="hero-value">{{orders.length}}</view>
+        <view class="hero-label">当前订单</view>
+      </view>
+      <view class="hero-filter-pill">{{deliveryTypeOptions[deliveryTypeIndex].label}}</view>
+      <view class="hero-filter-pill">{{deliveryStatusOptions[deliveryStatusIndex].label}}</view>
+    </view>
+    <button class="btn btn-secondary mini hero-action" bindtap="load">刷新</button>
+  </view>
+
+  <view class="card filter-card">
+    <view class="filter-card-head">
+      <view>
+        <view class="section-kicker">FILTERS</view>
+        <view class="panel-title">筛选发货范围</view>
+      </view>
+      <view class="filter-summary-pill">{{deliveryTypeOptions[deliveryTypeIndex].label}} · {{deliveryStatusOptions[deliveryStatusIndex].label}} · {{paymentStatusOptions[paymentStatusIndex].label}}</view>
+    </view>
+    <view class="filter-grid">
+      <view class="field">
+        <view class="label">配送方式</view>
+        <picker mode="selector" range="{{deliveryTypeOptions}}" range-key="label" value="{{deliveryTypeIndex}}" bindchange="onDeliveryTypeChange">
+          <view class="input picker-value">{{deliveryTypeOptions[deliveryTypeIndex].label}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <view class="label">配送状态</view>
+        <picker mode="selector" range="{{deliveryStatusOptions}}" range-key="label" value="{{deliveryStatusIndex}}" bindchange="onDeliveryStatusChange">
+          <view class="input picker-value">{{deliveryStatusOptions[deliveryStatusIndex].label}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <view class="label">付款状态</view>
+        <picker mode="selector" range="{{paymentStatusOptions}}" range-key="label" value="{{paymentStatusIndex}}" bindchange="onPaymentStatusChange">
+          <view class="input picker-value">{{paymentStatusOptions[paymentStatusIndex].label}}</view>
+        </picker>
+      </view>
+    </view>
+  </view>
+
+  <view class="delivery-section-heading">
+    <view>
+      <view class="section-kicker">DELIVERY QUEUE</view>
+      <view class="section-title">发货队列</view>
+    </view>
+    <view class="section-note">按订单逐笔处理发货、自提和完成状态</view>
+  </view>
+
+  <view wx:if="{{loading && !orders.length}}" class="empty">加载中...</view>
+  <view wx:elif="{{initialized && !orders.length}}" class="empty">
+    <view class="ui-empty-title">暂无符合条件的订单</view>
+    <view class="muted empty-desc">请调整筛选条件或检查订单配送方式</view>
+  </view>
+
+  <view class="delivery-list-grid">
+    <view wx:for="{{orders}}" wx:key="_id" class="card order admin-delivery-card card-press">
+      <view class="delivery-card-accent"></view>
+      <view class="delivery-card-header">
+        <view class="delivery-title-block">
+          <view class="subtitle delivery-order-title">{{item.displayName}}</view>
+          <view class="muted delivery-order-no">订单号：{{item.orderNo}}</view>
+        </view>
+        <view class="tag delivery-status status-{{item.deliveryStatus}}">{{item.deliveryStatusText}}</view>
+      </view>
+
+      <view class="delivery-info-grid">
+        <view class="info-panel">
+          <view class="info-label">订单 / 客户</view>
+          <view class="info-main">{{item.orderNo}}</view>
+          <view class="info-sub muted">客户：{{item.userOpenid}}</view>
+          <view class="info-sub muted">下单：{{item.createdAtText}}</view>
+        </view>
+        <view class="info-panel">
+          <view class="info-label">履约 / 付款</view>
+          <view class="info-main">{{item.deliveryTypeText}}</view>
+          <view class="info-sub muted">付款：{{item.paymentText}}</view>
+          <view class="info-sub muted">数量：{{item.totalQuantity || item.quantity}}</view>
+        </view>
+      </view>
+
+      <view class="delivery-total-panel">
+        <view>
+          <view class="info-label">订单金额</view>
+          <view class="delivery-total">¥{{item.totalText}}</view>
+        </view>
+        <view class="delivery-type-pill">{{item.deliveryTypeText}}</view>
+      </view>
+
+      <view wx:if="{{item.deliveryType === 'shipping'}}" class="fulfillment-panel">
+        <view class="panel-title small-title">快递发货信息</view>
+        <view class="muted">收货：{{item.shippingAddress.receiverName}} {{item.shippingAddress.receiverPhone}}</view>
+        <view class="muted address">{{item.shippingAddress.fullAddress || item.shippingAddress.detailAddress}}</view>
+        <view class="fulfillment-grid">
+          <view class="field">
+            <view class="label">快递公司</view>
+            <input class="input" value="{{item.expressCompanyDraft}}" data-id="{{item._id}}" data-field="expressCompanyDraft" bindinput="onDraftInput"></input>
+          </view>
+          <view class="field">
+            <view class="label">快递单号</view>
+            <input class="input" value="{{item.expressNoDraft}}" data-id="{{item._id}}" data-field="expressNoDraft" bindinput="onDraftInput"></input>
+          </view>
+        </view>
+      </view>
+
+      <view wx:if="{{item.deliveryType === 'self_pickup'}}" class="fulfillment-panel">
+        <view class="panel-title small-title">自提信息</view>
+        <view class="muted">自提地址：{{item.pickupInfo.pickupLocation}}</view>
+        <view class="muted">自提时间：{{item.pickupInfo.pickupTimeNote || '未设置'}}</view>
+        <view class="muted">联系人：{{item.pickupInfo.pickupContact}} {{item.pickupInfo.pickupPhone}}</view>
+        <view wx:if="{{item.pickedUpAtText}}" class="muted">自提完成：{{item.pickedUpAtText}}</view>
+      </view>
+
+      <view class="field remark-field">
+        <view class="label">配送备注</view>
+        <textarea class="textarea" value="{{item.deliveryRemarkDraft}}" data-id="{{item._id}}" data-field="deliveryRemarkDraft" bindinput="onDraftInput"></textarea>
+      </view>
+      <view class="row actions">
+        <button wx:if="{{permissions.canUpdate || permissions.canShip}}" class="btn btn-secondary small" bindtap="uploadImage" data-id="{{item._id}}">上传凭证</button>
+        <button wx:if="{{permissions.canShip && item.deliveryType === 'shipping'}}" class="btn btn-primary small" bindtap="updateDelivery" data-id="{{item._id}}" data-action="confirm_shipping">确认发货</button>
+        <button wx:if="{{permissions.canShip && item.deliveryType === 'self_pickup'}}" class="btn btn-primary small" bindtap="updateDelivery" data-id="{{item._id}}" data-action="mark_picked_up">已自提</button>
+      </view>
+      <view class="row actions secondary-actions">
+        <button wx:if="{{permissions.canComplete}}" class="btn btn-secondary small" bindtap="updateDelivery" data-id="{{item._id}}" data-action="complete">标记完成</button>
+        <button wx:if="{{permissions.canUpdate}}" class="btn btn-danger small" bindtap="updateDelivery" data-id="{{item._id}}" data-action="after_sales">售后中</button>
+      </view>
+      <view wx:if="{{!permissions.canUpdate && !permissions.canShip && !permissions.canComplete}}" class="muted read-only-note">当前账号仅可查看发货状态。</view>
+      <view wx:if="{{item.deliveryImageDraft}}" class="muted image-text">已上传凭证：{{item.deliveryImageDraft}}</view>
+    </view>
+  </view>
+</view>

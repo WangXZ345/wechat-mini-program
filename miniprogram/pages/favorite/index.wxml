@@ -1,0 +1,75 @@
+<view class="page page-enter favorite-page">
+  <view class="section list-header">
+    <view class="header-main">
+      <view class="header-title-group">
+        <view class="page-title">我的收藏</view>
+        <view wx:if="{{list.length}}" class="header-stat">
+          <text class="header-stat-value">{{list.length}}</text>
+          <text class="header-stat-label">件</text>
+        </view>
+      </view>
+      <button class="header-btn pressable" bindtap="goShop">返回首页</button>
+    </view>
+    <view class="page-desc">快速查看关注商品，不展示真实库存</view>
+  </view>
+
+  <ui-skeleton wx:if="{{loading}}" count="{{4}}" showThumb="{{true}}"></ui-skeleton>
+
+  <ui-empty
+    wx:if="{{!loading && !list.length}}"
+    icon="♡"
+    title="暂无收藏商品"
+    description="去首页逛逛，收藏常关注的商品"
+    buttonText="去首页逛逛"
+    bind:action="goShop">
+  </ui-empty>
+
+  <view wx:if="{{list.length}}" class="list-toolbar">
+    <view class="toolbar-title">收藏商品</view>
+    <view class="toolbar-note">整卡查看详情</view>
+  </view>
+
+  <view wx:if="{{list.length}}" class="product-list">
+    <view
+      wx:for="{{list}}"
+      wx:key="productId"
+      class="fav-card tap-card {{item.unavailable ? 'disabled-card' : ''}}"
+      bindtap="goDetail"
+      data-id="{{item.productId}}"
+      hover-class="fav-card-hover"
+      hover-stay-time="80">
+      <view class="product-main">
+        <image wx:if="{{item.imageUrl}}" class="product-image" src="{{item.imageUrl}}" mode="aspectFill" lazy-load="true"></image>
+        <view wx:else class="product-image placeholder">暂无图片</view>
+        <view class="product-body">
+          <view class="row between top-row">
+            <view class="product-title text-clip">{{item.name || '商品信息异常'}}</view>
+            <text class="status {{item.unavailable ? 'status-warn' : 'status-ok'}}">{{item.statusText}}</text>
+          </view>
+          <view class="muted meta">{{item.brand || '未设置品牌'}} · {{item.category || '未设置品类'}}</view>
+          <view class="muted meta">{{item.specification || '无规格'}} · {{item.productionDate || '未设置生产日期'}}</view>
+          <view class="product-tags">
+            <text wx:if="{{item.isNew}}" class="tag tag-success">新货</text>
+            <text wx:if="{{item.isSpecial}}" class="tag tag-info">特价</text>
+            <text wx:if="{{item.isWholesale}}" class="tag">批发</text>
+          </view>
+        </view>
+      </view>
+      <view class="action-row" catchtap="stopTap">
+        <view class="price">¥{{item.priceText}}</view>
+        <view class="row actions">
+          <button class="small-btn" catchtap="removeFavorite" data-id="{{item.productId}}" disabled="{{removingId === item.productId}}">
+            {{removingId === item.productId ? '处理中' : '取消收藏'}}
+          </button>
+          <button class="cart-btn product-add-btn" catchtap="addToCart" data-id="{{item.productId}}" disabled="{{item.unavailable || addingCartId === item.productId}}">
+            <text class="plus">{{addingCartId === item.productId ? '…' : '+'}}</text>
+            <text>{{addingCartId === item.productId ? '加入中' : '加购'}}</text>
+          </button>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{loadingMore}}" class="bottom-loading">继续加载</view>
+  <view wx:if="{{!loadingMore && list.length && !hasMore}}" class="empty small-empty">没有更多收藏商品了</view>
+</view>

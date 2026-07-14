@@ -1,0 +1,10 @@
+<view wx:for="{{rows}}" wx:key="*this" class="skeleton-card">
+  <view class="row">
+    <view wx:if="{{showThumb}}" class="skeleton-thumb"></view>
+    <view class="skeleton-body">
+      <view class="skeleton-line"></view>
+      <view class="skeleton-line short"></view>
+      <view class="skeleton-line"></view>
+    </view>
+  </view>
+</view>

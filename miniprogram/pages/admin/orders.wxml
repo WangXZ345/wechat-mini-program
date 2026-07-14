@@ -1,0 +1,247 @@
+<view class="page fade-in orders-page {{selectedOrderIds.length ? 'has-batch-bar' : ''}} admin-responsive-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="section orders-header">
+    <view class="orders-header-copy">
+      <view class="eyebrow">后台工作台</view>
+      <view class="orders-title">订单管理</view>
+      <view class="muted orders-subtitle">审核、付款确认、发货关联和订单导出</view>
+    </view>
+    <view class="orders-hero-panel">
+      <view class="hero-metric">
+        <view class="hero-value">{{orders.length}}</view>
+        <view class="hero-label">当前订单</view>
+      </view>
+      <view class="hero-metric">
+        <view class="hero-value">{{selectedOrderIds.length}}</view>
+        <view class="hero-label">已选发货</view>
+      </view>
+      <view class="hero-filter-pill">{{selectedOrderStatusLabel}} · {{selectedPaymentStatusLabel}}</view>
+    </view>
+    <view class="row header-actions">
+      <button class="btn btn-secondary mini" bindtap="goShipments">发货单</button>
+      <button class="btn btn-secondary mini" bindtap="load">刷新</button>
+    </view>
+  </view>
+
+  <view class="card filter-card">
+    <view class="filter-card-head">
+      <view>
+        <view class="section-kicker">FILTERS</view>
+        <view class="subtitle">筛选与导出</view>
+      </view>
+      <view class="filter-summary-pill">{{selectedDateRangeLabel}} · {{selectedShipmentFilterLabel}}</view>
+    </view>
+    <view class="filter-grid">
+      <view class="field">
+        <view class="label">下单时间</view>
+        <picker mode="selector" range="{{dateRangeOptions}}" range-key="label" value="{{dateRangeIndex}}" bindchange="onDateRangeChange">
+          <view class="input picker-value">{{selectedDateRangeLabel}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <view class="label">订单状态</view>
+        <picker mode="selector" range="{{orderStatusOptions}}" range-key="label" value="{{orderStatusIndex}}" bindchange="onOrderStatusChange">
+          <view class="input picker-value">{{selectedOrderStatusLabel}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <view class="label">付款状态</view>
+        <picker mode="selector" range="{{paymentStatusOptions}}" range-key="label" value="{{paymentStatusIndex}}" bindchange="onPaymentStatusChange">
+          <view class="input picker-value">{{selectedPaymentStatusLabel}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <view class="label">发货筛选</view>
+        <picker mode="selector" range="{{shipmentFilterOptions}}" range-key="label" value="{{shipmentFilterIndex}}" bindchange="onShipmentFilterChange">
+          <view class="input picker-value">{{selectedShipmentFilterLabel}}</view>
+        </picker>
+      </view>
+    </view>
+
+    <view wx:if="{{isCustomRange}}" class="filter-grid">
+      <view class="field">
+        <view class="label">开始日期</view>
+        <picker mode="date" value="{{customStartDate}}" bindchange="onStartDateChange">
+          <view class="input picker-value">{{customStartDate || '选择开始日期'}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <view class="label">结束日期</view>
+        <picker mode="date" value="{{customEndDate}}" bindchange="onEndDateChange">
+          <view class="input picker-value">{{customEndDate || '选择结束日期'}}</view>
+        </picker>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="label">客户关键词</view>
+      <input class="input" placeholder="昵称 / 手机号 / openid / 用户 ID" value="{{customerKeyword}}" bindinput="onCustomerKeyword"></input>
+    </view>
+    <view class="field">
+      <view class="label">商品关键词</view>
+      <input class="input" placeholder="商品名 / 规格 / 生产日期 / 索引 / SKU" value="{{productKeyword}}" bindinput="onProductKeyword"></input>
+    </view>
+
+    <view class="row between switch-row">
+      <view>
+        <view class="label">包含已取消订单</view>
+        <view class="muted">默认不导出已取消订单</view>
+      </view>
+      <switch checked="{{includeCancelled}}" bindchange="onIncludeCancelled"></switch>
+    </view>
+
+    <view class="row actions export-actions">
+      <button class="btn btn-secondary small" bindtap="load">应用筛选</button>
+      <button class="btn btn-secondary small" bindtap="resetFilters">重置</button>
+    </view>
+    <view class="row actions export-actions">
+      <button class="btn btn-primary small" loading="{{isExporting}}" bindtap="confirmExport" data-type="summary">导出订单汇总</button>
+      <button class="btn btn-primary small" loading="{{isExporting}}" bindtap="confirmExport" data-type="detail">导出商品明细</button>
+    </view>
+
+    <view wx:if="{{exportResult}}" class="export-result">
+      <view class="row between">
+        <view class="subtitle">导出成功</view>
+        <view class="tag">{{exportResult.totalRows}} 行</view>
+      </view>
+      <view class="muted file-name">{{exportResult.fileName}}</view>
+      <view class="row actions export-actions">
+        <button class="btn btn-secondary small" bindtap="copyExportLink">复制链接</button>
+        <button class="btn btn-secondary small" bindtap="openExportFile">打开文件</button>
+        <button class="btn btn-secondary small" bindtap="downloadExportFile">下载文件</button>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{loading && !orders.length}}" class="empty">加载中...</view>
+  <view wx:elif="{{initialized && !orders.length}}" class="empty">暂无符合条件的订单</view>
+
+  <view wx:if="{{orders.length}}" class="orders-section-heading fade-up">
+    <view>
+      <view class="section-kicker">ORDER QUEUE</view>
+      <view class="section-title">订单队列</view>
+    </view>
+    <view class="orders-section-note">按状态处理，不改变业务流转</view>
+  </view>
+
+  <view wx:for="{{orders}}" wx:key="_id" class="card order admin-order-card {{item.isPaid ? 'paid-order' : ''}}">
+    <view class="order-card-accent"></view>
+    <view class="order-card-header">
+      <view class="row order-title-row">
+        <view class="select-dot {{item.selected ? 'selected' : ''}}" bindtap="toggleSelectOrder" data-id="{{item._id}}"></view>
+        <view class="subtitle">{{item.displayName}}</view>
+      </view>
+      <view class="row status-row">
+        <view wx:if="{{item.isPaid}}" class="paid-badge">已确认付款</view>
+        <view wx:if="{{item.showRiskTag}}" class="risk-badge risk-{{item.customerRiskLevel}}">{{item.riskText}}</view>
+        <view wx:if="{{item.adminNote}}" class="note-badge" bindtap="toggleOrderNote" data-id="{{item._id}}">有备注</view>
+        <view class="tag">{{item.statusText}}</view>
+      </view>
+    </view>
+    <view class="order-info-grid">
+      <view class="info-panel">
+        <view class="info-label">客户</view>
+        <view class="info-main">{{item.userOpenid}}</view>
+        <view wx:if="{{item.customerPhoneDisplay}}" class="muted info-sub">手机号：{{item.customerPhoneDisplay}} {{item.customerPhoneVerifiedAt ? '已验证' : '未验证'}}</view>
+        <view class="muted info-sub">订单号：{{item.orderNo}}</view>
+      </view>
+      <view class="info-panel">
+        <view class="info-label">履约</view>
+        <view class="row shipment-line">
+          <view class="shipment-badge {{item.isMergedShipment ? 'merged' : ''}}">{{item.shipmentTagText}}</view>
+          <view class="muted">发货状态：{{item.shippingStatusText}}</view>
+        </view>
+        <view class="muted info-sub">配送方式：{{item.shippingTypeText}}</view>
+        <view wx:if="{{item.isMergedShipment}}" class="muted info-sub">合并发货单：{{item.mergeShipmentNo}}</view>
+        <view wx:if="{{item.shipmentCompanyDisplay || item.trackingNoDisplay}}" class="muted info-sub">物流：{{item.shipmentCompanyDisplay}} {{item.trackingNoDisplay}}</view>
+      </view>
+    </view>
+    <view class="muted address-summary">收货地址：{{item.addressSummary}}</view>
+    <view wx:if="{{item.adminNote}}" class="note-summary" bindtap="toggleOrderNote" data-id="{{item._id}}">备注：{{item.adminNoteSummary}}</view>
+    <view class="order-payment-panel">
+      <view>
+        <view class="info-label">付款状态</view>
+        <view class="payment-main">{{item.paymentText}}</view>
+        <view class="muted info-sub">支付方式：{{item.paymentMethodDisplay}}</view>
+        <view wx:if="{{item.paymentRemarkDisplay}}" class="muted info-sub">付款备注：{{item.paymentRemarkDisplay}}</view>
+        <view wx:if="{{item.wechatPayTransactionId}}" class="muted info-sub">微信支付交易号：{{item.wechatPayTransactionId}}</view>
+        <view wx:if="{{item.hasPaymentBatch}}" class="muted info-sub">合并付款：共 {{item.paymentBatchCount}} 笔，合计 ￥{{item.paymentBatchAmountText}}</view>
+      </view>
+      <view class="payment-total">
+        <view class="price">￥{{item.totalText}}</view>
+        <view class="muted">种类 {{item.itemCount || 1}} · 数量 {{item.totalQuantity || item.quantity}}</view>
+      </view>
+    </view>
+
+    <view class="items">
+      <view class="items-title">商品明细</view>
+      <view wx:for="{{item.items}}" wx:for-item="detail" wx:key="productId" class="item-row">
+        <view class="row between">
+          <view class="item-name">{{detail.productName}}</view>
+          <view class="price">￥{{detail.totalText}}</view>
+        </view>
+        <view class="muted">{{detail.specification || '无规格'}} | 生产日期：{{detail.productionDate || '未设置'}}</view>
+        <view class="row between muted">
+          <text>数量 {{detail.quantity}}，单价 ￥{{detail.unitPriceText}}</text>
+          <text>库存：{{detail.currentStock === null ? '未知' : detail.currentStock}}</text>
+        </view>
+        <view class="muted">库存检查：{{detail.stockCheckStatus}}</view>
+      </view>
+    </view>
+
+    <view wx:if="{{item.paymentScreenshotUrls.length}}" class="screenshot-list">
+      <image wx:for="{{item.paymentScreenshotUrls}}" wx:for-item="shot" wx:key="*this" class="screenshot" src="{{shot}}" mode="aspectFit" lazy-load="true"></image>
+    </view>
+    <view class="admin-note">
+      <view class="row between">
+        <view class="subtitle small-title">管理员备注</view>
+        <button class="btn btn-secondary tiny" bindtap="toggleOrderNote" data-id="{{item._id}}">{{item.adminNotePanelOpen ? '收起' : '编辑'}}</button>
+      </view>
+      <view wx:if="{{item.adminNote}}" class="muted note-meta">最后修改：{{item.adminNoteUpdatedAtText}} {{item.adminNoteUpdatedBy || ''}}</view>
+      <view wx:if="{{item.adminNotePanelOpen}}">
+        <textarea class="textarea" maxlength="500" placeholder="仅后台可见，最多 500 字" value="{{item.adminNoteDraft}}" bindinput="onOrderNoteInput" data-id="{{item._id}}"></textarea>
+        <view class="row actions">
+          <button class="btn btn-primary small" bindtap="saveOrderNote" data-id="{{item._id}}">保存备注</button>
+          <button class="btn btn-danger small" bindtap="clearOrderNote" data-id="{{item._id}}">清空备注</button>
+          <button class="btn btn-secondary small" bindtap="loadOrderNoteLogs" data-id="{{item._id}}">修改记录</button>
+        </view>
+        <view wx:if="{{item.noteLogsOpen}}" class="note-logs">
+          <view wx:if="{{item.noteLogsLoading}}" class="muted">加载中...</view>
+          <view wx:elif="{{!item.noteLogs.length}}" class="muted">暂无修改记录</view>
+          <view wx:for="{{item.noteLogs}}" wx:for-item="log" wx:key="_id" class="log-row">
+            <view class="row between">
+              <text class="log-name">{{log.operatorName || log.operatorOpenid}}</text>
+              <text class="muted">{{log.createdAtText}}</text>
+            </view>
+            <view class="muted">原备注：{{log.beforeNote || '空'}}</view>
+            <view>新备注：{{log.afterNote || '空'}}</view>
+          </view>
+        </view>
+      </view>
+    </view>
+    <view class="row actions" wx:if="{{item.status === 'pending_admin' || item.status === 'auto_reviewing'}}">
+      <button class="btn btn-secondary small" loading="{{item.reviewApproveLoading}}" disabled="{{item.reviewLoading}}" bindtap="review" data-id="{{item._id}}" data-action="approve">通过</button>
+      <button class="btn btn-danger small" loading="{{item.reviewRejectLoading}}" disabled="{{item.reviewLoading}}" bindtap="review" data-id="{{item._id}}" data-action="reject">拒绝</button>
+      <button class="btn btn-danger small" loading="{{item.cancelLoading}}" disabled="{{item.reviewLoading}}" bindtap="cancelOrder" data-id="{{item._id}}">取消订单</button>
+    </view>
+    <view class="row actions" wx:if="{{item.status === 'approved_pending_payment' && item.canAdminCancel}}">
+      <button class="btn btn-danger small" loading="{{item.cancelLoading}}" bindtap="cancelOrder" data-id="{{item._id}}">取消订单</button>
+    </view>
+    <view class="row actions" wx:if="{{item.status === 'pending_payment_confirm'}}">
+      <button class="btn btn-secondary small" bindtap="markPayment" data-id="{{item._id}}" data-status="paid">{{item.hasPaymentBatch ? '确认整组已付款' : '确认已付款'}}</button>
+      <button class="btn btn-secondary small" bindtap="markPayment" data-id="{{item._id}}" data-status="partial_paid">部分付款</button>
+      <button class="btn btn-danger small" bindtap="markPayment" data-id="{{item._id}}" data-status="abnormal">付款异常</button>
+      <button class="btn btn-danger small" bindtap="markPayment" data-id="{{item._id}}" data-status="unpaid">驳回截图</button>
+    </view>
+  </view>
+
+  <view wx:if="{{selectedOrderIds.length}}" class="batch-bar">
+    <view class="batch-info">
+      <view class="batch-title">已选 {{selectedOrderIds.length}} 单</view>
+      <view class="batch-sub">仅创建发货关联，不改变金额、付款和库存</view>
+    </view>
+    <view class="row batch-actions">
+      <button class="btn btn-primary batch-btn" bindtap="createMergeShipmentFromSelection">合并发货</button>
+      <button class="btn btn-secondary batch-btn" bindtap="clearSelection">取消选择</button>
+    </view>
+  </view>
+</view>

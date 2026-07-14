@@ -1,0 +1,145 @@
+<view class="page page-enter admin-responsive-page after-sale-detail-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <ui-skeleton wx:if="{{loading}}" count="{{3}}" showThumb="{{false}}"></ui-skeleton>
+  <ui-empty wx:if="{{!loading && !afterSale}}" icon="!" title="售后单不存在" description="请返回售后列表重新打开"></ui-empty>
+
+  <block wx:if="{{!loading && afterSale}}">
+    <view class="detail-hero section">
+      <view class="hero-copy">
+        <view class="hero-kicker">售后详情</view>
+        <view class="hero-title">{{afterSale.afterSaleNo}}</view>
+        <view class="hero-desc">订单号：{{afterSale.orderNo}}</view>
+      </view>
+      <view class="tag hero-status">{{afterSale.statusText}}</view>
+      <view class="hero-metrics">
+        <view class="hero-metric">
+          <view class="metric-label">客户</view>
+          <view class="metric-value">{{afterSale.customerName || "未填写"}}</view>
+        </view>
+        <view class="hero-metric">
+          <view class="metric-label">售后类型</view>
+          <view class="metric-value">{{afterSale.typeText}}</view>
+        </view>
+        <view class="hero-metric">
+          <view class="metric-label">退款状态</view>
+          <view class="metric-value">{{afterSale.refundText}}</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="detail-layout">
+      <view class="main-column">
+        <view class="card section info-card">
+          <view class="subtitle">客户申请内容</view>
+          <view class="kv"><text>客户</text><text>{{afterSale.customerName || "未填写"}} / {{afterSale.customerPhoneMasked || "无手机号"}}</text></view>
+          <view class="kv"><text>原因分类</text><text>{{afterSale.reasonText}}</text></view>
+          <view class="reason">{{afterSale.customerReasonDetail}}</view>
+          <view wx:if="{{afterSale.customerRemark}}" class="muted remark">客户备注：{{afterSale.customerRemark}}</view>
+          <view class="image-grid" wx:if="{{afterSale.evidenceImages.length}}">
+            <image wx:for="{{afterSale.evidenceImages}}" wx:key="*this" src="{{item}}" mode="aspectFit" lazy-load="true"></image>
+          </view>
+        </view>
+
+        <view class="card section info-card">
+          <view class="subtitle">售后商品</view>
+          <view wx:for="{{afterSale.returnItems}}" wx:key="productId" class="item-line">
+            <view class="row between">
+              <view class="item-name">{{item.productName}}</view>
+              <view class="price">￥{{item.refundableAmountText}}</view>
+            </view>
+            <view class="muted">{{item.specification || "无规格"}}｜{{item.productionDate || "无生产日期"}}</view>
+            <view class="muted">购买 {{item.orderedQuantity}}，申请 {{item.returnQuantity}}，单价 ￥{{item.unitPriceText}}</view>
+          </view>
+        </view>
+
+        <view class="card section info-card">
+          <view class="subtitle">订单付款信息</view>
+          <view class="amount-grid">
+            <view class="amount-box">
+              <view class="metric-label">订单金额</view>
+              <view class="metric-value">￥{{afterSale.orderAmountText}}</view>
+            </view>
+            <view class="amount-box">
+              <view class="metric-label">已付金额</view>
+              <view class="metric-value">￥{{afterSale.paidAmountText}}</view>
+            </view>
+            <view class="amount-box">
+              <view class="metric-label">可退金额</view>
+              <view class="metric-value">￥{{afterSale.maxRefundableText}}</view>
+            </view>
+            <view class="amount-box">
+              <view class="metric-label">申请退款</view>
+              <view class="metric-value price">￥{{afterSale.requestedRefundText}}</view>
+            </view>
+            <view class="amount-box">
+              <view class="metric-label">审批退款</view>
+              <view class="metric-value">￥{{afterSale.approvedRefundText}}</view>
+            </view>
+            <view class="amount-box">
+              <view class="metric-label">已退金额</view>
+              <view class="metric-value">￥{{afterSale.actualRefundText}}</view>
+            </view>
+          </view>
+        </view>
+
+        <view class="card section info-card">
+          <view class="subtitle">操作日志</view>
+          <view wx:for="{{logs}}" wx:key="_id" class="log-row">
+            <view>{{item.remark || item.action}}</view>
+            <view class="muted">{{item.createdAtText}}</view>
+          </view>
+        </view>
+      </view>
+
+      <view class="side-column">
+        <view class="card section action-card" wx:if="{{afterSale.afterSaleStatus === 'pending_review'}}">
+          <view class="subtitle">人工审核区</view>
+          <view class="muted action-hint">审核通过后进入待退款或退货流程，财务仍需单独确认退款。</view>
+          <textarea class="textarea" value="{{adminReviewRemark}}" data-field="adminReviewRemark" bindinput="onInput" placeholder="审核意见，可选"></textarea>
+          <textarea class="textarea" value="{{rejectReason}}" data-field="rejectReason" bindinput="onInput" placeholder="拒绝原因，审核拒绝时必填"></textarea>
+          <input class="input" type="digit" value="{{approvedRefundAmountYuan}}" data-field="approvedRefundAmountYuan" bindinput="onInput" placeholder="审批退款金额，单位元" />
+          <view class="switch-row">
+            <text>需要客户退货</text>
+            <switch checked="{{returnRequired}}" data-field="returnRequired" bindchange="onSwitch" />
+          </view>
+          <view class="row action-row">
+            <button class="btn btn-primary flex-btn" loading="{{saving}}" disabled="{{saving}}" data-action="approve" bindtap="review">审核通过</button>
+            <button class="btn btn-secondary flex-btn" loading="{{saving}}" disabled="{{saving}}" data-action="reject" bindtap="review">审核拒绝</button>
+          </view>
+        </view>
+
+        <view class="card section action-card" wx:if="{{afterSale.afterSaleStatus === 'returned' || afterSale.afterSaleStatus === 'waiting_return'}}">
+          <view class="subtitle">退货物流</view>
+          <view class="kv"><text>快递公司</text><text>{{afterSale.returnLogistics.shippingCompany || "暂无"}}</text></view>
+          <view class="kv"><text>快递单号</text><text>{{afterSale.returnLogistics.trackingNo || "暂无"}}</text></view>
+          <button wx:if="{{afterSale.afterSaleStatus === 'returned' || afterSale.afterSaleStatus === 'waiting_return'}}" class="btn btn-primary action-full" bindtap="confirmReceived">确认收到退货</button>
+        </view>
+
+        <view class="card section action-card" wx:if="{{afterSale.afterSaleStatus === 'received' || afterSale.afterSaleStatus === 'inspecting'}}">
+          <view class="subtitle">验货结果</view>
+          <input class="input" value="{{inspectionCondition}}" data-field="inspectionCondition" bindinput="onInput" placeholder="itemCondition，例如 sellable / damaged / opened" />
+          <view class="switch-row">
+            <text>可恢复普通库存</text>
+            <switch checked="{{canRestock}}" data-field="canRestock" bindchange="onSwitch" />
+          </view>
+          <input class="input" type="number" value="{{restockQuantity}}" data-field="restockQuantity" bindinput="onInput" placeholder="恢复库存数量" />
+          <textarea class="textarea" value="{{inspectionRemark}}" data-field="inspectionRemark" bindinput="onInput" placeholder="验货备注"></textarea>
+          <button class="btn btn-primary action-full" bindtap="inspect">保存验货结果</button>
+        </view>
+
+        <view class="card section action-card">
+          <view class="subtitle">退款记录</view>
+          <view wx:if="{{!refundRecords.length}}" class="muted empty-line">暂无退款记录</view>
+          <view wx:for="{{refundRecords}}" wx:key="_id" class="refund-row" bindtap="goRefund" data-id="{{item._id}}">
+            <view class="row between">
+              <view>{{item.refundNo}}</view>
+              <view class="tag">{{item.refundText}}</view>
+            </view>
+            <view class="muted">金额 ￥{{item.refundAmountText}}｜{{item.createdAtText}}</view>
+          </view>
+          <button wx:if="{{afterSale.refundStatus === 'pending' && afterSale.approvedRefundAmount > 0}}" class="btn btn-primary action-full" bindtap="createRefund">创建退款记录</button>
+          <button wx:if="{{afterSale.afterSaleStatus === 'refunded' || afterSale.afterSaleStatus === 'approved' || afterSale.afterSaleStatus === 'resent' || afterSale.afterSaleStatus === 'exchanged'}}" class="btn btn-secondary action-full" bindtap="complete">标记完成</button>
+        </view>
+      </view>
+    </view>
+  </block>
+</view>

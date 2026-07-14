@@ -1,0 +1,243 @@
+.page-enter,
+.motion-page-enter {
+  animation: motion-page-enter var(--motion-normal) var(--motion-ease-out) backwards;
+}
+
+.page-fade,
+.motion-page-fade,
+.fade-in,
+.motion-fade-in {
+  animation: motion-fade-in var(--motion-normal) var(--motion-ease-out) backwards;
+}
+
+.fade-up,
+.motion-fade-up,
+.motion-slide-up,
+.card-stagger {
+  animation: motion-fade-up var(--motion-normal) var(--motion-ease-out) backwards;
+}
+
+.motion-stagger-0 {
+  animation-delay: 0ms;
+}
+
+.card-stagger-1,
+.motion-stagger-1 {
+  animation-delay: 24ms;
+}
+
+.card-stagger-2,
+.motion-stagger-2 {
+  animation-delay: 48ms;
+}
+
+.card-stagger-3,
+.motion-stagger-3 {
+  animation-delay: 72ms;
+}
+
+.card-stagger-4,
+.motion-stagger-4 {
+  animation-delay: 96ms;
+}
+
+.card-stagger-5,
+.card-stagger-6,
+.motion-stagger-5 {
+  animation-delay: var(--motion-stagger-max);
+}
+
+.btn,
+.ui-button,
+.motion-press,
+.pressable,
+.btn-press {
+  transition:
+    opacity var(--motion-press) var(--motion-ease-out),
+    transform var(--motion-press) var(--motion-ease-out);
+}
+
+.tap-card,
+.motion-card-press,
+.card-press {
+  transition:
+    opacity var(--motion-press) var(--motion-ease-out),
+    transform var(--motion-press) var(--motion-ease-out);
+}
+
+.motion-press:active,
+.pressable:active,
+.btn-press:active,
+.btn:active,
+.ui-button:active {
+  opacity: 0.86;
+  transform: scale(0.97);
+}
+
+.tap-card:active,
+.motion-card-press:active,
+.card-press:active {
+  opacity: 0.92;
+  transform: scale(0.985);
+}
+
+.btn[disabled]:active,
+.ui-button[disabled]:active {
+  opacity: 0.56;
+  transform: none;
+}
+
+.modal-overlay-enter,
+.ui-modal-overlay-enter,
+.motion-modal-overlay {
+  animation: motion-overlay-fade var(--motion-fast) var(--motion-ease-out) backwards;
+}
+
+.modal-enter,
+.ui-modal-enter,
+.modal-panel-enter,
+.motion-modal-panel,
+.motion-scale-in {
+  transform-origin: center center;
+  animation: motion-modal-pop 180ms var(--motion-ease-out) backwards;
+}
+
+.bottom-bar-enter,
+.settle-bar-enter,
+.motion-bottom-bar-enter,
+.motion-bottom-bar {
+  animation: motion-bottom-bar var(--motion-normal) var(--motion-ease-out) backwards;
+}
+
+.tabbar-settle,
+.tabbar-pill-enter,
+.motion-tab-pill {
+  animation: motion-tabbar-pill var(--motion-fast) var(--motion-ease-out) backwards;
+}
+
+@keyframes motion-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(20rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes motion-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes motion-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes motion-overlay-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes motion-modal-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes motion-bottom-bar {
+  from {
+    opacity: 0;
+    transform: translateY(24rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes motion-tabbar-pill {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .motion-page-enter,
+  .page-fade,
+  .motion-page-fade,
+  .fade-in,
+  .motion-fade-in,
+  .fade-up,
+  .motion-fade-up,
+  .motion-slide-up,
+  .card-stagger,
+  .modal-overlay-enter,
+  .ui-modal-overlay-enter,
+  .motion-modal-overlay,
+  .modal-enter,
+  .ui-modal-enter,
+  .modal-panel-enter,
+  .motion-modal-panel,
+  .motion-scale-in,
+  .bottom-bar-enter,
+  .settle-bar-enter,
+  .motion-bottom-bar-enter,
+  .motion-bottom-bar,
+  .tabbar-settle,
+  .tabbar-pill-enter,
+  .motion-tab-pill {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+
+  .btn,
+  .ui-button,
+  .motion-press,
+  .pressable,
+  .btn-press,
+  .tap-card,
+  .motion-card-press,
+  .card-press {
+    transition: none !important;
+  }
+
+  .motion-press:active,
+  .pressable:active,
+  .btn-press:active,
+  .btn:active,
+  .ui-button:active,
+  .tap-card:active,
+  .motion-card-press:active,
+  .card-press:active {
+    transform: none;
+  }
+}

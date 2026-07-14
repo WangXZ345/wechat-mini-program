@@ -1,0 +1,216 @@
+<view class="page home-page page-enter page-with-tabbar {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}" bindtap="hideSearchPanel">
+  <view class="section home-top-shell">
+    <view class="home-title-row">
+      <view class="header-copy">
+        <view class="home-title">商品</view>
+      </view>
+      <view class="home-action-stack" catchtap="noop">
+        <view class="home-icon-action" aria-role="button" aria-label="查看收藏" catchtap="goFavorite">
+          <text class="home-action-glyph">♡</text>
+          <text class="home-action-label">收藏</text>
+        </view>
+        <view class="home-icon-action" aria-role="button" aria-label="查看常购商品" catchtap="goFrequent">
+          <text class="home-action-glyph">↻</text>
+          <text class="home-action-label">常购</text>
+        </view>
+        <view class="home-cart-action" aria-role="button" aria-label="查看购物车" catchtap="goCart">
+          <text class="home-cart-label">购物车</text>
+          <text class="home-cart-count">{{cartCount}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="home-search-card" catchtap="noop">
+      <view class="search-row">
+        <view class="search-shell">
+          <text class="search-icon">⌕</text>
+          <input
+            class="search-input"
+            placeholder="搜索商品 / 规格 / 生产日期"
+            placeholder-class="search-placeholder"
+            value="{{keyword}}"
+            bindfocus="onSearchFocus"
+            bindinput="onSearchInput"
+            confirm-type="search"
+            bindconfirm="onSearchConfirm"
+          ></input>
+          <view wx:if="{{keyword}}" class="search-clear-hit" aria-role="button" aria-label="清除搜索" catchtap="clearSearch">
+            <view class="search-clear-inline">×</view>
+          </view>
+          <view class="search-submit-hit" aria-role="button" aria-label="搜索" catchtap="onSearchConfirm">
+            <view class="search-inline-btn">搜索</view>
+          </view>
+        </view>
+      </view>
+
+      <view wx:if="{{showSearchPanel}}" class="search-panel">
+        <block wx:if="{{keyword}}">
+          <view class="panel-title-row">
+            <view class="panel-title">搜索联想</view>
+            <view wx:if="{{suggestionLoading}}" class="panel-hint">加载中</view>
+          </view>
+          <view wx:for="{{searchSuggestions}}" wx:key="keyword" class="suggestion-item" data-keyword="{{item.keyword}}" catchtap="onSuggestionTap">
+            <text class="suggestion-icon">⌕</text>
+            <view class="suggestion-main">
+              <view class="suggestion-keyword">{{item.keyword}}</view>
+              <view class="suggestion-meta">{{item.type}}</view>
+            </view>
+          </view>
+          <view wx:if="{{!suggestionLoading && suggestionEmpty}}" class="panel-empty">暂无相关联想，可直接搜索</view>
+        </block>
+
+        <block wx:else>
+          <view class="panel-title-row">
+            <view class="panel-title">最近搜索</view>
+            <view wx:if="{{recentSearches.length}}" class="panel-clear" catchtap="onClearRecentSearches">清空</view>
+          </view>
+          <view wx:if="{{recentLoading}}" class="panel-empty">加载中</view>
+          <view wx:elif="{{recentSearches.length}}" class="recent-list">
+            <view wx:for="{{recentSearches}}" wx:key="keyword" class="recent-chip" data-keyword="{{item.keyword}}" catchtap="onRecentSearchTap">
+              <text>{{item.keyword}}</text>
+              <text class="recent-delete" data-keyword="{{item.keyword}}" catchtap="onDeleteRecentSearch">×</text>
+            </view>
+          </view>
+          <view wx:else class="panel-empty">暂无最近搜索</view>
+          <block wx:if="{{hotSearches.length}}">
+            <view class="panel-title-row hot-title-row">
+              <view class="panel-title">热门搜索</view>
+            </view>
+            <view class="recent-list">
+              <view wx:for="{{hotSearches}}" wx:key="keyword" class="recent-chip hot-chip" data-keyword="{{item.keyword}}" catchtap="onRecentSearchTap">
+                <text>{{item.keyword}}</text>
+              </view>
+            </view>
+          </block>
+        </block>
+      </view>
+    </view>
+
+    <scroll-view wx:if="{{categories.length}}" class="category-scroll home-channel-scroll" scroll-x="true" enable-flex="true">
+      <view class="category-row">
+        <view class="category-chip {{!category ? 'active' : ''}}" data-category="" catchtap="onCategoryTap">全部</view>
+        <view wx:for="{{categories}}" wx:key="*this" class="category-chip {{category === item ? 'active' : ''}}" data-category="{{item}}" catchtap="onCategoryTap">{{item}}</view>
+      </view>
+    </scroll-view>
+  </view>
+
+  <view wx:if="{{!isSearching}}">
+    <view wx:if="{{recommendLoading}}" class="recommend-skeleton">
+      <view class="recommend-head skeleton-line"></view>
+      <view class="recommend-card-row">
+        <view wx:for="{{recommendSkeletonRows}}" wx:key="*this" class="recommend-skeleton-card"></view>
+      </view>
+    </view>
+
+    <view wx:if="{{!recommendLoading && recommendError}}" class="recommend-error">推荐区暂时加载失败，商品列表可正常浏览</view>
+
+    <view wx:if="{{recommendTabs.length > 1}}" class="home-recommend-switch" catchtap="noop">
+      <view class="recommend-tab-row home-recommend-options">
+        <view
+          wx:for="{{recommendTabs}}"
+          wx:key="sectionKey"
+          class="recommend-tab {{activeRecommendKey === item.sectionKey ? 'active' : ''}}"
+          data-key="{{item.sectionKey}}"
+          catchtap="onRecommendTabTap"
+        >{{item.sectionTitle}}</view>
+      </view>
+    </view>
+
+    <view wx:for="{{visibleRecommendSections}}" wx:key="sectionKey" class="recommend-section home-rail-section">
+      <view class="recommend-title-row">
+        <view class="recommend-heading-copy">
+          <view class="recommend-title">{{item.sectionTitle}}</view>
+          <view wx:if="{{item.subtitle}}" class="recommend-subtitle">{{item.subtitle}}</view>
+        </view>
+        <view class="recommend-more" data-key="{{item.sectionKey}}" data-title="{{item.sectionTitle}}" catchtap="goRecommend">查看更多</view>
+      </view>
+
+      <scroll-view scroll-x="true" enable-flex="true" class="recommend-scroll home-product-rail">
+        <view class="recommend-row home-rail-row">
+          <block wx:for="{{item.products}}" wx:for-item="product" wx:for-index="productIndex" wx:key="_id">
+            <view class="recommend-card home-rail-card tap-card" catchtap="goDetail" data-id="{{product._id}}">
+              <image wx:if="{{product.imageUrl}}" class="recommend-image" src="{{product.imageUrl}}" mode="aspectFill" lazy-load="{{productIndex > 1}}"></image>
+              <view wx:else class="recommend-image placeholder">暂无图片</view>
+              <view class="recommend-name">{{product.name}}</view>
+              <view class="recommend-meta">{{product.brand || product.category || product.specification}}</view>
+              <view class="recommend-meta">生产日期：{{product.productionDate || '未设置'}}</view>
+              <view class="product-tags compact-tags">
+                <text wx:for="{{product.tagItems}}" wx:for-item="tag" wx:key="name" class="tag tag-product tag-{{tag.className}}">{{tag.name}}</text>
+              </view>
+              <view class="row between recommend-bottom">
+                <view class="price">¥{{product.priceText}}</view>
+                <button class="recommend-add-btn" catchtap="addToCart" data-id="{{product._id}}" disabled="{{addingId === product._id}}">
+                  <text class="recommend-add-symbol">{{addingId === product._id ? '…' : '+'}}</text>
+                </button>
+              </view>
+            </view>
+          </block>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="home-skeleton">
+    <view wx:for="{{skeletonRows}}" wx:key="*this" class="skeleton-card">
+      <view class="row">
+        <view class="skeleton-thumb"></view>
+        <view class="skeleton-body">
+          <view class="skeleton-line"></view>
+          <view class="skeleton-line short"></view>
+          <view class="skeleton-line"></view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{initialized && !loading && !products.length}}" class="empty search-empty">
+    <view class="ui-empty-icon">⌕</view>
+    <view class="ui-empty-title">{{noResultSearch ? '没有找到相关商品' : '暂无上架商品'}}</view>
+    <view class="ui-empty-desc">{{noResultSearch ? '可以换个关键词试试，或提交找货需求。' : '商品上架后会显示在这里'}}</view>
+    <view wx:if="{{noResultSearch}}" class="empty-actions">
+      <button class="btn btn-secondary empty-btn" catchtap="clearSearch">清空搜索</button>
+      <button class="btn btn-dark empty-btn" catchtap="requestWantedProduct">联系商家找货</button>
+    </view>
+  </view>
+
+  <view wx:if="{{products.length}}" class="product-list-header">
+    <view class="section-heading">{{isSearching ? '搜索结果' : '全部商品'}}</view>
+    <view class="list-count">{{total}} 件</view>
+  </view>
+
+  <view wx:if="{{products.length}}" class="product-grid">
+    <view wx:for="{{products}}" wx:key="_id" class="card product tap-card" catchtap="goDetail" data-id="{{item._id}}">
+      <view class="image-wrap">
+        <image wx:if="{{item.imageUrl}}" class="product-image" src="{{item.imageUrl}}" mode="aspectFill" lazy-load="true"></image>
+        <view wx:else class="product-image placeholder">暂无图片</view>
+      </view>
+      <view class="product-body">
+        <view class="product-title-row">
+          <view class="subtitle product-title-text">{{item.name}}</view>
+          <view class="favorite-btn {{item.isFavorite ? 'active' : ''}} {{favoriteChangingId === item._id ? 'disabled' : ''}}" catchtap="toggleFavorite" data-id="{{item._id}}">
+            {{item.isFavorite ? '♥' : '♡'}}
+          </view>
+        </view>
+        <view class="muted">{{item.specification}}</view>
+        <view class="muted">生产日期：{{item.productionDate || '未设置'}}</view>
+        <view class="product-tags">
+          <text class="tag tag-info">批发</text>
+          <text wx:for="{{item.tagItems}}" wx:for-item="tag" wx:key="name" class="tag tag-product tag-{{tag.className}}">{{tag.name}}</text>
+        </view>
+        <view class="row between product-action-row">
+          <view class="price">¥{{item.priceText}}</view>
+          <button class="product-add-btn" catchtap="addToCart" data-id="{{item._id}}" disabled="{{addingId === item._id}}">
+            <text class="plus">{{addingId === item._id ? '…' : '+'}}</text>
+            <text>{{addingId === item._id ? '加入中' : '加购'}}</text>
+          </button>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{loadingMore}}" class="bottom-loading">
+    <view class="loading-dot"></view>
+    <text>继续加载</text>
+  </view>
+  <view wx:if="{{!loadingMore && products.length && !hasMore}}" class="empty small-empty">没有更多商品了</view>
+</view>

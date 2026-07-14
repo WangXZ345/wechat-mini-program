@@ -1,0 +1,7 @@
+{
+  "navigationBarTitleText": "售后管理",
+  "usingComponents": {
+    "ui-skeleton": "/components/ui-skeleton/index",
+    "ui-empty": "/components/ui-empty/index"
+  }
+}

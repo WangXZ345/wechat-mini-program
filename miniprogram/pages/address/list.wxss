@@ -1,0 +1,178 @@
+.address-page {
+  background: #F8F4ED;
+}
+
+.address-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding-top: 10rpx;
+  margin-bottom: 18rpx;
+}
+
+.address-hero-copy {
+  min-width: 0;
+}
+
+.section-kicker {
+  color: #8A6A43;
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.page-title {
+  margin-top: 8rpx;
+  color: #1F1A15;
+  font-size: 52rpx;
+  font-weight: 800;
+  line-height: 1.08;
+}
+
+.page-desc {
+  margin-top: 10rpx;
+  color: #82776B;
+  font-size: 25rpx;
+  line-height: 1.5;
+}
+
+.address-count-pill {
+  flex: 0 0 auto;
+  min-width: 96rpx;
+  height: 58rpx;
+  line-height: 58rpx;
+  padding: 0 20rpx;
+  border-radius: 999rpx;
+  background: #FFFDF9;
+  border: 1rpx solid #E6D8C7;
+  color: #7B6245;
+  font-size: 24rpx;
+  font-weight: 800;
+  text-align: center;
+  box-shadow: 0 8rpx 18rpx rgba(86, 62, 34, 0.06);
+}
+
+.address-card {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 18rpx;
+  padding: 22rpx 22rpx 20rpx 28rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.92);
+  background: linear-gradient(180deg, #FFFDF9 0%, #FCF7EF 100%);
+  border-radius: 28rpx;
+  box-shadow: 0 10rpx 24rpx rgba(86, 62, 34, 0.07);
+}
+
+.address-card-accent {
+  position: absolute;
+  left: 0;
+  top: 22rpx;
+  bottom: 22rpx;
+  width: 6rpx;
+  border-radius: 999rpx;
+  background: #DCC8AB;
+}
+
+.address-card.is-default .address-card-accent {
+  background: #B99C74;
+}
+
+.top-row {
+  align-items: flex-start;
+}
+
+.receiver-block {
+  min-width: 0;
+}
+
+.receiver {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  font-size: 30rpx;
+  font-weight: 700;
+  line-height: 1.35;
+  flex-wrap: wrap;
+}
+
+.phone {
+  color: #82776B;
+  font-weight: 500;
+  font-size: 26rpx;
+}
+
+.default-tag {
+  background: #F3E7D6;
+  color: #7B6245;
+  border: 0;
+}
+
+.select-hint {
+  margin-top: 8rpx;
+  color: #A79B8B;
+  font-size: 22rpx;
+}
+
+.address-line {
+  margin-top: 14rpx;
+  color: #82776B;
+  font-size: 24rpx;
+}
+
+.address-detail {
+  margin-top: 8rpx;
+  color: #1F1A15;
+  font-size: 27rpx;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.address-tag-line {
+  display: inline-flex;
+  margin-top: 14rpx;
+  padding: 6rpx 16rpx;
+  border-radius: 999rpx;
+  background: #EFE6DA;
+  color: #7B6245;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.actions {
+  margin-top: 20rpx;
+  gap: 10rpx;
+  flex-wrap: nowrap;
+  padding-top: 16rpx;
+  border-top: 1rpx solid #EFE6DA;
+}
+
+.address-action {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  height: 58rpx;
+  line-height: 58rpx;
+  margin: 0;
+  padding: 0 10rpx;
+  border-radius: 999rpx;
+  font-size: 23rpx;
+}
+
+.address-action.danger {
+  color: #9A2D2D;
+}
+
+.bottom-action {
+  position: fixed;
+  left: 24rpx;
+  right: 24rpx;
+  bottom: calc(18rpx + constant(safe-area-inset-bottom));
+  bottom: calc(18rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+.bottom-action .btn {
+  width: 100%;
+  border-radius: 999rpx;
+}

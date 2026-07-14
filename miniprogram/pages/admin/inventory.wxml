@@ -1,0 +1,61 @@
+<view class="page inventory-page page-enter admin-responsive-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="inventory-hero section">
+    <view>
+      <view class="hero-eyebrow">Inventory Console</view>
+      <view class="hero-title">库存管理</view>
+      <view class="hero-subtitle">查看当前库存和近期变更记录，谨慎处理高风险清空操作</view>
+    </view>
+    <view class="row header-actions">
+      <button wx:if="{{canClearInventory}}" class="btn btn-danger clear-btn" loading="{{clearingInventory}}" disabled="{{clearingInventory}}" bindtap="clearAllInventory">
+        {{clearCountdown ? clearCountdown + ' 秒后确认' : '清空库存'}}
+      </button>
+      <button class="btn btn-secondary mini" bindtap="load">刷新</button>
+    </view>
+  </view>
+
+  <ui-skeleton wx:if="{{loading && !initialized}}" count="{{4}}" showThumb="{{false}}"></ui-skeleton>
+
+  <view wx:else class="inventory-workspace">
+    <view class="card section inventory-card fade-up">
+      <view class="section-title-row">
+        <view>
+          <view class="subtitle">当前库存</view>
+          <view class="muted card-desc">仅后台有权限角色可见真实库存数</view>
+        </view>
+        <view class="count-pill">{{products.length || 0}} 件</view>
+      </view>
+      <view wx:if="{{products.length}}" class="inventory-list">
+        <view wx:for="{{products}}" wx:key="_id" class="inventory-row card-press">
+          <view class="product-copy">
+            <view class="product-name">{{item.name}}</view>
+            <view class="muted product-id">{{item._id}}</view>
+          </view>
+          <view class="stock-pill">{{item.stock}}</view>
+        </view>
+      </view>
+      <view wx:elif="{{initialized}}" class="empty compact-empty">暂无库存商品</view>
+    </view>
+
+    <view class="card section inventory-card log-card fade-up">
+      <view class="section-title-row">
+        <view>
+          <view class="subtitle">库存日志</view>
+          <view class="muted card-desc">按变更时间记录操作原因和前后库存</view>
+        </view>
+        <view class="count-pill">{{logs.length || 0}} 条</view>
+      </view>
+      <view wx:if="{{logs.length}}" class="log-list">
+        <view wx:for="{{logs}}" wx:key="_id" class="log-row">
+          <view class="log-head">
+            <view class="log-reason">{{item.reason}}</view>
+            <view class="change-pill">{{item.changeAmount}}</view>
+          </view>
+          <view class="log-meta">商品：{{item.productId}}</view>
+          <view class="log-meta">库存：{{item.beforeStock}} → {{item.afterStock}}</view>
+          <view class="log-meta">操作人：{{item.operatorId}}</view>
+        </view>
+      </view>
+      <view wx:elif="{{initialized}}" class="empty compact-empty">暂无库存日志</view>
+    </view>
+  </view>
+</view>

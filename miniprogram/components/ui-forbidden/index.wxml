@@ -1,0 +1,6 @@
+<view class="ui-empty forbidden">
+  <view class="ui-empty-icon">!</view>
+  <view class="ui-empty-title">{{title}}</view>
+  <view class="ui-empty-desc">{{description}}</view>
+  <button class="btn btn-primary forbidden-btn" bindtap="goDashboard">返回后台首页</button>
+</view>

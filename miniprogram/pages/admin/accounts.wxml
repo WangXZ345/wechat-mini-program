@@ -1,0 +1,26 @@
+<view class="page legacy-accounts-page page-enter">
+  <view class="accounts-hero section">
+    <view>
+      <view class="hero-kicker">财务账款</view>
+      <view class="hero-title">客户账款</view>
+      <view class="hero-desc">旧账款入口，保留原客户汇总和标记历史已付流程。</view>
+    </view>
+    <button class="btn btn-secondary refresh-btn" bindtap="load">刷新</button>
+  </view>
+
+  <view wx:if="{{!accounts.length}}" class="card empty-panel">暂无客户账款</view>
+
+  <view wx:for="{{accounts}}" wx:key="_id" class="card account">
+    <view class="account-head">
+      <view class="account-title">{{item.user.nickname || item.user.openid || item.userId}}</view>
+      <view class="account-pill">账款</view>
+    </view>
+    <view class="metric-grid">
+      <view class="metric-cell"><text class="metric-label">今日订单</text><text class="metric-value">￥{{item.todayText}}</text></view>
+      <view class="metric-cell"><text class="metric-label">累计应收</text><text class="metric-value">￥{{item.totalText}}</text></view>
+      <view class="metric-cell"><text class="metric-label">已付金额</text><text class="metric-value">￥{{item.paidText}}</text></view>
+      <view class="metric-cell primary"><text class="metric-label">未付金额</text><text class="metric-value price">￥{{item.unpaidText}}</text></view>
+    </view>
+    <button class="btn btn-secondary mark-btn" bindtap="markPaid" data-id="{{item._id}}">标记历史已付</button>
+  </view>
+</view>

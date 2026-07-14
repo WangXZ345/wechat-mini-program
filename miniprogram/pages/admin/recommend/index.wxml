@@ -1,0 +1,77 @@
+<view class="page admin-recommend-page page-enter">
+  <view class="admin-hero section">
+    <view>
+      <view class="hero-kicker">推荐工作台</view>
+      <view class="hero-title">首页推荐配置</view>
+      <view class="hero-desc">管理首页推荐频道的标题、排序、展示数量和启停状态。</view>
+    </view>
+    <button class="btn btn-secondary hero-action" bindtap="load">刷新</button>
+  </view>
+
+  <view class="summary-strip section">
+    <view class="summary-pill">推荐区 {{sections.length}}</view>
+    <view class="summary-pill">新货</view>
+    <view class="summary-pill">瑕疵</view>
+    <view class="summary-pill">热销</view>
+    <view class="summary-pill">常购</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="empty loading-panel">加载中...</view>
+
+  <view wx:for="{{sections}}" wx:key="sectionKey" class="card section recommend-card">
+    <view class="recommend-accent"></view>
+    <view class="section-head row between">
+      <view class="section-head-copy">
+        <view class="section-title">{{item.sectionTitle}}</view>
+        <view class="section-key">{{item.sectionKey}}</view>
+      </view>
+      <view class="switch-block">
+        <view class="state-pill {{item.enabled ? 'enabled' : ''}}">{{item.enabled ? '已启用' : '已停用'}}</view>
+        <switch checked="{{item ? item.enabled : false}}" data-index="{{index}}" bindchange="onEnabledChange"></switch>
+      </view>
+    </view>
+
+    <view class="config-grid">
+      <view class="field-block">
+        <view class="label">频道标题</view>
+        <input class="input" placeholder="标题" value="{{item.sectionTitle}}" data-index="{{index}}" data-key="sectionTitle" bindinput="onFieldInput"></input>
+      </view>
+      <view class="field-block">
+        <view class="label">频道副标题</view>
+        <input class="input" placeholder="副标题" value="{{item.subtitle}}" data-index="{{index}}" data-key="subtitle" bindinput="onFieldInput"></input>
+      </view>
+      <view class="field-block">
+        <view class="label">排序</view>
+        <input class="input" type="number" placeholder="排序" value="{{item.sortIndexInput}}" data-index="{{index}}" data-key="sortIndexInput" bindinput="onFieldInput"></input>
+      </view>
+      <view class="field-block">
+        <view class="label">首页展示数量</view>
+        <input class="input" type="number" placeholder="首页展示数量" value="{{item.maxItemsInput}}" data-index="{{index}}" data-key="maxItemsInput" bindinput="onFieldInput"></input>
+      </view>
+    </view>
+
+    <picker mode="selector" range="{{displayTypes}}" range-key="label" value="{{item.displayTypeIndex}}" data-index="{{index}}" bindchange="onDisplayTypeChange">
+      <view class="picker">展示方式：{{displayTypes[item.displayTypeIndex].label}}</view>
+    </picker>
+
+    <view class="preview-title-row">
+      <view class="preview-title">当前推荐商品</view>
+      <view class="preview-count">{{item.products ? item.products.length : 0}} 个</view>
+    </view>
+    <scroll-view wx:if="{{item.products && item.products.length}}" scroll-x="true" class="product-scroll">
+      <view class="product-row">
+        <view wx:for="{{item.products}}" wx:for-item="product" wx:key="_id" class="product-mini">
+          <image wx:if="{{product.imageUrl}}" class="product-image" src="{{product.imageUrl}}" mode="aspectFill" lazy-load="true"></image>
+          <view wx:else class="product-image placeholder">暂无图片</view>
+          <view class="product-name">{{product.name}}</view>
+          <view class="muted mini-meta">{{product.specification || product.category || '-'}}</view>
+        </view>
+      </view>
+    </scroll-view>
+    <view wx:else class="muted empty-preview">暂无推荐商品</view>
+
+    <button class="btn btn-primary save-btn" loading="{{savingKey === item.sectionKey}}" disabled="{{savingKey === item.sectionKey}}" data-index="{{index}}" bindtap="saveSection">保存该推荐区</button>
+  </view>
+
+  <button wx:if="{{sections.length}}" class="btn btn-secondary sticky-sort" bindtap="sortByCurrentInputs">保存当前排序</button>
+</view>

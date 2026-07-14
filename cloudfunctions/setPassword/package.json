@@ -1,0 +1,9 @@
+{
+  "name": "setPassword",
+  "version": "1.0.0",
+  "description": "设置密码",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

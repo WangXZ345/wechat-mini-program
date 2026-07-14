@@ -1,0 +1,188 @@
+/* Landscape and wide-screen helpers. Keep portrait styles as the default. */
+
+.page.is-landscape,
+.is-landscape .page {
+  padding-left: 48rpx;
+  padding-right: 48rpx;
+}
+
+.page.is-wide,
+.is-wide .page {
+  width: 100%;
+  max-width: 1400rpx;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
+.page-with-tabbar.is-landscape,
+.is-landscape .page-with-tabbar {
+  padding-bottom: 154rpx;
+  padding-left: calc(48rpx + constant(safe-area-inset-left));
+  padding-left: calc(48rpx + env(safe-area-inset-left));
+  padding-right: calc(48rpx + constant(safe-area-inset-right));
+  padding-right: calc(48rpx + env(safe-area-inset-right));
+}
+
+.legal-content,
+.text-content {
+  box-sizing: border-box;
+}
+
+.page.is-landscape .legal-content,
+.page.is-landscape .text-content,
+.is-landscape .legal-content,
+.is-landscape .text-content {
+  max-width: 960rpx;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.page.is-landscape .search-row,
+.is-landscape .search-row {
+  flex-direction: row;
+  align-items: center;
+}
+
+.page.is-landscape .search-shell,
+.page.is-landscape .search-input,
+.is-landscape .search-shell,
+.is-landscape .search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.page.is-landscape .filter-grid,
+.is-landscape .filter-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+}
+
+.page.is-landscape .filter-grid .field,
+.is-landscape .filter-grid .field {
+  flex: 1 1 300rpx;
+  min-width: 260rpx;
+}
+
+.page.is-landscape .form-row,
+.is-landscape .form-row {
+  display: flex;
+  gap: 24rpx;
+  align-items: flex-start;
+}
+
+.page.is-landscape .form-row > .field,
+.is-landscape .form-row > .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.page.is-landscape .admin-table,
+.is-landscape .admin-table,
+.page.is-landscape .table-scroll,
+.is-landscape .table-scroll {
+  overflow-x: auto;
+}
+
+.page.is-landscape .button-group,
+.is-landscape .button-group,
+.page.is-landscape .actions,
+.is-landscape .actions {
+  flex-wrap: wrap;
+}
+
+.page.is-landscape .card,
+.is-landscape .card {
+  border-radius: var(--radius-lg);
+}
+
+.page.is-landscape .modal,
+.page.is-landscape .popup,
+.is-landscape .modal,
+.is-landscape .popup {
+  width: min(86vw, 860rpx);
+  max-width: 860rpx;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
+.page.is-landscape .modal-content,
+.page.is-landscape .popup-content,
+.is-landscape .modal-content,
+.is-landscape .popup-content {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.page.is-landscape .footer,
+.footer.is-landscape,
+.is-landscape .footer {
+  left: constant(safe-area-inset-left);
+  left: env(safe-area-inset-left);
+  right: constant(safe-area-inset-right);
+  right: env(safe-area-inset-right);
+}
+
+.page.is-wide .footer,
+.footer.is-wide,
+.is-wide .footer {
+  max-width: 1400rpx;
+  left: 50%;
+  right: auto;
+  width: 100%;
+  transform: translateX(-50%);
+}
+
+.show-landscape {
+  display: none;
+}
+
+.page.is-landscape .show-landscape,
+.is-landscape .show-landscape {
+  display: block;
+}
+
+.page.is-landscape .hide-landscape,
+.is-landscape .hide-landscape {
+  display: none;
+}
+
+.page.is-landscape .two-column-layout,
+.is-landscape .two-column-layout {
+  display: flex;
+  gap: 24rpx;
+  align-items: flex-start;
+}
+
+.page.is-landscape .two-column-left,
+.is-landscape .two-column-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.page.is-landscape .two-column-right,
+.is-landscape .two-column-right {
+  flex: 0 0 400rpx;
+  width: 400rpx;
+}
+
+.page.is-wide .three-column-layout,
+.is-wide .three-column-layout {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24rpx;
+}
+
+@media (min-width: 1024px) {
+  .page {
+    padding-left: 64rpx;
+    padding-right: 64rpx;
+  }
+
+  .card,
+  .ui-card {
+    padding: 28rpx;
+  }
+}

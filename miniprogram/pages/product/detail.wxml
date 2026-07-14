@@ -1,0 +1,135 @@
+<view class="page product-detail-page fade-in page-safe-bottom {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <ui-skeleton wx:if="{{loading}}" count="{{2}}" showThumb="{{true}}"></ui-skeleton>
+
+  <ui-empty
+    wx:if="{{initialized && !loading && !product}}"
+    icon="!"
+    title="商品不可用"
+    description="商品不存在或已下架，请返回商品列表重新选择"
+    buttonText="返回选购"
+    bind:action="goShop">
+  </ui-empty>
+
+  <block wx:if="{{!loading && product}}">
+    <view class="detail-page-heading">
+      <view class="detail-heading-copy">
+        <view class="detail-page-eyebrow">商品详情</view>
+        <view class="detail-page-title">{{product.name}}</view>
+        <view class="detail-page-subtitle">{{product.specification || '无规格'}} · {{product.productionDate || '生产日期未设置'}}</view>
+      </view>
+      <button class="detail-favorite {{isFavorite ? 'active' : ''}}" bindtap="toggleFavorite" disabled="{{favoriteChanging}}">
+        {{isFavorite ? '♥' : '♡'}}
+      </button>
+    </view>
+
+    <view class="detail-layout">
+      <view class="detail-left-column">
+        <view class="detail-hero-shell card-press">
+          <image wx:if="{{product.imageUrl}}" class="hero" src="{{product.imageUrl}}" mode="aspectFill"></image>
+          <view wx:else class="hero placeholder">暂无图片</view>
+          <view class="hero-badge-row">
+            <view class="hero-badge">{{product.category || '精选商品'}}</view>
+            <view wx:if="{{product.isDefective}}" class="hero-badge hero-badge-warning">瑕疵</view>
+          </view>
+        </view>
+      </view>
+
+      <view class="detail-right-column">
+        <view class="card section product-card detail-info-card fade-up">
+          <view class="detail-card-head">
+            <view>
+              <view class="detail-eyebrow">选品信息</view>
+              <view class="price detail-price">¥{{product.priceText}}</view>
+            </view>
+            <view class="detail-price-note">单价</view>
+          </view>
+          <view class="muted spec">{{product.specification || '无规格'}}</view>
+          <view wx:if="{{product.tagItems && product.tagItems.length}}" class="product-tags">
+            <text wx:for="{{product.tagItems}}" wx:for-item="tag" wx:key="name" class="tag tag-product tag-{{tag.className}}">{{tag.name}}</text>
+          </view>
+          <view class="meta-grid">
+            <view class="meta-item">
+              <text>生产日期</text>
+              <text>{{product.productionDate || '未设置'}}</text>
+            </view>
+            <view class="meta-item">
+              <text>品类</text>
+              <text>{{product.category || '未设置'}}</text>
+            </view>
+            <view class="meta-item">
+              <text>品牌</text>
+              <text>{{product.brand || '未设置'}}</text>
+            </view>
+          </view>
+          <view wx:if="{{product.isDefective}}" class="defect-box">
+            <view class="defect-title">瑕疵说明</view>
+            <view class="defect-content">{{product.defectNotice}}</view>
+          </view>
+          <view class="desc">{{product.description || '暂无说明'}}</view>
+        </view>
+
+        <view class="card section detail-purchase-card fade-up">
+          <view class="purchase-head">
+            <view>
+              <view class="subtitle">数量</view>
+              <view class="muted purchase-desc">按当前商品单价计算预订单金额</view>
+            </view>
+            <view class="ui-stepper detail-qty-stepper">
+              <view class="ui-step" bindtap="changeQty" data-delta="-1">-</view>
+              <input class="ui-step-input detail-qty-input" type="number" value="{{quantity}}" bindinput="onQtyInput" bindblur="onQtyBlur"></input>
+              <view class="ui-step" bindtap="changeQty" data-delta="1">+</view>
+            </view>
+          </view>
+          <view class="row between total">
+            <view class="muted">金额</view>
+            <view class="price">¥{{totalText}}</view>
+          </view>
+        </view>
+
+        <view class="card section delivery-detail-card fade-up">
+          <view class="subtitle">配送方式</view>
+          <radio-group class="delivery-options" bindchange="onDeliveryTypeChange">
+            <label wx:for="{{deliveryTypeOptions}}" wx:key="value" class="delivery-option {{deliveryType === item.value ? 'selected' : ''}}">
+              <radio value="{{item.value}}" checked="{{deliveryType === item.value}}"></radio>
+              <text>{{item.label}}</text>
+            </label>
+          </radio-group>
+
+          <view wx:if="{{deliveryType === 'self_pickup'}}" class="delivery-panel">
+            <view class="kv"><text>自提地址</text><text>{{pickupInfo.pickupLocation || '暂未配置'}}</text></view>
+            <view class="kv"><text>自提时间</text><text>{{pickupInfo.pickupTimeNote || '请联系商家确认'}}</text></view>
+            <view class="kv"><text>联系人</text><text>{{pickupInfo.pickupContact || '暂未配置'}}</text></view>
+            <view class="kv"><text>联系电话</text><text>{{pickupInfo.pickupPhone || '暂未配置'}}</text></view>
+            <view wx:if="{{pickupInfo.pickupRemark}}" class="muted block">{{pickupInfo.pickupRemark}}</view>
+          </view>
+
+          <view wx:if="{{deliveryType === 'shipping'}}" class="delivery-panel address-select-panel">
+            <view wx:if="{{selectedAddress}}" class="selected-address" bindtap="chooseAddress">
+              <view class="row between">
+                <view class="receiver">{{selectedAddress.receiverName}} {{selectedAddress.receiverPhoneDisplay || '手机号未设置'}}</view>
+                <view class="muted">更换</view>
+              </view>
+              <view class="address-text">{{selectedAddressText}}</view>
+              <view wx:if="{{selectedAddress.addressTag}}" class="muted">{{selectedAddress.addressTag}}</view>
+            </view>
+            <view wx:else class="empty-address" bindtap="addAddress">
+              <view class="subtitle">请选择收货地址</view>
+              <view class="muted">发货订单需要收货地址</view>
+            </view>
+            <button class="btn btn-secondary action-full address-btn" bindtap="chooseAddress">{{selectedAddress ? '选择其他地址' : '新增收货地址'}}</button>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view class="detail-footer">
+      <button class="action-btn detail-add-cart-btn" bindtap="addToCart" disabled="{{addingCart}}">
+        <text class="plus">{{addingCart ? '…' : '+'}}</text>
+        <text>{{addingCart ? '加入中' : '加入购物车'}}</text>
+      </button>
+      <button class="btn btn-primary action-btn" bindtap="submitOrder" disabled="{{submitting}}">
+        {{submitting ? '提交中' : '立即预下单'}}
+      </button>
+    </view>
+  </block>
+</view>

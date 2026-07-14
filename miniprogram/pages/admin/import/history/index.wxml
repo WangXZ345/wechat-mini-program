@@ -1,0 +1,122 @@
+<view class="page import-history-page page-enter">
+  <view class="history-hero section">
+    <view>
+      <view class="hero-kicker">库存与报价导入</view>
+      <view class="hero-title">导入历史</view>
+      <view class="hero-desc">{{detail ? '查看本次导入的记录与明细。' : '回看每次导入的文件、处理方式和结果。'}}</view>
+    </view>
+    <button wx:if="{{detail}}" class="btn btn-secondary btn-sm hero-back" bindtap="backList">返回</button>
+  </view>
+
+  <view wx:if="{{!detail}}" class="history-list">
+    <view wx:for="{{records}}" wx:key="_id" class="card record card-press" bindtap="showDetail" data-id="{{item._id}}">
+      <view class="record-status-line"></view>
+      <view class="record-head">
+        <view class="record-title">{{item.inventoryFileName}}</view>
+        <view class="tag">{{item.status}}</view>
+      </view>
+      <view class="record-sub">报价表：{{item.priceFileName}}</view>
+      <view class="record-mode">
+        <view class="mode-pill">库存 {{item.stockMode === 'add' ? '增加库存' : '覆盖库存'}}</view>
+        <view class="mode-pill">价格 {{item.priceMode}}</view>
+      </view>
+      <view class="record-metrics">
+        <view class="metric-box">
+          <view class="metric-label">行数</view>
+          <view class="metric-value">{{item.mergedRows || 0}}</view>
+        </view>
+        <view class="metric-box">
+          <view class="metric-label">成功</view>
+          <view class="metric-value">{{item.successRows || 0}}</view>
+        </view>
+        <view class="metric-box">
+          <view class="metric-label">失败</view>
+          <view class="metric-value">{{item.failedRows || 0}}</view>
+        </view>
+        <view class="metric-box">
+          <view class="metric-label">跳过</view>
+          <view class="metric-value">{{item.skippedRows || 0}}</view>
+        </view>
+      </view>
+      <view wx:if="{{item.selfCheckStatus}}" class="self-check">自检：{{item.selfCheckStatus}}</view>
+    </view>
+    <view wx:if="{{!records.length}}" class="card empty empty-panel">
+      <view class="empty-title">暂无导入记录</view>
+      <view class="empty-desc">完成导入后，这里会显示库存表、报价表和每次导入结果。</view>
+    </view>
+  </view>
+
+  <view wx:else class="history-detail">
+    <view class="card detail-summary section">
+      <view class="record-head">
+        <view class="record-title">{{detail.inventoryFileName}}</view>
+        <view class="tag">{{detail.status}}</view>
+      </view>
+      <view class="record-sub">报价表：{{detail.priceFileName}}</view>
+      <view class="record-metrics">
+        <view class="metric-box">
+          <view class="metric-label">行数</view>
+          <view class="metric-value">{{detail.mergedRows || 0}}</view>
+        </view>
+        <view class="metric-box">
+          <view class="metric-label">成功</view>
+          <view class="metric-value">{{detail.successRows || 0}}</view>
+        </view>
+        <view class="metric-box">
+          <view class="metric-label">失败</view>
+          <view class="metric-value">{{detail.failedRows || 0}}</view>
+        </view>
+        <view class="metric-box">
+          <view class="metric-label">跳过</view>
+          <view class="metric-value">{{detail.skippedRows || 0}}</view>
+        </view>
+      </view>
+      <view wx:if="{{detail.selfCheckStatus}}" class="self-check">自检：{{detail.selfCheckStatus}}</view>
+    </view>
+
+    <view class="queue-title section">
+      <view>
+        <view class="subtitle">商品明细</view>
+        <view class="muted">按导入记录保留原文、规格、库存和价格。</view>
+      </view>
+      <view class="tag">共 {{items.length || 0}} 行</view>
+    </view>
+
+    <view wx:for="{{items}}" wx:key="_id" class="card item">
+      <view class="record-head">
+        <view class="item-title">{{item.finalName ? item.finalName : item.baseName}}</view>
+        <view class="tag">{{item.action}}</view>
+      </view>
+      <view class="raw-panel">
+        <view class="raw-line">
+          <text class="raw-label">库存原文</text>
+          <text class="raw-text">{{item.rawInventoryName ? item.rawInventoryName : '-'}}</text>
+        </view>
+        <view class="raw-line">
+          <text class="raw-label">报价原文</text>
+          <text class="raw-text">{{item.rawPriceName ? item.rawPriceName : '-'}}</text>
+        </view>
+      </view>
+      <view class="item-grid">
+        <view class="item-field">
+          <view class="field-label">规格</view>
+          <view class="field-value">{{item.specification ? item.specification : '-'}}</view>
+        </view>
+        <view class="item-field">
+          <view class="field-label">生产日期</view>
+          <view class="field-value">{{item.productionDate ? item.productionDate : '-'}}</view>
+        </view>
+        <view class="item-field">
+          <view class="field-label">库存</view>
+          <view class="field-value">{{item.stock}}</view>
+        </view>
+        <view class="item-field">
+          <view class="field-label">价格</view>
+          <view class="field-value">{{item.price}}</view>
+        </view>
+      </view>
+      <view wx:if="{{item.warningMessage}}" class="notice notice-warning warning">{{item.warningMessage}}</view>
+      <view wx:if="{{item.errorMessage}}" class="notice notice-danger error">{{item.errorMessage}}</view>
+    </view>
+  </view>
+</view>

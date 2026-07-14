@@ -1,0 +1,82 @@
+.legal-page {
+  padding: 34rpx 28rpx 72rpx;
+  background: #F8F4ED;
+}
+
+.legal-title {
+  position: relative;
+  box-sizing: border-box;
+  margin: 4rpx 0 22rpx;
+  padding: 34rpx 30rpx 30rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.86);
+  border-radius: 34rpx;
+  background: linear-gradient(135deg, #FFFDF9 0%, #F4E7D3 100%);
+  color: #1F1A15;
+  font-size: 54rpx;
+  font-weight: 900;
+  line-height: 1.12;
+  box-shadow: 0 14rpx 34rpx rgba(86, 62, 34, 0.08);
+}
+
+.legal-title::after {
+  content: "";
+  display: block;
+  width: 76rpx;
+  height: 6rpx;
+  margin-top: 22rpx;
+  border-radius: 999rpx;
+  background: #9A856B;
+}
+
+.legal-content {
+  padding: 32rpx 30rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.9);
+  border-radius: 30rpx;
+  background: linear-gradient(180deg, #FFFDF9 0%, #FCF7EF 100%);
+  box-shadow: 0 10rpx 24rpx rgba(86, 62, 34, 0.07);
+}
+
+.paragraph {
+  margin-bottom: 20rpx;
+  color: #5F554B;
+  font-size: 27rpx;
+  line-height: 1.78;
+  word-break: break-word;
+}
+
+.legal-heading {
+  margin-top: 28rpx;
+  color: #493D32;
+  font-weight: 600;
+}
+
+.legal-subheading {
+  color: #493D32;
+  font-weight: 500;
+}
+
+.legal-subheading-spaced {
+  margin-top: 20rpx;
+}
+
+.legal-footnote {
+  margin-top: 28rpx;
+  color: #8B7E70;
+  font-size: 24rpx;
+}
+
+.paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.legal-page.is-wide .legal-title,
+.legal-page.is-wide .legal-content {
+  max-width: 960rpx;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.legal-page.is-landscape {
+  padding-left: 48rpx;
+  padding-right: 48rpx;
+}

@@ -1,0 +1,84 @@
+<view class="login-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="brand login-hero">
+    <view class="brand-eyebrow">美妆批发</view>
+    <view class="brand-title">订货系统</view>
+    <view class="brand-subtitle">请登录后继续使用</view>
+  </view>
+
+  <view class="login-card fade-up">
+    <view class="login-card-head">
+      <view>
+        <view class="section-kicker">账号登录</view>
+        <view class="login-card-title">选择登录方式</view>
+      </view>
+    </view>
+
+    <button
+      class="wechat-button pressable"
+      bindtap="loginWechat"
+      loading="{{wechatLoading}}"
+      disabled="{{wechatLoading || passwordLoading}}"
+    >微信快捷登录</button>
+
+    <view class="divider">
+      <view class="line"></view>
+      <text>或使用手机号登录</text>
+      <view class="line"></view>
+    </view>
+
+    <view class="form">
+      <input
+        class="input"
+        type="number"
+        maxlength="11"
+        placeholder="请输入手机号"
+        value="{{phone}}"
+        bindinput="onPhoneInput"
+      ></input>
+      <input
+        class="input"
+        password="{{true}}"
+        maxlength="32"
+        placeholder="请输入密码"
+        value="{{password}}"
+        bindinput="onPasswordInput"
+        confirm-type="go"
+        bindconfirm="loginPassword"
+      ></input>
+      <button
+        class="primary-button pressable"
+        bindtap="loginPassword"
+        loading="{{passwordLoading}}"
+        disabled="{{wechatLoading || passwordLoading}}"
+      >登录</button>
+    </view>
+
+    <view class="helper-row">
+      <button class="helper-link" bindtap="goPasswordSettings">设置 / 修改密码</button>
+      <button class="helper-link" bindtap="showResetForm">忘记密码</button>
+    </view>
+  </view>
+
+  <view wx:if="{{resetVisible}}" class="reset-panel modal-enter">
+    <view class="reset-title">忘记密码</view>
+    <view class="reset-desc">提交后请联系客户处理重置申请。</view>
+    <input
+      class="input"
+      type="number"
+      maxlength="11"
+      placeholder="请输入手机号"
+      value="{{resetPhone}}"
+      bindinput="onResetPhoneInput"
+    ></input>
+    <view class="reset-actions">
+      <button class="secondary-button pressable" bindtap="hideResetForm" disabled="{{resetLoading}}">取消</button>
+      <button class="primary-button small pressable" bindtap="submitReset" loading="{{resetLoading}}" disabled="{{resetLoading}}">提交申请</button>
+    </view>
+  </view>
+
+  <view class="legal-links">
+    <button class="legal-link" bindtap="goLegal" data-page="privacy">隐私政策</button>
+    <text class="dot">·</text>
+    <button class="legal-link" bindtap="goLegal" data-page="user-agreement">用户协议</button>
+  </view>
+</view>

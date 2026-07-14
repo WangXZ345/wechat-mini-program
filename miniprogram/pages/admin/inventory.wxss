@@ -1,0 +1,231 @@
+.inventory-page {
+  padding-bottom: 56rpx;
+}
+
+.inventory-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24rpx;
+  min-height: 196rpx;
+  padding: 38rpx 28rpx 30rpx;
+  margin: -24rpx -24rpx 28rpx;
+  border-radius: 0 0 var(--radius-xxl) var(--radius-xxl);
+  background:
+    linear-gradient(135deg, rgba(255, 253, 249, 0.56), rgba(255, 253, 249, 0.08)),
+    linear-gradient(135deg, #D4BE9E 0%, #B99C74 48%, #89765F 100%);
+  box-shadow: 0 16rpx 34rpx rgba(142, 116, 86, 0.16);
+  box-sizing: border-box;
+}
+
+.hero-eyebrow {
+  color: rgba(31, 26, 21, 0.62);
+  font-size: 22rpx;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.hero-title {
+  margin-top: 8rpx;
+  color: var(--color-text-main);
+  font-size: 58rpx;
+  font-weight: 900;
+  line-height: 1.08;
+}
+
+.hero-subtitle {
+  margin-top: 12rpx;
+  color: rgba(31, 26, 21, 0.68);
+  font-size: 26rpx;
+  line-height: 1.45;
+}
+
+.mini {
+  width: 132rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  font-size: 24rpx;
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12rpx;
+  flex-shrink: 0;
+}
+
+.clear-btn {
+  width: 180rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  font-size: 24rpx;
+  margin: 0;
+}
+
+.inventory-workspace {
+  display: grid;
+  gap: 24rpx;
+}
+
+.inventory-card {
+  overflow: hidden;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.card-desc {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  line-height: 1.45;
+}
+
+.count-pill {
+  flex-shrink: 0;
+  min-height: 48rpx;
+  line-height: 48rpx;
+  padding: 0 18rpx;
+  border-radius: var(--radius-pill);
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+  font-size: 23rpx;
+  font-weight: 800;
+}
+
+.inventory-list,
+.log-list {
+  display: grid;
+  gap: 14rpx;
+  margin-top: 22rpx;
+}
+
+.inventory-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18rpx;
+  padding: 18rpx;
+  border: 1rpx solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, #FFFDF9 0%, #FFFBF5 100%);
+  box-sizing: border-box;
+}
+
+.product-copy {
+  min-width: 0;
+}
+
+.product-name {
+  color: var(--color-text-main);
+  font-size: 28rpx;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.product-id {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.stock-pill {
+  min-width: 88rpx;
+  min-height: 56rpx;
+  line-height: 56rpx;
+  padding: 0 18rpx;
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary-bg);
+  color: var(--color-money);
+  font-size: 30rpx;
+  font-weight: 900;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.log-row {
+  padding: 18rpx;
+  border: 1rpx solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  background: var(--color-search-bg);
+  box-sizing: border-box;
+}
+
+.log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.log-reason {
+  min-width: 0;
+  color: var(--color-text-main);
+  font-size: 27rpx;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.change-pill {
+  flex-shrink: 0;
+  min-height: 48rpx;
+  line-height: 48rpx;
+  padding: 0 16rpx;
+  border-radius: var(--radius-pill);
+  background: #FFF1E4;
+  color: var(--color-money);
+  font-size: 25rpx;
+  font-weight: 900;
+}
+
+.log-meta {
+  margin-top: 8rpx;
+  color: var(--color-text-muted);
+  font-size: 23rpx;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.compact-empty {
+  padding: 56rpx 0 24rpx;
+}
+
+.admin-responsive-page.is-landscape {
+  display: block;
+}
+
+.admin-responsive-page.is-landscape .inventory-hero,
+.admin-responsive-page.is-wide .inventory-hero {
+  border-radius: var(--radius-xxl);
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.admin-responsive-page.is-landscape .inventory-workspace,
+.admin-responsive-page.is-wide .inventory-workspace {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  align-items: start;
+}
+
+@media (max-width: 360px) {
+  .inventory-hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .header-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .hero-title {
+    font-size: 52rpx;
+  }
+}

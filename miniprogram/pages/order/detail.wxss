@@ -1,0 +1,258 @@
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding: 14rpx 0;
+  border-bottom: 1rpx solid #EFE6DA;
+  color: #82776B;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.kv text:first-child {
+  flex: 0 0 auto;
+}
+
+.kv text:last-child {
+  color: #1F1A15;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.order-detail-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding: 18rpx 2rpx 16rpx;
+  margin: 0 0 18rpx;
+}
+
+.order-detail-hero .muted {
+  margin-top: 8rpx;
+  color: rgba(31, 26, 21, 0.60);
+  font-size: 24rpx;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.order-detail-hero .page-title {
+  color: #1F1A15;
+  font-size: 58rpx;
+  font-weight: 900;
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.order-detail-hero > .tag {
+  flex-shrink: 0;
+  min-height: 48rpx;
+  margin-top: 10rpx;
+  padding: 6rpx 18rpx;
+  font-size: 23rpx;
+  font-weight: 800;
+}
+
+.eyebrow {
+  margin-bottom: 6rpx;
+  color: #8A6A43;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.order-detail-grid {
+  display: block;
+}
+
+.screenshot {
+  width: 220rpx;
+  height: 220rpx;
+  border-radius: 16rpx;
+  margin-top: 20rpx;
+  background: #E6D8C7;
+}
+
+.status-row {
+  gap: 10rpx;
+}
+
+.paid-order {
+  border-color: #D9E5CB;
+  background: #FBFCF7;
+}
+
+.paid-badge,
+.paid-banner {
+  background: #6F8A5F;
+  color: #FFFFFF;
+  font-weight: 700;
+}
+
+.paid-badge {
+  padding: 6rpx 14rpx;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+}
+
+.paid-banner {
+  padding: 16rpx 22rpx;
+  margin-bottom: 16rpx;
+  border-radius: 24rpx;
+  text-align: center;
+}
+
+.item-line {
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #EFE6DA;
+}
+
+.item-line:last-child {
+  border-bottom: 0;
+}
+
+.item-name {
+  max-width: 440rpx;
+  font-weight: 600;
+  color: #1F1A15;
+}
+
+.status-desc {
+  margin-top: 18rpx;
+  color: #82776B;
+  font-size: 25rpx;
+  text-align: center;
+}
+
+.next-action-card {
+  border-radius: 30rpx;
+  border-color: rgba(230, 216, 199, 0.82);
+  background:
+    radial-gradient(circle at 92% 0, rgba(255, 253, 249, 0.72), rgba(255, 253, 249, 0) 260rpx),
+    linear-gradient(135deg, #FFFDF9 0%, #FCF7EF 100%);
+  box-shadow: 0 12rpx 30rpx rgba(142, 116, 86, 0.09);
+}
+
+.next-action-head {
+  align-items: flex-start;
+  gap: 16rpx;
+}
+
+.next-action-desc {
+  margin-top: 8rpx;
+  line-height: 1.55;
+}
+
+.next-action-buttons {
+  display: flex;
+  gap: 12rpx;
+  flex-wrap: wrap;
+  margin-top: 16rpx;
+}
+
+.next-action-btn {
+  flex: 1 1 220rpx;
+  margin: 0;
+}
+
+.detail-title {
+  max-width: 470rpx;
+  color: var(--color-text-main);
+  font-size: 38rpx;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.order-no {
+  margin-top: 12rpx;
+}
+
+.action-full {
+  width: 100%;
+  margin-top: 16rpx;
+}
+
+.merge-card {
+  border-color: #E6D8C7;
+  background: #FFFDF9;
+}
+
+.merge-desc {
+  margin-top: 12rpx;
+}
+
+.after-sale-notice {
+  margin-top: 14rpx;
+  padding: 16rpx 20rpx;
+  border-radius: 20rpx;
+}
+
+.btn-cancel {
+  background: #9A2D2D;
+  color: #FFFFFF;
+  border-color: #9A2D2D;
+}
+
+.btn-cancel:disabled {
+  background: #D4C1B9;
+  border-color: #D4C1B9;
+  color: #FFFFFF;
+  opacity: 0.6;
+}
+
+.detail-side-card,
+.detail-items-card {
+  border-radius: 28rpx;
+  border-color: rgba(230, 216, 199, 0.82);
+  background: linear-gradient(180deg, #FFFDF9 0%, #FCF7EF 100%);
+  box-shadow: 0 8rpx 22rpx rgba(142, 116, 86, 0.07);
+}
+
+.detail-side-card .subtitle,
+.detail-items-card .subtitle {
+  font-size: 31rpx;
+  font-weight: 900;
+}
+
+.order-detail-page.is-landscape .order-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 430rpx;
+  gap: 24rpx;
+  align-items: start;
+}
+
+.order-detail-page.is-landscape .detail-full {
+  grid-column: 1 / -1;
+}
+
+.order-detail-page.is-landscape .detail-items-card {
+  grid-column: 1;
+  grid-row: 2 / span 99;
+  margin-bottom: 0;
+}
+
+.order-detail-page.is-landscape .detail-side-card {
+  grid-column: 2;
+  margin-bottom: 0;
+}
+
+.order-detail-page.is-landscape .kv {
+  gap: 16rpx;
+}
+
+.order-detail-page.is-landscape .kv text:last-child {
+  max-width: 260rpx;
+}
+
+.order-detail-page.is-landscape .item-name,
+.order-detail-page.is-landscape .detail-title {
+  max-width: none;
+}
+
+.order-detail-page.is-landscape .screenshot {
+  width: 180rpx;
+  height: 180rpx;
+}
+
+.order-detail-page.is-wide .order-detail-grid {
+  grid-template-columns: minmax(0, 1fr) 480rpx;
+}

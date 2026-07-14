@@ -1,0 +1,156 @@
+<view class="page admin-responsive-page shipment-detail-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <ui-skeleton wx:if="{{loading && !group}}" count="{{3}}" showThumb="{{false}}"></ui-skeleton>
+  <ui-empty wx:elif="{{initialized && !group}}" icon="!" title="发货单不存在" description="请返回合并发货单列表重新打开"></ui-empty>
+
+  <block wx:if="{{group}}">
+    <view class="detail-hero">
+      <view class="detail-hero-copy">
+        <view class="eyebrow">SHIPMENT DETAIL</view>
+        <view class="detail-title">{{group.shipmentNo}}</view>
+        <view class="detail-subtitle">创建：{{group.createdAtText}}</view>
+      </view>
+      <view class="ship-tag status-{{group.shippingStatus}}">{{group.statusText}}</view>
+      <view class="detail-hero-panel">
+        <view class="hero-metric">
+          <view class="hero-value">{{group.orderCount}}</view>
+          <view class="hero-label">订单</view>
+        </view>
+        <view class="hero-metric">
+          <view class="hero-value">{{group.totalItemCount}}</view>
+          <view class="hero-label">商品</view>
+        </view>
+        <view class="hero-metric amount-metric">
+          <view class="hero-value">¥{{group.totalOrderAmountText}}</view>
+          <view class="hero-label">金额</view>
+        </view>
+        <view class="hero-filter-pill">{{group.addressConsistent ? '地址一致' : '地址不一致'}}</view>
+      </view>
+    </view>
+
+    <view class="detail-grid">
+      <view class="card detail-panel customer-panel">
+        <view class="panel-head">
+          <view>
+            <view class="section-kicker">CUSTOMER</view>
+            <view class="panel-title">客户与地址</view>
+          </view>
+        </view>
+        <view class="info-panel">
+          <view class="info-label">客户</view>
+          <view class="info-main">{{group.customerName}} {{group.customerPhoneMasked}}</view>
+        </view>
+        <view class="info-panel">
+          <view class="info-label">收货人</view>
+          <view class="info-main">{{group.shippingAddress.receiverName}} {{group.shippingAddress.receiverPhone || group.shippingAddress.receiverPhoneMasked}}</view>
+          <view class="info-sub muted address">{{group.shippingAddress.fullAddress || group.shippingAddress.fullAddressMasked || group.shippingAddress.detailAddress || group.shippingAddress.detailAddressMasked}}</view>
+        </view>
+      </view>
+
+      <view class="card detail-panel logistics-panel">
+        <view class="panel-head">
+          <view>
+            <view class="section-kicker">LOGISTICS</view>
+            <view class="panel-title">物流信息</view>
+          </view>
+          <view wx:if="{{group.shippedAtText}}" class="filter-summary-pill">发货：{{group.shippedAtText}}</view>
+        </view>
+        <view class="logistics-form-grid">
+          <view class="field">
+            <view class="label">快递公司</view>
+            <input class="input" value="{{shippingCompanyDraft}}" data-field="shippingCompanyDraft" bindinput="onInput" placeholder="请输入快递公司"></input>
+          </view>
+          <view class="field">
+            <view class="label">快递单号</view>
+            <input class="input" value="{{trackingNoDraft}}" data-field="trackingNoDraft" bindinput="onInput" placeholder="请输入快递单号"></input>
+          </view>
+          <view class="field form-wide">
+            <view class="label">发货备注</view>
+            <textarea class="input area" value="{{adminRemarkDraft}}" data-field="adminRemarkDraft" bindinput="onInput" placeholder="可选"></textarea>
+          </view>
+        </view>
+        <view class="row actions">
+          <button class="btn btn-secondary small" loading="{{saving}}" bindtap="saveInfo">保存物流</button>
+          <button class="btn btn-primary small" bindtap="confirmShipment" wx:if="{{group.shippingStatus === 'created' || group.shippingStatus === 'pending_shipment'}}">确认发货</button>
+          <button class="btn btn-secondary small" bindtap="copyTrackingNo">复制单号</button>
+        </view>
+      </view>
+    </view>
+
+    <view class="card detail-panel order-panel">
+      <view class="panel-head">
+        <view>
+          <view class="section-kicker">ORDERS</view>
+          <view class="panel-title">关联订单</view>
+        </view>
+        <view class="filter-summary-pill">{{orders.length}} 单</view>
+      </view>
+      <view class="order-list">
+        <view wx:for="{{orders}}" wx:key="orderId" class="order-row">
+          <view class="row between">
+            <view class="order-no">{{item.orderNo}}</view>
+            <view class="order-amount">¥{{item.totalAmountText}}</view>
+          </view>
+          <view class="muted order-meta">{{item.status}} · {{item.paymentStatus}} · {{item.createdAtText}}</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="card detail-panel item-panel">
+      <view class="panel-head">
+        <view>
+          <view class="section-kicker">ITEMS</view>
+          <view class="panel-title">商品汇总</view>
+        </view>
+        <view class="filter-summary-pill">{{items.length}} 项</view>
+      </view>
+      <view class="item-list">
+        <view wx:for="{{items}}" wx:key="productId" class="item-row">
+          <view class="row between item-main-row">
+            <view class="item-name">{{item.productName}}</view>
+            <view class="count">x {{item.totalQuantity}}</view>
+          </view>
+          <view class="muted item-meta">{{item.specification || '无规格'}} · {{item.productionDate || '无生产日期'}}</view>
+          <view class="muted item-meta">涉及订单：{{item.orderNosText}}</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="card detail-panel action-panel">
+      <view class="panel-head">
+        <view>
+          <view class="section-kicker">ACTIONS</view>
+          <view class="panel-title">操作</view>
+        </view>
+      </view>
+      <view class="row actions">
+        <button class="btn btn-secondary small" bindtap="exportPickingList">导出拣货单</button>
+        <button class="btn btn-primary small" bindtap="completeShipment" wx:if="{{group.shippingStatus === 'shipped'}}">标记完成</button>
+        <button class="btn btn-danger small" bindtap="cancelShipment" wx:if="{{group.shippingStatus === 'created' || group.shippingStatus === 'pending_shipment'}}">取消发货单</button>
+      </view>
+      <view wx:if="{{exportResult}}" class="export-box">
+        <view class="muted">{{exportResult.fileName}} · {{exportResult.totalRows}} 行</view>
+        <view class="row actions">
+          <button class="btn btn-secondary small" bindtap="copyExportLink">复制链接</button>
+          <button class="btn btn-secondary small" bindtap="openExportFile">打开文件</button>
+        </view>
+      </view>
+    </view>
+
+    <view class="card detail-panel log-panel">
+      <view class="panel-head">
+        <view>
+          <view class="section-kicker">LOGS</view>
+          <view class="panel-title">操作日志</view>
+        </view>
+      </view>
+      <view wx:if="{{!logs.length}}" class="muted small-empty">暂无日志</view>
+      <view wx:for="{{logs}}" wx:key="_id" class="log-row">
+        <view class="row between">
+          <view class="log-action">{{item.action}}</view>
+          <view class="muted log-time">{{item.createdAtText}}</view>
+        </view>
+        <view wx:if="{{item.remark}}" class="muted log-remark">备注：{{item.remark}}</view>
+      </view>
+    </view>
+  </block>
+</view>

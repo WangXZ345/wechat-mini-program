@@ -1,0 +1,127 @@
+# design-model.yaml - extracted from the current project on 2026-07-11.
+# This records the built system. It does not authorize a redesign or business-flow change.
+
+meta:
+  name: beauty-wholesale-ordering
+  industry: beauty wholesale operations
+  register: product
+  persona: "restrained warm utility (inferred)"
+  design_read: "beauty wholesale operations | calm and work-focused | register=product | SPECTACLE=1 | hero-engine=none"
+  source_files:
+    - miniprogram/styles/theme.wxss
+    - miniprogram/styles/layout.wxss
+    - miniprogram/styles/components.wxss
+    - miniprogram/styles/motion.wxss
+    - admin-web/src/styles/tokens.css
+    - admin-web/src/styles/base.css
+    - admin-web/src/styles/element.css
+
+finesse:
+  source: "https://github.com/mouse-lin/finesse-skill"
+  version: "0.9.0"
+  commit: "9c50d14837feab1956a287af517708a6edfd0ca4"
+  install_scope: user
+  activation: "explicit UI design, visual audit, or redesign requests only"
+  update_policy: "manual review; do not automatically follow main"
+
+dials:
+  soul: 3
+  spectacle: 1
+  density: 8
+
+color:
+  bg: "#F8F4ED"
+  surface: "#FFFDF9"
+  surface_warm: "#FCF7EF"
+  ink: "#1F1A15"
+  muted: "#82776B"
+  dim: "#A79B8B"
+  accent: "#B99C74"
+  accent_active: "#A8793A"
+  border: "#E6D8C7"
+  money: "#9A2D2D"
+  success: "#5E7C58"
+  warning: "#A9682E"
+  danger: "#A94442"
+  info: "#456C81"
+  strategy: restrained
+
+type:
+  display: "system sans-serif / Inter"
+  display_weight: 700
+  body: "system sans-serif / Inter"
+  body_weight: 400
+  mono: "none; use tabular figures for operational numbers"
+  scale_ratio: 1.27
+  display_tracking: "0"
+  display_leading: 1.25
+
+substrate:
+  grain_opacity: 0
+  vignette: false
+  radius_scale: "mini program 8-28rpx for controls/cards; web admin 4-8px"
+  motion_easing: "cubic-bezier(0.22, 1, 0.36, 1) in mini program; 160ms ease in web admin"
+  shadows: "warm low-opacity shadows; restrained in dense admin surfaces"
+
+hero_engine:
+  type: none
+  detail: "Product UI uses data hierarchy, component states, and role-aware navigation instead of a hero engine."
+  reduced_motion: "Not present in the extracted code; add a reduced-motion fallback when future UI work introduces or changes animation."
+
+structure:
+  shell: "customer mini program plus separate role-aware web admin"
+  miniprogram_nav: "custom four-tab bar: products, cart, orders, profile"
+  admin_web_nav: "dark sidebar, sticky topbar, dense main workspace"
+  layout_families:
+    - compact page header with actions
+    - filter or toolbar row
+    - operational table or list
+    - metric summary
+    - form or detail panel
+    - explicit loading, empty, error, forbidden, and disabled states
+
+surface_overrides:
+  miniprogram:
+    type_family: "-apple-system, BlinkMacSystemFont, Helvetica Neue, Arial, sans-serif"
+    base_font_size: "28rpx"
+    page_spacing: "24rpx"
+    card_radius: "28rpx"
+    control_height: "76rpx"
+    motion_duration: "120-280ms"
+    interaction: "touch-first; retain safe-area and custom-tab-bar spacing"
+  admin_web:
+    type_family: "Inter, SF Pro Text, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+    base_font_size: "14px"
+    min_viewport_width: "900px"
+    card_radius: "8px"
+    sidebar_width: "240px"
+    topbar_height: "64px"
+    interaction: "keyboard and pointer; use Element Plus and lucide-vue-next patterns already present"
+
+component_system:
+  controls: "buttons, icon buttons, chips, tags, steppers, inputs, pickers, uploads, dialogs"
+  data_display: "tables, ranked lists, metric cards, status badges, charts, progress, audit rows"
+  states: "loading, skeleton, empty, error, forbidden, disabled, syncing, stale, and retry"
+  radius_policy: "Use the existing scale; do not enlarge admin cards or nest cards for decoration."
+  status_policy: "Semantic status colors are functional and may coexist with the bronze accent."
+
+constraints:
+  - "Preserve existing order, inventory, payment, refund, shipping, account, address, and permission flows."
+  - "Do not expose sensitive or unmasked fields through visual redesigns."
+  - "Keep letter spacing at zero and avoid viewport-driven font-size scaling."
+  - "Product pages stay dense, quiet, and work-focused; no marketing hero or decorative 3D scene."
+  - "A UI change that affects data visibility or business state must be checked at the backend shaping and permission layers."
+
+observed_drift:
+  - id: hardcoded-color-duplication
+    status: recorded-not-fixed
+    evidence: "Many page-level WXSS and Vue styles repeat palette values instead of using shared tokens."
+  - id: pure-white-usage
+    status: recorded-not-fixed
+    evidence: "The current code uses #FFFFFF/#fff in controls and surfaces."
+  - id: reduced-motion-missing
+    status: recorded-not-fixed
+    evidence: "No prefers-reduced-motion rule was found in miniprogram WXSS or admin-web source styles."
+  - id: multi-radius-surface
+    status: intentional
+    evidence: "The mini program uses a larger touch-oriented radius scale; the web admin stays within 4-8px."

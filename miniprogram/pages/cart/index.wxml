@@ -1,0 +1,111 @@
+<view class="page fade-in page-with-tabbar cart-tab-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="cart-header">
+    <view class="cart-title-line">
+      <view class="page-title">购物车</view>
+      <view wx:if="{{items.length}}" class="cart-inline-count">({{items.length}})</view>
+    </view>
+    <button wx:if="{{items.length}}" class="cart-clear-action" bindtap="clearCart">清空</button>
+  </view>
+
+  <ui-skeleton wx:if="{{loading && !items.length}}" count="{{3}}" showThumb="{{true}}"></ui-skeleton>
+
+  <view wx:if="{{loadError && !loading}}" class="notice notice-warning cart-load-error">
+    <text>{{loadError}}</text>
+    <button class="btn btn-secondary retry-btn" bindtap="retryLoad">重试</button>
+  </view>
+
+  <ui-empty
+    wx:if="{{initialized && !loading && !items.length && !loadError}}"
+    icon="□"
+    title="购物车为空"
+    description="挑选商品后可在这里统一提交预订单"
+    buttonText="去选购"
+    bind:action="goShop">
+  </ui-empty>
+
+  <view wx:if="{{items.length}}" class="cart-section-heading">
+    <view class="section-title">商品清单</view>
+    <view class="cart-selected-note">已选 {{selectedCount}} 件</view>
+  </view>
+
+  <view wx:for="{{items}}" wx:key="_id" class="card cart-item cart-product-card fade-up {{item.unavailable ? 'disabled' : ''}}">
+    <view class="select" bindtap="toggleItem" data-id="{{item._id}}">
+      <view class="checkbox {{item.selected && !item.unavailable ? 'checked' : ''}}"></view>
+    </view>
+    <image wx:if="{{item.productImage}}" class="product-image" src="{{item.productImage}}" mode="aspectFill" lazy-load="true"></image>
+    <view wx:else class="product-image placeholder">暂无图片</view>
+    <view class="item-body">
+      <view class="row between">
+        <view class="subtitle name">{{item.productName}}</view>
+        <view class="delete" bindtap="removeItem" data-id="{{item._id}}">删除</view>
+      </view>
+      <view class="item-meta">
+        <view class="item-meta-line">{{item.specification || '无规格'}}</view>
+        <view class="item-meta-line">生产日期：{{item.productionDate || '未设置'}}</view>
+      </view>
+      <view wx:if="{{item.unavailable}}" class="notice notice-danger item-notice">商品不可用，不能提交</view>
+      <view wx:elif="{{item.priceChanged}}" class="notice notice-warning item-notice">价格已更新</view>
+      <view class="row between controls">
+        <view class="price">￥{{item.unitPriceText}}</view>
+        <view class="stepper">
+          <view class="step" bindtap="changeQty" data-id="{{item._id}}" data-delta="-1">-</view>
+          <input class="qty" type="number" value="{{item.quantity}}" data-id="{{item._id}}" bindinput="onQtyInput" bindblur="onQtyBlur"></input>
+          <view class="step" bindtap="changeQty" data-id="{{item._id}}" data-delta="1">+</view>
+        </view>
+      </view>
+      <view class="row between subtotal">
+        <text class="muted">小计</text>
+        <text class="price">￥{{item.subtotalText}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{items.length}}" class="card delivery-card checkout-method-card fade-up">
+    <view class="delivery-head">
+      <view class="subtitle">配送方式</view>
+      <view class="muted delivery-desc">提交前可调整</view>
+    </view>
+    <radio-group class="delivery-options" bindchange="onDeliveryTypeChange">
+      <label wx:for="{{deliveryTypeOptions}}" wx:key="value" class="delivery-option {{deliveryType === item.value ? 'selected' : ''}}">
+        <radio value="{{item.value}}" checked="{{deliveryType === item.value}}" color="#A8793A"></radio>
+        <text>{{item.label}}</text>
+      </label>
+    </radio-group>
+
+    <view wx:if="{{deliveryType === 'self_pickup'}}" class="delivery-panel">
+      <view class="kv"><text>自提地址</text><text>{{pickupInfo.pickupLocation || '暂未配置'}}</text></view>
+      <view class="kv"><text>自提时间</text><text>{{pickupInfo.pickupTimeNote || '请联系商家确认'}}</text></view>
+      <view class="kv"><text>联系人</text><text>{{pickupInfo.pickupContact || '暂未配置'}}</text></view>
+      <view class="kv kv-last"><text>联系电话</text><text>{{pickupInfo.pickupPhone || '暂未配置'}}</text></view>
+      <view wx:if="{{pickupInfo.pickupRemark}}" class="muted block">{{pickupInfo.pickupRemark}}</view>
+    </view>
+
+    <view wx:if="{{deliveryType === 'shipping'}}" class="delivery-panel address-select-panel">
+      <view wx:if="{{selectedAddress}}" class="selected-address" bindtap="chooseAddress">
+        <view class="row between">
+          <view class="receiver">{{selectedAddress.receiverName}} {{selectedAddress.receiverPhoneDisplay || '手机号未设置'}}</view>
+          <view class="muted">更换</view>
+        </view>
+        <view class="address-text">{{selectedAddressText}}</view>
+        <view wx:if="{{selectedAddress.addressTag}}" class="muted">{{selectedAddress.addressTag}}</view>
+      </view>
+      <view wx:else class="empty-address" bindtap="addAddress">
+        <view class="subtitle">请选择收货地址</view>
+        <view class="muted">发货订单需要收货地址</view>
+      </view>
+      <button class="btn btn-secondary action-full address-btn" bindtap="chooseAddress">{{selectedAddress ? '选择其他地址' : '新增收货地址'}}</button>
+    </view>
+  </view>
+
+  <view wx:if="{{items.length}}" class="footer cart-submit-float bottom-bar-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+    <view class="row left" bindtap="toggleAll">
+      <view class="checkbox {{allSelected ? 'checked' : ''}}"></view>
+      <text>全选</text>
+    </view>
+    <view class="summary">
+      <view class="muted">已选 {{selectedCount}} 件</view>
+      <view class="price total-price">￥{{totalText}}</view>
+    </view>
+    <button class="btn btn-dark submit" bindtap="submitCartOrder" disabled="{{submitting}}">{{submitting ? '提交中' : '提交预订单'}}</button>
+  </view>
+</view>

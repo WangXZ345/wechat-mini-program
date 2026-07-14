@@ -1,0 +1,85 @@
+<view class="page page-enter recommend-list-page">
+  <ui-empty
+    wx:if="{{invalid}}"
+    icon="!"
+    title="推荐分类不存在"
+    description="请返回首页重新选择推荐区"
+    buttonText="返回首页"
+    bind:action="goHome">
+  </ui-empty>
+
+  <block wx:else>
+    <view class="section recommend-header">
+      <view class="header-copy">
+        <view class="section-kicker">推荐</view>
+        <view class="page-title">{{sectionTitle}}</view>
+        <view class="page-desc">仅展示已上架且价格有效的商品</view>
+      </view>
+      <view class="header-stat-pill">
+        <view class="header-stat-value">{{total}}</view>
+        <view class="header-stat-label">可选商品</view>
+      </view>
+    </view>
+
+    <view class="section search-card">
+      <view class="search-shell">
+        <text class="search-icon">⌕</text>
+        <input class="search-input" placeholder="搜索商品名称 / 规格 / 生产日期" value="{{keyword}}" bindinput="onSearchInput" confirm-type="search" bindconfirm="searchNow"></input>
+        <button wx:if="{{keyword}}" class="clear-inline" bindtap="clearSearch">×</button>
+        <button class="search-inline-btn" bindtap="searchNow">搜索</button>
+      </view>
+    </view>
+
+    <scroll-view wx:if="{{categories.length}}" class="category-scroll" scroll-x="true" enable-flex="true">
+      <view class="category-row">
+        <view class="category-chip {{!category ? 'active' : ''}}" data-category="" bindtap="onCategoryTap">全部</view>
+        <view wx:for="{{categories}}" wx:key="*this" class="category-chip {{category === item ? 'active' : ''}}" data-category="{{item}}" bindtap="onCategoryTap">{{item}}</view>
+      </view>
+    </scroll-view>
+
+    <view class="row between sort-row">
+      <view>
+        <view class="section-kicker">{{keyword || category ? '筛选结果' : '商品列表'}}</view>
+        <view class="list-count">共 {{total}} 个商品</view>
+      </view>
+      <picker mode="selector" range="{{sortOptions}}" range-key="label" value="{{sortIndex}}" bindchange="onSortChange">
+        <view class="sort-picker">{{sortOptions[sortIndex].label}}</view>
+      </picker>
+    </view>
+
+    <ui-skeleton wx:if="{{loading}}" count="{{3}}" showThumb="{{true}}"></ui-skeleton>
+    <view wx:elif="{{!products.length}}" class="empty">
+      <view class="ui-empty-icon">⌕</view>
+      <view class="ui-empty-title">{{keyword || category ? '未找到相关商品' : '暂无推荐商品'}}</view>
+      <view class="ui-empty-desc">{{keyword || category ? '换个条件再试试' : '后台设置推荐标签后会显示在这里'}}</view>
+    </view>
+
+    <view wx:if="{{products.length}}" class="product-list">
+      <view wx:for="{{products}}" wx:key="_id" class="product tap-card" bindtap="goDetail" data-id="{{item._id}}">
+        <view class="image-wrap">
+          <image wx:if="{{item.imageUrl}}" class="product-image" src="{{item.imageUrl}}" mode="aspectFill" lazy-load="true"></image>
+          <view wx:else class="product-image placeholder">暂无图片</view>
+        </view>
+        <view class="product-body">
+          <view class="subtitle product-title-text">{{item.name}}</view>
+          <view class="muted">{{item.brand || item.category || item.specification}}</view>
+          <view class="muted">规格：{{item.specification || '未设置'}}</view>
+          <view class="muted">生产日期：{{item.productionDate || '未设置'}}</view>
+          <view class="product-tags">
+            <text wx:for="{{item.tagItems}}" wx:for-item="tag" wx:key="name" class="tag tag-product tag-{{tag.className}}">{{tag.name}}</text>
+          </view>
+          <view class="row between product-action-row">
+            <view class="price">¥{{item.priceText}}</view>
+            <button class="product-add-btn" catchtap="addToCart" data-id="{{item._id}}" disabled="{{addingId === item._id}}">
+              <text class="plus">{{addingId === item._id ? '…' : '+'}}</text>
+              <text>{{addingId === item._id ? '加入中' : '加购'}}</text>
+            </button>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{loadingMore}}" class="bottom-loading">继续加载...</view>
+    <view wx:if="{{!loadingMore && products.length && !hasMore}}" class="empty small-empty">没有更多商品了</view>
+  </block>
+</view>

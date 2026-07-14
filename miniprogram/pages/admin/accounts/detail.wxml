@@ -1,0 +1,90 @@
+<view class="page admin-responsive-page account-detail-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}" wx:if="{{account}}">
+  <view class="detail-hero section">
+    <view class="hero-copy">
+      <view class="hero-kicker">客户账款</view>
+      <view class="hero-title">{{account.title}}</view>
+      <view class="hero-desc">{{account.userOpenid || account.userId}}</view>
+    </view>
+    <view class="risk hero-risk {{account.riskLevel}}">{{account.riskText}}</view>
+    <view class="hero-metrics">
+      <view class="hero-metric">
+        <view class="metric-label">当前未付</view>
+        <view class="metric-value price">￥{{account.totalUnpaidText}}</view>
+      </view>
+      <view class="hero-metric">
+        <view class="metric-label">累计已付</view>
+        <view class="metric-value">￥{{account.totalPaidText}}</view>
+      </view>
+      <view class="hero-metric">
+        <view class="metric-label">待确认</view>
+        <view class="metric-value">￥{{account.pendingText}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="detail-layout">
+    <view class="main-column">
+      <view class="card section info-card">
+        <view class="subtitle">客户资料</view>
+        <view class="kv"><text>手机号</text><text>{{account.phoneDisplay || account.phoneMasked || '-'}} {{account.phoneVerified ? '已验证' : '未验证'}}</text></view>
+        <view class="kv"><text>绑定方式</text><text>{{account.phoneBindMethod || '-'}}</text></view>
+        <view wx:if="{{account.adminRemark}}" class="remark">{{account.adminRemark}}</view>
+      </view>
+
+      <view class="card section info-card">
+        <view class="subtitle">订单明细</view>
+        <view wx:if="{{!orders.length}}" class="empty compact">暂无订单</view>
+        <view wx:for="{{orders}}" wx:key="_id" class="line-card">
+          <view class="row between"><text class="line-title">{{item.orderNo || item._id}}</text><text class="price">￥{{item.totalText}}</text></view>
+          <view class="muted">{{item.createdText}} | {{item.statusText}} | {{item.paymentText}}</view>
+          <view class="muted">已付 ￥{{item.paidText}}，未付 ￥{{item.unpaidText}}</view>
+        </view>
+      </view>
+
+      <view class="card section info-card">
+        <view class="subtitle">付款记录</view>
+        <view wx:if="{{!payments.length}}" class="empty compact">暂无付款记录</view>
+        <view wx:for="{{payments}}" wx:key="_id" class="line-card">
+          <view class="row between"><text class="line-title">{{item.confirmedText}}</text><text class="price">￥{{item.paidText}}</text></view>
+          <view class="muted">订单：{{item.orderText}}</view>
+          <view class="muted">{{item.paymentMethod || '-'}} | {{item.confirmStatus}} | {{item.remark || '-'}}</view>
+        </view>
+      </view>
+
+      <view class="card section info-card">
+        <view class="subtitle">账款流水</view>
+        <view wx:if="{{!logs.length}}" class="empty compact">暂无流水</view>
+        <view wx:for="{{logs}}" wx:key="_id" class="line-card">
+          <view class="row between"><text class="line-title">{{item.changeType}}</text><text>￥{{item.changeText}}</text></view>
+          <view class="muted">{{item.createdText}} | {{item.remark || '-'}}</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="side-column">
+      <view class="card section action-card">
+        <view class="subtitle">账款汇总</view>
+        <view class="metrics">
+          <view class="metric-box"><text class="label">累计下单</text><text>￥{{account.totalOrderText}}</text></view>
+          <view class="metric-box"><text class="label">累计已付</text><text>￥{{account.totalPaidText}}</text></view>
+          <view class="metric-box primary-metric"><text class="label">当前未付</text><text class="price">￥{{account.totalUnpaidText}}</text></view>
+          <view class="metric-box"><text class="label">今日新增</text><text>￥{{account.todayText}}</text></view>
+          <view class="metric-box"><text class="label">历史未付</text><text>￥{{account.historyText}}</text></view>
+          <view class="metric-box"><text class="label">待确认</text><text>￥{{account.pendingText}}</text></view>
+          <view class="metric-box"><text class="label">异常金额</text><text>￥{{account.abnormalText}}</text></view>
+          <view class="metric-box"><text class="label">异常次数</text><text>{{account.abnormalCount || 0}}</text></view>
+        </view>
+        <view class="row actions">
+          <button class="btn btn-secondary small" bindtap="updateRemark">备注</button>
+          <button class="btn btn-secondary small" bindtap="updateRisk">风险</button>
+          <button class="btn btn-secondary small" bindtap="recalc">重算</button>
+          <button class="btn btn-danger small" bindtap="markSettled">结清</button>
+        </view>
+        <view class="row actions">
+          <button class="btn btn-primary small wide-action" bindtap="exportStatement">导出对账单</button>
+          <button wx:if="{{exportResult}}" class="btn btn-secondary small wide-action" bindtap="openExportFile">打开文件</button>
+        </view>
+      </view>
+    </view>
+  </view>
+</view>

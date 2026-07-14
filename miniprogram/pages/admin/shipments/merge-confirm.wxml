@@ -1,0 +1,84 @@
+<view class="page admin-responsive-page merge-confirm-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="merge-hero section">
+    <view>
+      <view class="hero-kicker">发货履约</view>
+      <view class="hero-title">合并发货确认</view>
+      <view class="hero-desc">仅创建发货关联，不合并订单本身，也不改变金额、付款记录和库存。</view>
+    </view>
+    <view wx:if="{{summary}}" class="hero-pill">{{summary.orderCount || 0}} 单</view>
+  </view>
+
+  <view wx:if="{{eligibility && !eligibility.canMerge}}" class="notice notice-danger section merge-warning">
+    <view class="warning-title">所选订单不能合并发货</view>
+    <view wx:for="{{eligibility.failureMessages}}" wx:key="*this" class="warning-line">· {{item}}</view>
+  </view>
+
+  <block wx:if="{{summary}}">
+    <view class="card section customer-card">
+      <view class="card-head">
+        <view>
+          <view class="section-title">{{summary.customerName}}</view>
+          <view class="card-desc">{{summary.customerPhoneMasked || '无手机号'}}</view>
+        </view>
+        <view class="status-pill {{summary.addressConsistent ? 'ok' : 'warning'}}">{{summary.addressConsistent ? '地址一致' : '地址不一致'}}</view>
+      </view>
+      <view class="summary-grid">
+        <view class="summary-cell"><view class="cell-label">订单数</view><view class="cell-value">{{summary.orderCount}}</view></view>
+        <view class="summary-cell"><view class="cell-label">商品件数</view><view class="cell-value">{{summary.totalItemCount}}</view></view>
+        <view class="summary-cell"><view class="cell-label">商品种类</view><view class="cell-value">{{summary.totalProductCount}}</view></view>
+        <view class="summary-cell"><view class="cell-label">地址</view><view class="cell-value">{{summary.addressConsistent ? '一致' : '不一致'}}</view></view>
+      </view>
+      <view class="amount-grid">
+        <view class="amount-cell"><text>订单金额</text><text>￥{{summary.totalOrderAmountText}}</text></view>
+        <view class="amount-cell"><text>已付金额</text><text>￥{{summary.totalPaidAmountText}}</text></view>
+        <view class="amount-cell primary"><text>未付金额</text><text>￥{{summary.totalUnpaidAmountText}}</text></view>
+      </view>
+    </view>
+
+    <view class="card section address-card">
+      <view class="card-head compact">
+        <view>
+          <view class="section-title">收货地址</view>
+          <view class="card-desc">{{summary.shippingAddressMasked.receiverName}} {{summary.shippingAddressMasked.receiverPhoneMasked}}</view>
+        </view>
+      </view>
+      <view class="address-text">{{summary.shippingAddressMasked.regionText}} {{summary.shippingAddressMasked.detailAddressMasked || summary.shippingAddressMasked.fullAddressMasked}}</view>
+      <view wx:if="{{!summary.addressConsistent}}" class="notice notice-warning address-warning">所选订单收货地址不一致，默认不允许合并发货。</view>
+    </view>
+
+    <view class="card section orders-card">
+      <view class="card-head compact">
+        <view>
+          <view class="section-title">订单信息</view>
+          <view class="card-desc">确认这些订单将创建同一张合并发货单。</view>
+        </view>
+      </view>
+      <view wx:for="{{summary.orders}}" wx:key="orderId" class="order-row">
+        <view class="row-main">
+          <view class="row-title">{{item.orderNo}}</view>
+          <view class="row-price">￥{{item.amountText}}</view>
+        </view>
+        <view class="row-meta">{{item.createdAtText}}｜{{item.statusText}}｜{{item.paymentText}}</view>
+      </view>
+    </view>
+
+    <view class="card section items-card">
+      <view class="card-head compact">
+        <view>
+          <view class="section-title">商品汇总</view>
+          <view class="card-desc">按商品合并展示数量和涉及订单。</view>
+        </view>
+      </view>
+      <view wx:for="{{itemSummary}}" wx:key="productId" class="item-row">
+        <view class="row-main">
+          <view class="item-name">{{item.productName}}</view>
+          <view class="count">x {{item.totalQuantity}}</view>
+        </view>
+        <view class="row-meta">{{item.specification || '无规格'}}｜{{item.productionDate || '无生产日期'}}</view>
+        <view class="row-meta">涉及订单：{{item.orderNosText}}</view>
+      </view>
+    </view>
+
+    <button class="btn btn-primary action-full" loading="{{creating}}" disabled="{{!eligibility.canMerge || creating}}" bindtap="createShipment">确认创建合并发货单</button>
+  </block>
+</view>

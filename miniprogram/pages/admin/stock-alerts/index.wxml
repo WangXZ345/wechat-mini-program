@@ -1,0 +1,98 @@
+<view class="page stock-alert-page page-enter">
+  <view class="stock-hero section">
+    <view>
+      <view class="hero-kicker">库存工作台</view>
+      <view class="hero-title">库存预警</view>
+      <view class="hero-desc">低库存和缺货提醒仅后台可见，用于快速处理补货、下架和预警值。</view>
+    </view>
+    <view class="hero-pill">{{list.length || 0}} 项</view>
+  </view>
+
+  <view class="summary-grid section">
+    <view class="summary-card">
+      <view class="summary-num">{{summary.warningCount || 0}}</view>
+      <view class="summary-label">低库存</view>
+    </view>
+    <view class="summary-card danger-card">
+      <view class="summary-num danger">{{summary.outOfStockCount || 0}}</view>
+      <view class="summary-label">已缺货</view>
+    </view>
+  </view>
+
+  <view class="card section control-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">预警筛选</view>
+        <view class="card-desc">按商品名称、索引、SKU、规格或生产日期查找。</view>
+      </view>
+    </view>
+    <input class="input search-input" placeholder="搜索商品名称 / 索引 / SKU / 规格 / 日期" value="{{keyword}}" bindinput="onKeywordInput"></input>
+    <scroll-view scroll-x="true" enable-flex="true" class="filter-scroll">
+      <view class="filter-row">
+        <button class="filter-btn {{status === 'all' ? 'active-filter' : ''}}" data-status="all" bindtap="onStatusTap">全部预警</button>
+        <button class="filter-btn {{status === 'all_products' ? 'active-filter' : ''}}" data-status="all_products" bindtap="onStatusTap">全部商品</button>
+        <button class="filter-btn {{status === 'warning' ? 'active-filter' : ''}}" data-status="warning" bindtap="onStatusTap">低库存</button>
+        <button class="filter-btn {{status === 'out_of_stock' ? 'active-filter' : ''}}" data-status="out_of_stock" bindtap="onStatusTap">已缺货</button>
+      </view>
+    </scroll-view>
+    <view class="action-grid">
+      <button class="btn btn-secondary action-btn" loading="{{checkingAll}}" disabled="{{checkingAll}}" bindtap="checkAll">一键检查</button>
+      <button class="btn btn-danger action-btn" bindtap="hideOutOfStock">缺货自动下架</button>
+      <button class="btn btn-secondary action-btn" bindtap="goInventoryLogs">库存日志</button>
+    </view>
+  </view>
+
+  <view class="card section batch-card">
+    <view class="card-head compact">
+      <view>
+        <view class="section-title">批量修改</view>
+        <view class="card-desc">先勾选商品，再统一更新预警值和缺货策略。</view>
+      </view>
+      <view class="selected-pill">{{selectedIds.length || 0}} 已选</view>
+    </view>
+    <view class="batch-row">
+      <input class="input batch-input" type="number" placeholder="批量设置预警库存" value="{{batchWarningStock}}" bindinput="onBatchInput"></input>
+      <label class="row switch-row"><switch checked="{{batchAutoHideWhenOutOfStock}}" bindchange="onBatchAutoHideChange"></switch><text>库存为 0 自动下架</text></label>
+    </view>
+    <button class="btn btn-primary batch-action" bindtap="batchUpdate">批量修改 {{selectedIds.length ? '(' + selectedIds.length + ')' : ''}}</button>
+  </view>
+
+  <view wx:if="{{loading}}" class="empty loading-panel">加载中...</view>
+  <view wx:elif="{{!list.length}}" class="empty loading-panel">暂无库存预警商品</view>
+
+  <checkbox-group bindchange="onSelect">
+    <view wx:for="{{list}}" wx:key="productId" class="card product-card">
+      <view class="product-accent {{item.stockStatus}}"></view>
+      <view class="row between product-head">
+        <label class="row select-label">
+          <checkbox value="{{item.productId}}" checked="{{!!item.checked}}"></checkbox>
+          <view class="product-main">
+            <view class="product-name">{{item.name}}</view>
+            <view class="product-code">{{item.productIndex || '-'}} / {{item.skuCode || '-'}}</view>
+          </view>
+        </label>
+        <view class="status {{item.stockStatus}}">{{item.statusText}}</view>
+      </view>
+
+      <view class="product-sub">{{item.specification || '-'}} / 生产日期：{{item.productionDate || '未设置'}}</view>
+      <view class="stock-grid">
+        <view class="stock-cell"><view class="stock-label">当前库存</view><view class="stock-value">{{item.stock}}</view></view>
+        <view class="stock-cell"><view class="stock-label">预警值</view><view class="stock-value">{{item.warningStock}}</view></view>
+      </view>
+      <view wx:if="{{item.message}}" class="message-box">{{item.message}}</view>
+
+      <view class="edit-row">
+        <input class="input warning-input" type="number" value="{{item.editWarningStock}}" data-index="{{index}}" bindinput="onWarningInput"></input>
+        <button class="btn btn-primary save-btn" data-index="{{index}}" bindtap="saveWarningStock">保存</button>
+      </view>
+      <label class="row switch-row item-switch"><switch checked="{{!!item.autoHideWhenOutOfStock}}" data-index="{{index}}" bindchange="onAutoHideChange"></switch><text>库存为 0 自动下架</text></label>
+      <view class="action-grid item-actions">
+        <button class="btn btn-secondary action-btn" data-id="{{item.productId}}" bindtap="goProduct">编辑商品</button>
+        <button class="btn btn-secondary action-btn" bindtap="goInventoryLogs">库存日志</button>
+      </view>
+    </view>
+  </checkbox-group>
+
+  <view wx:if="{{loadingMore}}" class="empty small-empty">继续加载...</view>
+  <view wx:elif="{{list.length && !hasMore}}" class="empty small-empty">已加载全部</view>
+</view>

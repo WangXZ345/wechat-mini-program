@@ -1,0 +1,9 @@
+{
+  "name": "loginWithWechat",
+  "version": "1.0.0",
+  "description": "微信快捷登录",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "latest"
+  }
+}

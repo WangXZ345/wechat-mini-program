@@ -1,0 +1,82 @@
+<view class="page admin-responsive-page accounts-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="accounts-hero section">
+    <view class="hero-copy">
+      <view class="hero-kicker">财务账款</view>
+      <view class="hero-title">客户账款中心</view>
+      <view class="hero-desc">按客户汇总应付、实收、未付、待确认和风险状态，支持筛选、重算和对账处理。</view>
+    </view>
+    <button class="btn btn-secondary btn-sm hero-refresh" bindtap="load">刷新</button>
+  </view>
+
+  <view class="card filter-panel section">
+    <view class="filter-summary">
+      <view>
+        <view class="subtitle">账款筛选</view>
+        <view class="muted">当前：{{selectedFilterLabel}} / {{selectedSortLabel}}</view>
+      </view>
+      <view class="tag">共 {{accounts.length || 0}} 位客户</view>
+    </view>
+    <view class="filter-grid">
+      <view class="field">
+        <view class="label">筛选</view>
+        <picker mode="selector" range="{{filters}}" range-key="label" value="{{filterIndex}}" bindchange="onFilterChange">
+          <view class="input picker-value">{{selectedFilterLabel}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <view class="label">排序</view>
+        <picker mode="selector" range="{{sorts}}" range-key="label" value="{{sortIndex}}" bindchange="onSortChange">
+          <view class="input picker-value">{{selectedSortLabel}}</view>
+        </picker>
+      </view>
+      <view class="field search-field">
+        <view class="label">搜索</view>
+        <input class="input" placeholder="昵称 / 手机号 / openid / 备注" value="{{keyword}}" bindinput="onKeyword" confirm-type="search" bindconfirm="search"></input>
+      </view>
+      <button class="btn btn-primary search-action" bindtap="search">搜索客户</button>
+    </view>
+  </view>
+
+  <view wx:if="{{loading && !accounts.length}}" class="card empty-panel">加载中...</view>
+  <view wx:elif="{{initialized && !accounts.length}}" class="card empty-panel">暂无客户账款</view>
+
+  <view wx:if="{{accounts.length}}" class="queue-title section">
+    <view>
+      <view class="subtitle">客户账款队列</view>
+      <view class="muted">结清、风险标记和重算仍需通过原确认流程处理。</view>
+    </view>
+  </view>
+
+  <view wx:for="{{accounts}}" wx:key="_id" class="card account card-press">
+    <view class="card-line"></view>
+    <view class="account-head">
+      <view class="account-main">
+        <view class="subtitle account-title">{{item.title}}</view>
+        <view wx:if="{{item.phoneDisplay || item.phoneMasked}}" class="muted phone-line">手机号：{{item.phoneDisplay || item.phoneMasked}} {{item.phoneVerified ? '已验证' : '未验证'}}</view>
+        <view class="muted id-line">{{item.userOpenid || item.userId}}</view>
+      </view>
+      <view class="risk {{item.riskLevel}}">{{item.riskText}}</view>
+    </view>
+    <view class="metrics">
+      <view class="metric-box primary-metric">
+        <text class="label">当前未付</text>
+        <text class="price metric-value">￥{{item.totalUnpaidText}}</text>
+      </view>
+      <view class="metric-box"><text class="label">累计下单</text><text>￥{{item.totalOrderText}}</text></view>
+      <view class="metric-box"><text class="label">累计已付</text><text>￥{{item.totalPaidText}}</text></view>
+      <view class="metric-box"><text class="label">今日新增</text><text>￥{{item.todayText}}</text></view>
+      <view class="metric-box"><text class="label">历史未付</text><text>￥{{item.historyText}}</text></view>
+      <view class="metric-box"><text class="label">待确认</text><text>￥{{item.pendingText}}</text></view>
+      <view class="metric-box"><text class="label">异常次数</text><text>{{item.abnormalCount || 0}}</text></view>
+      <view class="metric-box"><text class="label">状态</text><text>{{item.settledText}}</text></view>
+    </view>
+    <view class="recent-line">最近下单：{{item.lastOrderText}}　最近付款：{{item.lastPaymentText}}</view>
+    <view wx:if="{{item.adminRemark}}" class="remark">{{item.adminRemark}}</view>
+    <view class="row actions">
+      <button class="btn btn-secondary small" bindtap="goDetail" data-id="{{item._id}}">详情</button>
+      <button class="btn btn-secondary small" bindtap="recalc" data-id="{{item._id}}">重算</button>
+      <button class="btn btn-secondary small" bindtap="markRisk" data-id="{{item._id}}">风险</button>
+      <button class="btn btn-danger small" bindtap="markSettled" data-id="{{item._id}}">结清</button>
+    </view>
+  </view>
+</view>

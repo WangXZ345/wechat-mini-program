@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "推荐商品",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "ui-skeleton": "/components/ui-skeleton/index",
+    "ui-empty": "/components/ui-empty/index"
+  }
+}

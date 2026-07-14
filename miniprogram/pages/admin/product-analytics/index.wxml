@@ -1,0 +1,133 @@
+<view class="page analytics-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="analytics-hero section">
+    <view class="hero-copy">
+      <view class="hero-eyebrow">Product Analytics</view>
+      <view class="hero-title">商品数据分析</view>
+      <view class="hero-subtitle">按商品追踪销量、成交均价和报价变化，辅助采购和经营判断</view>
+    </view>
+    <view class="hero-pills">
+      <view class="hero-pill">{{rangeText || "近 30 天"}}</view>
+      <view class="hero-pill hero-pill-strong">{{selectedProduct.name || "先选择商品"}}</view>
+    </view>
+  </view>
+
+  <view wx:if="{{errorMessage}}" class="card section error-card fade-up">
+    <view class="subtitle">加载失败</view>
+    <view class="muted error-text">{{errorMessage}}</view>
+    <button class="btn btn-primary retry-btn" bindtap="retry" loading="{{analyticsLoading}}" disabled="{{analyticsLoading || !selectedProduct.productId}}">重试</button>
+  </view>
+
+  <view class="card section analytics-card product-picker-card fade-up">
+    <view class="section-title-row">
+      <view>
+        <view class="subtitle">选择商品</view>
+        <view class="muted product-entry-desc">支持名称、品牌、规格、商品编号搜索</view>
+      </view>
+      <button class="btn btn-secondary search-btn" bindtap="searchProducts" loading="{{searchLoading}}" disabled="{{searchLoading}}">搜索</button>
+    </view>
+    <view class="search-row">
+      <input class="input search-input" value="{{keyword}}" placeholder="输入商品名、品牌或规格" bindinput="onKeywordInput" confirm-type="search" bindconfirm="searchProducts"></input>
+      <button wx:if="{{keyword}}" class="clear-btn" bindtap="clearSearch">清空</button>
+    </view>
+    <ui-skeleton wx:if="{{searchLoading && !productResults.length}}" count="{{3}}" showThumb="{{true}}"></ui-skeleton>
+    <view wx:if="{{productResults.length}}" class="product-list">
+      <view wx:for="{{productResults}}" wx:key="_id" class="product-row card-press {{item.motionClass}} {{selectedProduct.productId === item._id ? 'selected' : ''}}" bindtap="selectProduct" data-id="{{item._id}}">
+        <image wx:if="{{item.imageUrl}}" class="product-thumb" src="{{item.imageUrl}}" mode="aspectFill" lazy-load="true"></image>
+        <view wx:else class="product-thumb thumb-empty">图</view>
+        <view class="product-main">
+          <view class="product-title">{{item.name}}</view>
+          <view class="muted product-meta">{{item.brand || "无品牌"}}｜{{item.specification || "无规格"}}</view>
+          <view class="muted product-meta">售价 {{item.priceText}}｜库存 {{item.stock || 0}}</view>
+        </view>
+        <view class="select-tag">{{selectedProduct.productId === item._id ? "已选" : "选择"}}</view>
+      </view>
+    </view>
+    <view wx:if="{{initializedSearch && !productResults.length && !searchLoading}}" class="empty compact-empty">暂无匹配商品</view>
+  </view>
+
+  <view class="card section analytics-card range-card fade-up">
+    <view class="section-title-row">
+      <view class="subtitle">时间范围</view>
+      <view class="muted small-text">{{rangeText}}</view>
+    </view>
+    <scroll-view scroll-x class="range-scroll" enable-flex>
+      <view class="range-tabs">
+        <view wx:for="{{rangeOptions}}" wx:key="value" class="range-tab {{range === item.value ? 'active' : ''}}" bindtap="onRangeTap" data-value="{{item.value}}">{{item.label}}</view>
+      </view>
+    </scroll-view>
+    <view wx:if="{{range === 'custom'}}" class="custom-range">
+      <picker mode="date" value="{{startDate}}" bindchange="onStartDateChange">
+        <view class="date-pill">开始 {{startDate || "请选择"}}</view>
+      </picker>
+      <picker mode="date" value="{{endDate}}" bindchange="onEndDateChange">
+        <view class="date-pill">结束 {{endDate || "请选择"}}</view>
+      </picker>
+    </view>
+  </view>
+
+  <ui-skeleton wx:if="{{analyticsLoading && !summaryItems.length}}" count="{{4}}" showThumb="{{false}}"></ui-skeleton>
+
+  <view wx:if="{{selectedProduct.productId}}" class="card section product-card selected-product-card fade-up">
+    <image wx:if="{{selectedProduct.imageUrl}}" class="detail-thumb" src="{{selectedProduct.imageUrl}}" mode="aspectFill"></image>
+    <view wx:else class="detail-thumb thumb-empty large">图</view>
+    <view class="detail-main">
+      <view class="muted small-text">当前分析对象</view>
+      <view class="subtitle product-name">{{selectedProduct.name}}</view>
+      <view class="muted detail-meta">{{selectedProduct.brand || "无品牌"}}｜{{selectedProduct.category || "无分类"}}｜{{selectedProduct.specification || "无规格"}}</view>
+      <view class="tag-row">
+        <text wx:for="{{selectedProduct.tags}}" wx:key="*this" class="tag">{{item}}</text>
+        <text wx:if="{{!selectedProduct.tags.length}}" class="muted small-text">暂无标签</text>
+      </view>
+      <view class="detail-metrics">
+        <view>当前售价：{{selectedProduct.currentPriceText}}</view>
+        <view>当前库存：{{selectedProduct.currentStock || 0}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{summaryItems.length}}" class="summary-grid section">
+    <view wx:for="{{summaryItems}}" wx:key="label" class="card metric-card {{item.motionClass}}">
+      <view class="metric-label">{{item.label}}</view>
+      <view class="metric-value">{{item.value}}</view>
+    </view>
+  </view>
+
+  <view wx:if="{{selectedProduct.productId}}" class="chart-grid section">
+    <view class="card chart-card fade-up">
+      <view class="section-title-row">
+        <view>
+          <view class="subtitle">销量趋势</view>
+          <view class="muted small-text">按天聚合</view>
+        </view>
+        <view class="chart-chip">Sales</view>
+      </view>
+      <canvas id="salesChart" class="line-chart" canvas-id="salesChart"></canvas>
+      <view wx:if="{{!hasSalesData && !analyticsLoading}}" class="empty compact-empty">该商品在当前时间范围内暂无销售记录。</view>
+    </view>
+
+    <view class="card chart-card fade-up">
+      <view class="section-title-row">
+        <view>
+          <view class="subtitle">成交均价趋势</view>
+          <view class="muted small-text">销售额 / 销量</view>
+        </view>
+        <view class="chart-chip chart-chip-green">Deal</view>
+      </view>
+      <canvas id="dealPriceChart" class="line-chart" canvas-id="dealPriceChart"></canvas>
+      <view wx:if="{{!hasDealPriceData && !analyticsLoading}}" class="empty compact-empty">当前时间范围内暂无可计算的成交均价。</view>
+    </view>
+
+    <view class="card chart-card fade-up">
+      <view class="section-title-row">
+        <view>
+          <view class="subtitle">报价变化趋势</view>
+          <view class="muted small-text">来自 price_logs</view>
+        </view>
+        <view class="chart-chip chart-chip-purple">Price</view>
+      </view>
+      <canvas wx:if="{{hasListPriceData}}" id="listPriceChart" class="line-chart" canvas-id="listPriceChart"></canvas>
+      <view wx:if="{{!hasListPriceData && !analyticsLoading}}" class="empty compact-empty">暂无历史报价记录，报价变化将从本功能上线后开始记录。</view>
+      <view wx:if="{{analyticsMessage}}" class="muted notice-text">{{analyticsMessage}}</view>
+    </view>
+  </view>
+</view>

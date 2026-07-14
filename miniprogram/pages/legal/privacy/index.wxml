@@ -1,0 +1,96 @@
+<view class="page legal-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="legal-title">隐私保护指引</view>
+  <view class="card legal-content">
+    <view class="paragraph">森原国际美妆（以下简称"我们"）非常重视您的个人信息保护。本隐私保护指引说明我们在您使用本小程序时如何收集、使用、存储和保护您的个人信息，以及您享有的相关权利。</view>
+
+    <view class="paragraph">请您在使用本小程序前仔细阅读并充分理解本指引的全部内容。如您对本指引有任何疑问，可通过本页面底部的联系方式与我们沟通。</view>
+
+    <view class="paragraph legal-heading">一、我们如何收集和使用您的个人信息</view>
+
+    <view class="paragraph legal-subheading">1. 账号和身份信息</view>
+    <view class="paragraph">为了识别您的身份并提供订货服务，我们可能会收集您的微信授权信息（包括 openid、unionid、昵称、头像）和手机号。这些信息用于：</view>
+    <view class="paragraph">• 绑定您的客户账户</view>
+    <view class="paragraph">• 联系您确认订单和处理业务</view>
+    <view class="paragraph">• 处理付款、发货和售后事宜</view>
+
+    <view class="paragraph legal-subheading">2. 订单和交易信息</view>
+    <view class="paragraph">在您下单和交易过程中，我们会收集订单相关信息，包括商品名称、商品规格、购买数量、订单金额、订单状态、付款状态、发货状态、售后状态等。这些信息用于：</view>
+    <view class="paragraph">• 订单处理和履约</view>
+    <view class="paragraph">• 库存核对和管理</view>
+    <view class="paragraph">• 付款确认和核对</view>
+    <view class="paragraph">• 发货和配送</view>
+    <view class="paragraph">• 售后处理</view>
+    <view class="paragraph">• 客户账款管理</view>
+
+    <view class="paragraph legal-subheading">3. 收货地址信息</view>
+    <view class="paragraph">当您需要配送服务时，我们会收集您提供的收货地址信息，包括收货人姓名、手机号、省市区、详细地址。这些信息用于：</view>
+    <view class="paragraph">• 商品发货和配送</view>
+    <view class="paragraph">• 订单核对和确认</view>
+    <view class="paragraph">• 售后退换货处理</view>
+
+    <view class="paragraph legal-subheading">4. 图片和文件信息</view>
+    <view class="paragraph">在订单履约和售后处理过程中，我们会收集您上传的图片和文件，包括付款截图、售后凭证图片、退货凭证图片等。后台管理中可能涉及库存和报价导入文件。这些信息用于：</view>
+    <view class="paragraph">• 付款核对和确认</view>
+    <view class="paragraph">• 售后申请审核</view>
+    <view class="paragraph">• 退款处理和纠纷解决</view>
+    <view class="paragraph">• 后台商品和库存管理</view>
+
+    <view class="paragraph legal-subheading">5. 搜索和使用记录</view>
+    <view class="paragraph">为了提升您的使用体验，我们可能会记录您的搜索关键词、最近搜索、常购商品、浏览记录和操作日志。这些信息用于：</view>
+    <view class="paragraph">• 优化搜索功能和订货体验</view>
+    <view class="paragraph">• 展示常购清单</view>
+    <view class="paragraph">• 风险控制和安全审计</view>
+    <view class="paragraph">• 系统故障排查</view>
+
+    <view class="paragraph legal-subheading">6. 后台操作信息</view>
+    <view class="paragraph">为保障系统安全和业务合规，我们会记录管理员的操作信息，包括操作人、操作时间、操作类型、以及订单、付款、退款、库存、发货相关的操作记录。这些信息用于：</view>
+    <view class="paragraph">• 内部管理和权限控制</view>
+    <view class="paragraph">• 安全审计和风险监控</view>
+    <view class="paragraph">• 纠纷处理和责任追溯</view>
+    <view class="paragraph">• 异常操作追踪</view>
+
+    <view class="paragraph legal-heading">二、我们如何共享您的个人信息</view>
+
+    <view class="paragraph">我们承诺不会出售您的个人信息。我们仅在以下情况下共享您的必要信息：</view>
+    <view class="paragraph">• 履行订单、发货、售后等服务时，可能向物流服务方提供必要的收货信息</view>
+    <view class="paragraph">• 依法配合监管部门、司法机关的要求</view>
+    <view class="paragraph">• 维护我们或其他用户的合法权益</view>
+    <view class="paragraph">• 征得您的明确同意</view>
+
+    <view class="paragraph">本小程序使用微信云开发和微信基础能力，相关数据的存储和处理由微信平台提供技术支持。</view>
+
+    <view class="paragraph legal-heading">三、您的个人信息权利</view>
+
+    <view class="paragraph">您可以通过本小程序：</view>
+    <view class="paragraph">• 查看和管理您的订单信息</view>
+    <view class="paragraph">• 修改或删除收货地址</view>
+    <view class="paragraph">• 申请售后服务</view>
+    <view class="paragraph">• 联系客服更正或删除相关信息</view>
+    <view class="paragraph">• 咨询个人信息处理情况</view>
+
+    <view class="paragraph legal-heading">四、我们如何保护您的个人信息</view>
+
+    <view class="paragraph">我们采取以下措施保护您的个人信息安全：</view>
+    <view class="paragraph">• 后台按角色进行权限管理，不同角色只能访问职责范围内的信息</view>
+    <view class="paragraph">• 普通用户无法查看其他客户的信息</view>
+    <view class="paragraph">• 采购、客服、财务等角色按职责分权</view>
+    <view class="paragraph">• 敏感字段进行脱敏或权限控制</view>
+    <view class="paragraph">• 付款截图和退款信息仅供业务处理使用，访问受到严格控制</view>
+
+    <view class="paragraph legal-heading">五、未成年人保护</view>
+
+    <view class="paragraph">本小程序主要面向具备批发订货需求的经营者或授权采购人员。若未成年人使用本小程序，应在监护人指导和同意下进行。</view>
+
+    <view class="paragraph legal-heading">六、本指引的更新</view>
+
+    <view class="paragraph">我们可能根据业务变化和法律要求更新本隐私保护指引。更新后的指引将在本页面展示，重大变更我们会通过适当方式通知您。</view>
+
+    <view class="paragraph legal-heading">七、联系我们</view>
+
+    <view class="paragraph">如您对本隐私保护指引有任何疑问、意见或建议，或需要行使您的个人信息权利，请通过以下方式联系我们：</view>
+    <view class="paragraph">经营主体：森原国际美妆</view>
+    <view class="paragraph">联系电话：13631669161</view>
+
+    <view class="paragraph legal-footnote">本指引自2026年7月5日起生效。</view>
+  </view>
+</view>

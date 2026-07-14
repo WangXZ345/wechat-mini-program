@@ -1,0 +1,80 @@
+<view class="page admin-responsive-page import-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="import-hero section">
+    <view class="hero-main">
+      <view class="hero-kicker">库存与报价导入</view>
+      <view class="hero-title">导入工作台</view>
+      <view class="hero-desc">合并库存表与报价表，先生成预览，再确认写入商品、库存和价格。</view>
+    </view>
+    <button class="btn btn-secondary btn-sm hero-history" bindtap="goHistory">历史</button>
+    <view class="hero-metrics">
+      <view class="hero-metric">
+        <view class="metric-label">库存文件</view>
+        <view class="metric-value">{{file ? '已选择' : '待选择'}}</view>
+      </view>
+      <view class="hero-metric">
+        <view class="metric-label">报价表</view>
+        <view class="metric-value">{{priceFile ? '已选择' : '待选择'}}</view>
+      </view>
+      <view class="hero-metric">
+        <view class="metric-label">库存处理</view>
+        <view class="metric-value">{{stockMode === 'add' ? '增加库存' : '覆盖库存'}}</view>
+      </view>
+      <view class="hero-metric">
+        <view class="metric-label">价格处理</view>
+        <view class="metric-value">{{priceMode === 'only_new' ? '只写新商品' : (priceMode === 'skip' ? '不改价格' : '覆盖价格')}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{parseMessage}}" class="notice notice-warning parse-message">{{parseMessage}}</view>
+
+  <view class="card import-action-card section">
+    <view>
+      <view class="subtitle">解析预览</view>
+      <view class="muted action-desc">确认两份文件和处理方式后进入预览页，最终导入仍需再次确认。</view>
+    </view>
+    <button class="btn btn-primary action-button" loading="{{parsing}}" disabled="{{parsing}}" bindtap="parseFile">
+      {{parsing ? '解析中' : '解析并预览'}}
+    </button>
+  </view>
+
+  <view class="import-workbench section">
+    <view class="card upload-step-card fade-up card-stagger-1">
+      <view class="step-index">01</view>
+      <view class="subtitle">选择库存文件</view>
+      <view class="muted step-desc">支持 xlsx、csv、txt，用于解析商品和库存数量。</view>
+      <button class="btn btn-secondary btn-full upload-button" bindtap="chooseFile">选择库存文件</button>
+      <view wx:if="{{file}}" class="file-pill">{{file.name}}</view>
+      <view wx:else class="empty-pill">未选择库存文件</view>
+    </view>
+
+    <view class="card upload-step-card fade-up card-stagger-2">
+      <view class="step-index">02</view>
+      <view class="subtitle">选择报价表</view>
+      <view class="muted step-desc">支持 xlsx、csv、txt、docx，用于自动匹配价格。</view>
+      <button class="btn btn-secondary btn-full upload-button" bindtap="choosePriceFile">选择报价表</button>
+      <view wx:if="{{priceFile}}" class="file-pill">{{priceFile.name}}</view>
+      <view wx:else class="empty-pill">未选择报价表</view>
+    </view>
+
+    <view class="card mode-card fade-up card-stagger-3">
+      <view class="step-index">03</view>
+      <view class="subtitle">库存处理方式</view>
+      <view class="muted step-desc">决定导入时是覆盖现有库存，还是按解析数量追加。</view>
+      <picker mode="selector" range="{{stockModeOptions}}" range-key="label" bindchange="onStockModeChange">
+        <view class="picker mode-picker">{{stockMode === 'add' ? '增加库存' : '覆盖库存'}}</view>
+      </picker>
+    </view>
+
+    <view class="card mode-card fade-up card-stagger-4">
+      <view class="step-index">04</view>
+      <view class="subtitle">价格处理方式</view>
+      <view class="muted step-desc">控制报价表是否覆盖现有商品价格，避免误改旧价格。</view>
+      <picker mode="selector" range="{{priceModeOptions}}" range-key="label" bindchange="onPriceModeChange">
+        <view class="picker mode-picker">
+          {{priceMode === 'only_new' ? '只给新商品写入价格' : (priceMode === 'skip' ? '不修改价格' : '覆盖价格')}}
+        </view>
+      </picker>
+    </view>
+  </view>
+</view>

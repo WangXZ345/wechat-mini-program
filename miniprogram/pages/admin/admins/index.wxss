@@ -1,0 +1,284 @@
+.admins-page {
+  min-height: 100vh;
+  padding: 24rpx;
+  box-sizing: border-box;
+  background: #F8F4ED;
+}
+
+.section {
+  margin-bottom: 22rpx;
+}
+
+.admin-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding-top: 10rpx;
+}
+
+.hero-kicker {
+  color: #8A6A43;
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.hero-title {
+  margin-top: 8rpx;
+  color: #1F1A15;
+  font-size: 48rpx;
+  font-weight: 800;
+  line-height: 1.08;
+}
+
+.hero-desc {
+  margin-top: 10rpx;
+  color: #82776B;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.admin-count-pill {
+  flex: 0 0 auto;
+  min-width: 96rpx;
+  height: 58rpx;
+  line-height: 58rpx;
+  padding: 0 20rpx;
+  border-radius: 999rpx;
+  background: #FFFDF9;
+  border: 1rpx solid #E6D8C7;
+  color: #7B6245;
+  font-size: 24rpx;
+  font-weight: 800;
+  text-align: center;
+  box-shadow: 0 8rpx 18rpx rgba(86, 62, 34, 0.06);
+}
+
+.admin-form-card,
+.admin-list-card,
+.edit-role-card,
+.log-card {
+  padding: 24rpx;
+  border-radius: 28rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.92);
+  background: linear-gradient(180deg, #FFFDF9 0%, #FCF7EF 100%);
+  box-shadow: 0 10rpx 24rpx rgba(86, 62, 34, 0.07);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 18rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 1rpx solid #EFE6DA;
+}
+
+.section-title {
+  color: #1F1A15;
+  font-size: 30rpx;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.card-desc {
+  margin-top: 6rpx;
+  color: #82776B;
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+
+.input,
+.picker {
+  width: 100%;
+  min-height: 76rpx;
+  margin-bottom: 16rpx;
+  padding: 0 22rpx;
+  border-radius: 18rpx;
+  border: 1rpx solid #E6D8C7;
+  background: #FFFCF7;
+  color: #1F1A15;
+  font-size: 27rpx;
+  box-sizing: border-box;
+}
+
+.picker {
+  display: flex;
+  align-items: center;
+  color: #7B6245;
+  font-weight: 700;
+}
+
+.form-action {
+  width: 100%;
+  border-radius: 999rpx;
+}
+
+.empty-line {
+  padding: 24rpx 0;
+  color: #82776B;
+  font-size: 24rpx;
+}
+
+.admin-item {
+  position: relative;
+  overflow: hidden;
+  padding: 20rpx 0 20rpx 18rpx;
+  border-top: 1rpx solid #EFE6DA;
+}
+
+.admin-item:first-of-type {
+  border-top: 0;
+}
+
+.admin-item-accent {
+  position: absolute;
+  left: 0;
+  top: 24rpx;
+  bottom: 24rpx;
+  width: 6rpx;
+  border-radius: 999rpx;
+  background: #B99C74;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.between {
+  justify-content: space-between;
+}
+
+.item-head {
+  align-items: flex-start;
+}
+
+.admin-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  color: #1F1A15;
+  font-size: 29rpx;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.openid {
+  margin-top: 6rpx;
+  color: #A79B8B;
+  font-size: 22rpx;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.status-pill {
+  flex: 0 0 auto;
+  max-width: 160rpx;
+  height: 44rpx;
+  line-height: 44rpx;
+  padding: 0 14rpx;
+  border-radius: 999rpx;
+  background: #EEF4EA;
+  color: #5E7C58;
+  font-size: 21rpx;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pill.disabled {
+  background: #F2E1DC;
+  color: #A94442;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12rpx;
+  margin-top: 16rpx;
+}
+
+.meta-cell {
+  min-width: 0;
+  padding: 14rpx 16rpx;
+  border-radius: 18rpx;
+  background: #F8F1E8;
+  border: 1rpx solid #EFE6DA;
+}
+
+.meta-label {
+  color: #A79B8B;
+  font-size: 21rpx;
+}
+
+.meta-value {
+  margin-top: 6rpx;
+  color: #1F1A15;
+  font-size: 25rpx;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  margin-top: 16rpx;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  flex: 1 1 180rpx;
+  min-width: 180rpx;
+  height: 58rpx;
+  line-height: 58rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  font-size: 23rpx;
+}
+
+.log-card .section-title {
+  margin-bottom: 12rpx;
+}
+
+.log-item {
+  padding: 16rpx 0;
+  border-top: 1rpx solid #EFE6DA;
+}
+
+.log-item:first-of-type {
+  border-top: 0;
+}
+
+.log-title {
+  color: #1F1A15;
+  font-size: 25rpx;
+  font-weight: 800;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.log-meta,
+.log-desc {
+  margin-top: 6rpx;
+  color: #82776B;
+  font-size: 22rpx;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+@media (min-width: 700px) {
+  .admin-form-card {
+    max-width: 760rpx;
+  }
+
+  .admin-item {
+    padding-right: 4rpx;
+  }
+}

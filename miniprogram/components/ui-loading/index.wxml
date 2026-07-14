@@ -1,0 +1,4 @@
+<view class="ui-loading {{customClass}}">
+  <view class="ui-loading-spinner"></view>
+  <view class="ui-loading-text">{{text}}</view>
+</view>

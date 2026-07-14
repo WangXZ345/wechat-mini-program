@@ -1,0 +1,150 @@
+<view class="page page-enter page-with-tabbar profile-page {{backendOnly ? 'backend-only' : ''}} {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="profile-hero">
+    <view class="profile-title">我的</view>
+  </view>
+
+  <view class="profile-layout">
+    <view class="profile-main">
+      <view class="profile-card identity-card fade-up" wx:if="{{profile && !backendOnly}}">
+        <view class="identity-link pressable" bindtap="startEditNickname">
+          <view class="avatar-shell">
+            <image wx:if="{{profile.avatarUrl}}" class="avatar-image" src="{{profile.avatarUrl}}" mode="aspectFill"></image>
+            <view wx:else class="avatar-fallback">
+              <view class="avatar-user-head"></view>
+              <view class="avatar-user-body"></view>
+            </view>
+          </view>
+          <view class="identity-copy">
+            <view class="identity-name">{{profile.nickname || '未设置昵称'}}</view>
+            <view class="identity-meta">{{profile.phoneMasked || '手机号未绑定'}}</view>
+          </view>
+          <text class="chevron">›</text>
+        </view>
+
+        <view wx:if="{{editingNickname}}" class="nickname-editor">
+          <view class="field-label">用户名</view>
+          <input
+            class="input nickname-input"
+            maxlength="20"
+            placeholder="请输入昵称"
+            value="{{nicknameDraft}}"
+            bindinput="onNicknameInput"
+            bindconfirm="saveNickname"
+            confirm-type="done"
+          ></input>
+          <view class="editor-actions">
+            <button class="btn btn-secondary btn-sm editor-btn" bindtap="cancelEditNickname" disabled="{{savingNickname}}">取消</button>
+            <button class="btn btn-dark btn-sm editor-btn" bindtap="saveNickname" loading="{{savingNickname}}" disabled="{{savingNickname}}">保存</button>
+          </view>
+        </view>
+      </view>
+
+      <view class="profile-card phone-card fade-up card-stagger-1" wx:if="{{profile && !profile.phoneMasked && showCustomerEntries}}">
+        <view class="account-row">
+          <view class="account-icon phone-icon"></view>
+          <view class="account-copy">
+            <view class="section-title">绑定手机号</view>
+            <view class="muted">用于核对订单和账款信息</view>
+          </view>
+          <view class="status-badge">未绑定</view>
+        </view>
+        <button class="btn btn-dark btn-full" bindtap="goBindPhone">绑定手机号</button>
+      </view>
+
+      <view class="profile-card phone-card fade-up card-stagger-1" wx:if="{{profile && profile.phoneMasked && showCustomerEntries}}">
+        <view class="account-row">
+          <view class="account-icon phone-icon"></view>
+          <view class="account-copy">
+            <view class="section-title">手机号管理</view>
+            <view class="muted">{{profile.phoneMasked}}</view>
+          </view>
+          <view class="status-badge">{{profile.phoneStatusText}}</view>
+        </view>
+        <view class="account-meta-grid">
+          <view class="account-meta-item">
+            <view class="meta-label">绑定方式</view>
+            <view class="meta-value">{{profile.bindMethodText}}</view>
+          </view>
+          <view class="account-meta-item">
+            <view class="meta-label">绑定时间</view>
+            <view class="meta-value">{{profile.phoneBoundAtText}}</view>
+          </view>
+        </view>
+        <button class="btn btn-secondary btn-full" bindtap="goBindPhone">更换手机号</button>
+      </view>
+    </view>
+
+    <view class="profile-side">
+      <view class="section-panel service-panel fade-up card-stagger-2" wx:if="{{profile && showCustomerEntries}}">
+        <view class="panel-heading">
+          <view class="section-title">订单与服务</view>
+        </view>
+        <view class="entry-grid">
+          <button class="entry-tile pressable" bindtap="goOrders">
+            <view class="entry-icon order-icon"></view>
+            <view class="entry-title">我的订单</view>
+            <view class="entry-desc">进度与付款</view>
+          </button>
+          <button class="entry-tile pressable" bindtap="goAddressList">
+            <view class="entry-icon address-icon"></view>
+            <view class="entry-title">收货地址</view>
+            <view class="entry-desc">配送信息</view>
+          </button>
+          <button class="entry-tile pressable" bindtap="goAfterSales">
+            <view class="entry-icon service-icon"></view>
+            <view class="entry-title">我的售后</view>
+            <view class="entry-desc">申请与进度</view>
+          </button>
+        </view>
+      </view>
+
+      <view class="profile-card admin-card fade-up card-stagger-3" wx:if="{{showAdminEntry}}">
+        <view class="account-row admin-heading">
+          <view class="account-icon admin-icon"></view>
+          <view class="account-copy">
+            <view class="section-title">后台管理</view>
+            <view wx:if="{{roleHint}}" class="muted">{{roleHint}}</view>
+          </view>
+          <view class="role-pill">{{roleName}}</view>
+        </view>
+        <button class="btn btn-dark btn-full" bindtap="goAdmin">进入后台</button>
+      </view>
+
+      <view class="section-panel fade-up card-stagger-4" wx:if="{{profile}}">
+        <view class="panel-heading">
+          <view class="section-title">账号安全</view>
+        </view>
+        <view class="entry-list">
+          <view class="link-row pressable" bindtap="goPasswordSettings">
+            <view class="link-main">
+              <view class="row-icon lock-icon"></view>
+              <text>设置 / 修改密码</text>
+            </view>
+            <text class="chevron">›</text>
+          </view>
+        </view>
+      </view>
+
+      <view class="section-panel fade-up card-stagger-5" wx:if="{{profile && showCustomerEntries}}">
+        <view class="panel-heading">
+          <view class="section-title">协议与说明</view>
+        </view>
+        <view class="entry-list">
+          <view class="link-row pressable" bindtap="goLegal" data-page="privacy"><view class="link-main"><view class="row-icon privacy-icon"></view><text>隐私保护指引</text></view><text class="chevron">›</text></view>
+          <view class="link-row pressable" bindtap="goLegal" data-page="user-agreement"><view class="link-main"><view class="row-icon agreement-icon"></view><text>用户协议</text></view><text class="chevron">›</text></view>
+          <view class="link-row pressable" bindtap="goLegal" data-page="payment-rules"><view class="link-main"><view class="row-icon payment-rule-icon"></view><text>付款说明</text></view><text class="chevron">›</text></view>
+          <view class="link-row pressable" bindtap="goLegal" data-page="after-sale-rules"><view class="link-main"><view class="row-icon after-sale-icon"></view><text>售后规则</text></view><text class="chevron">›</text></view>
+          <view class="link-row pressable" bindtap="goLegal" data-page="defective-product-rules"><view class="link-main"><view class="row-icon defective-icon"></view><text>瑕疵商品说明</text></view><text class="chevron">›</text></view>
+        </view>
+      </view>
+
+      <view class="logout-action fade-up pressable" wx:if="{{profile}}" bindtap="logout">
+        <view class="link-main">
+          <view class="row-icon logout-icon"></view>
+          <text>退出登录</text>
+        </view>
+        <text class="chevron">›</text>
+      </view>
+    </view>
+  </view>
+</view>

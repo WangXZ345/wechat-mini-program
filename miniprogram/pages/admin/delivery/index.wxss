@@ -1,0 +1,459 @@
+.delivery-page {
+  padding-bottom: 56rpx;
+}
+
+.delivery-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 22rpx;
+  padding: 32rpx 24rpx;
+  margin: -24rpx -24rpx 24rpx;
+  border-radius: 0 0 36rpx 36rpx;
+  background:
+    radial-gradient(circle at 88% 0, rgba(255, 253, 249, 0.34), rgba(255, 253, 249, 0) 260rpx),
+    linear-gradient(135deg, #C7AE8B, #9A856B);
+  box-shadow: 0 12rpx 30rpx rgba(142, 116, 86, 0.14);
+}
+
+.delivery-hero-copy {
+  min-width: 0;
+}
+
+.eyebrow,
+.section-kicker {
+  color: rgba(31, 26, 21, 0.58);
+  font-size: 22rpx;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.eyebrow {
+  margin-bottom: 8rpx;
+}
+
+.delivery-title {
+  color: #1F1A15;
+  font-size: 52rpx;
+  font-weight: 900;
+  line-height: 1.08;
+  letter-spacing: 0;
+  white-space: normal;
+  word-break: keep-all;
+}
+
+.delivery-subtitle {
+  margin-top: 8rpx;
+  color: rgba(31, 26, 21, 0.68);
+  font-size: 26rpx;
+  line-height: 1.45;
+}
+
+.delivery-hero-panel {
+  display: flex;
+  align-items: stretch;
+  gap: 14rpx;
+  overflow-x: auto;
+}
+
+.hero-metric {
+  flex: 1;
+  min-width: 150rpx;
+  padding: 16rpx 18rpx;
+  border: 1rpx solid rgba(255, 253, 249, 0.52);
+  border-radius: 24rpx;
+  background: rgba(255, 253, 249, 0.54);
+  box-sizing: border-box;
+}
+
+.hero-value {
+  color: #1F1A15;
+  font-size: 38rpx;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.hero-label {
+  margin-top: 6rpx;
+  color: rgba(31, 26, 21, 0.66);
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.hero-filter-pill,
+.filter-summary-pill {
+  flex-shrink: 0;
+  max-width: 360rpx;
+  padding: 0 22rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 253, 249, 0.72);
+  color: #5D4528;
+  font-size: 24rpx;
+  font-weight: 800;
+  line-height: 76rpx;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filter-summary-pill {
+  max-width: 420rpx;
+  min-height: 50rpx;
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+  font-size: 23rpx;
+  line-height: 50rpx;
+}
+
+.hero-action {
+  width: 160rpx;
+}
+
+.filter-card,
+.admin-delivery-card {
+  margin-bottom: 24rpx;
+  border-color: rgba(230, 216, 199, 0.82);
+  background: linear-gradient(180deg, #FFFDF9 0%, #FCF7EF 100%);
+}
+
+.filter-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 18rpx;
+  margin-bottom: 4rpx;
+}
+
+.panel-title {
+  margin-top: 4rpx;
+  color: var(--color-text-main);
+  font-size: 30rpx;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.small-title {
+  margin-bottom: 12rpx;
+  font-size: 26rpx;
+}
+
+.filter-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+}
+
+.field {
+  flex: 1;
+  min-width: 300rpx;
+  margin-top: 16rpx;
+}
+
+.label {
+  margin-bottom: 8rpx;
+  color: #82776B;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+
+.picker-value {
+  line-height: 76rpx;
+}
+
+.mini {
+  width: 132rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  font-size: 24rpx;
+  margin: 0;
+  padding: 0;
+}
+
+.delivery-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin: 28rpx 2rpx 18rpx;
+}
+
+.section-title {
+  margin-top: 4rpx;
+  color: var(--color-text-main);
+  font-size: 36rpx;
+  font-weight: 900;
+  line-height: 1.18;
+}
+
+.section-note {
+  flex-shrink: 0;
+  max-width: 320rpx;
+  color: var(--color-text-muted);
+  font-size: 24rpx;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.empty-desc {
+  margin-top: 8rpx;
+}
+
+.admin-delivery-card {
+  position: relative;
+  overflow: hidden;
+  padding-top: 28rpx;
+  border-radius: 32rpx;
+}
+
+.delivery-card-accent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 8rpx;
+  background: linear-gradient(90deg, #C7AE8B, rgba(199, 174, 139, 0.18));
+}
+
+.delivery-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.delivery-title-block {
+  min-width: 0;
+}
+
+.delivery-order-title {
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.delivery-order-no {
+  margin-top: 8rpx;
+  word-break: break-all;
+}
+
+.delivery-status {
+  flex-shrink: 0;
+  max-width: 180rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-completed,
+.status-picked_up {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.status-shipped {
+  background: #EAE2D5;
+  color: #71583A;
+}
+
+.status-after_sales {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+}
+
+.delivery-info-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14rpx;
+  margin-top: 18rpx;
+}
+
+.info-panel {
+  min-width: 0;
+  padding: 16rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.72);
+  border-radius: 22rpx;
+  background: rgba(255, 253, 249, 0.68);
+}
+
+.info-label {
+  color: var(--color-text-muted);
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.info-main {
+  margin-top: 6rpx;
+  color: var(--color-text-main);
+  font-size: 26rpx;
+  font-weight: 800;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.info-sub {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.delivery-total-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-top: 18rpx;
+  padding: 18rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.72);
+  border-radius: 24rpx;
+  background: rgba(255, 247, 234, 0.82);
+}
+
+.delivery-total {
+  margin-top: 6rpx;
+  color: var(--color-money);
+  font-size: 34rpx;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.delivery-type-pill {
+  flex-shrink: 0;
+  max-width: 200rpx;
+  padding: 8rpx 16rpx;
+  border-radius: 999rpx;
+  background: #FFFDF9;
+  color: #5D4528;
+  font-size: 24rpx;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fulfillment-panel {
+  margin-top: 18rpx;
+  padding: 18rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.72);
+  border-radius: 24rpx;
+  background: rgba(255, 253, 249, 0.68);
+}
+
+.fulfillment-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0 16rpx;
+}
+
+.address {
+  margin-top: 8rpx;
+  line-height: 1.55;
+  word-break: break-all;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 140rpx;
+  padding: 18rpx;
+  border: 1rpx solid #E6D8C7;
+  border-radius: 18rpx;
+  box-sizing: border-box;
+  background: #FFFDF9;
+  font-size: 26rpx;
+  line-height: 1.55;
+}
+
+.remark-field {
+  min-width: 0;
+}
+
+.actions {
+  gap: 12rpx;
+  margin-top: 16rpx;
+  flex-wrap: wrap;
+}
+
+.secondary-actions {
+  margin-top: 12rpx;
+}
+
+.small {
+  flex: 1;
+  min-width: 160rpx;
+  height: 68rpx;
+  line-height: 68rpx;
+  font-size: 24rpx;
+}
+
+.read-only-note,
+.image-text {
+  margin-top: 14rpx;
+  padding-top: 14rpx;
+  border-top: 1rpx solid #EFE6DA;
+}
+
+.image-text {
+  word-break: break-all;
+}
+
+.delivery-page.is-landscape .delivery-hero {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.delivery-page.is-landscape .delivery-hero-copy {
+  flex: 1 1 320rpx;
+}
+
+.delivery-page.is-landscape .delivery-hero-panel {
+  flex: 1 1 460rpx;
+}
+
+.delivery-page.is-landscape .hero-action {
+  flex: 0 0 150rpx;
+}
+
+.delivery-page.is-landscape .filter-card {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+}
+
+.delivery-page.is-landscape .filter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.delivery-page.is-landscape .field {
+  min-width: 0;
+}
+
+.delivery-page.is-landscape .admin-delivery-card {
+  display: block;
+}
+
+.delivery-page.is-landscape .delivery-info-grid,
+.delivery-page.is-landscape .fulfillment-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.delivery-page.is-landscape .actions {
+  flex-wrap: nowrap;
+}
+
+.delivery-page.is-wide .delivery-list-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20rpx;
+}
+
+.delivery-page.is-wide .admin-delivery-card {
+  min-width: 0;
+  margin-bottom: 0;
+}

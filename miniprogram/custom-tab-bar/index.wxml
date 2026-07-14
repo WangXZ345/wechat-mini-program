@@ -1,0 +1,41 @@
+<view wx:if="{{visible}}" class="custom-tabbar {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="tabbar-list">
+    <view
+      wx:for="{{list}}"
+      wx:key="pagePath"
+      class="tabbar-item pressable {{selected === index ? 'active' : ''}}"
+      data-index="{{index}}"
+      bindtap="switchTab"
+    >
+      <view wx:if="{{selected === index}}" class="active-pill motion-tab-pill"></view>
+      <view class="icon-wrap">
+        <view wx:if="{{item.icon === 'bag'}}" class="tab-icon icon-bag">
+          <view class="bag-handle"></view>
+        </view>
+
+        <view wx:elif="{{item.icon === 'cart'}}" class="tab-icon icon-cart">
+          <view class="cart-handle"></view>
+          <view class="cart-basket"></view>
+          <view class="cart-wheel cart-wheel-left"></view>
+          <view class="cart-wheel cart-wheel-right"></view>
+        </view>
+
+        <view wx:elif="{{item.icon === 'order'}}" class="tab-icon icon-order">
+          <view class="order-clip"></view>
+          <view class="order-line order-line-top"></view>
+          <view class="order-line order-line-bottom"></view>
+        </view>
+
+        <view wx:else class="tab-icon icon-profile">
+          <view class="admin-head"></view>
+          <view class="admin-body"></view>
+        </view>
+
+        <view wx:if="{{item.badge && cartBadge > 0}}" class="cart-badge">
+          {{cartBadge > 99 ? '99+' : cartBadge}}
+        </view>
+      </view>
+      <view class="tabbar-text">{{item.text}}</view>
+    </view>
+  </view>
+</view>

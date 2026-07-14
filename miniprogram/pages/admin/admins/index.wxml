@@ -1,0 +1,90 @@
+<view class="page admins-page page-enter">
+  <view class="admin-hero section">
+    <view>
+      <view class="hero-kicker">系统权限</view>
+      <view class="hero-title">管理员管理</view>
+      <view class="hero-desc">管理后台人员、角色和权限变更记录。</view>
+    </view>
+    <view class="admin-count-pill">{{admins.length}} 人</view>
+  </view>
+
+  <view class="card section admin-form-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">新增管理员</view>
+        <view class="card-desc">录入人员信息后分配后台角色。</view>
+      </view>
+    </view>
+    <input class="input" placeholder="姓名" value="{{form.name}}" data-key="name" bindinput="onInput" />
+    <input class="input" placeholder="手机号（可选）" value="{{form.phone}}" data-key="phone" bindinput="onInput" />
+    <input class="input" placeholder="openid" value="{{form.openid}}" data-key="openid" bindinput="onInput" />
+    <picker range="{{roleOptions}}" range-key="label" value="{{roleIndex}}" bindchange="onRoleChange">
+      <view class="picker">角色：{{roleOptions[roleIndex].label}}</view>
+    </picker>
+    <button class="btn btn-primary form-action" bindtap="createAdmin">新增管理员</button>
+  </view>
+
+  <view class="card section admin-list-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">管理员列表</view>
+        <view class="card-desc">启停账号和调整角色前会保留操作记录。</view>
+      </view>
+    </view>
+    <view wx:if="{{loading}}" class="empty-line">加载中...</view>
+    <view wx:elif="{{!admins.length}}" class="empty-line">暂无管理员</view>
+    <view wx:for="{{admins}}" wx:key="_id" class="admin-item">
+      <view class="admin-item-accent"></view>
+      <view class="row between item-head">
+        <view class="admin-main">
+          <view class="name">{{item.name || item.openid}}</view>
+          <view class="openid">{{item.openid}}</view>
+        </view>
+        <view class="status-pill {{item.status === 'disabled' ? 'disabled' : ''}}">{{item.status}}</view>
+      </view>
+      <view class="meta-grid">
+        <view class="meta-cell">
+          <view class="meta-label">角色</view>
+          <view class="meta-value">{{item.roleName || item.role}}</view>
+        </view>
+        <view class="meta-cell">
+          <view class="meta-label">权限</view>
+          <view class="meta-value">{{item.permissions ? item.permissions.length : 0}} 个</view>
+        </view>
+      </view>
+      <view class="row actions">
+        <button class="btn btn-secondary action-btn" bindtap="startEditRole" data-id="{{item._id || item.id}}">编辑角色</button>
+        <button wx:if="{{item.status !== 'disabled'}}" class="btn btn-secondary action-btn" bindtap="toggleStatus" data-id="{{item._id || item.id}}" data-disabled="true">禁用</button>
+        <button wx:else class="btn btn-secondary action-btn" bindtap="toggleStatus" data-id="{{item._id || item.id}}" data-disabled="false">启用</button>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{editingAdminId}}" class="card section edit-role-card">
+    <view class="section-title">编辑角色</view>
+    <picker range="{{roleOptions}}" range-key="label" value="{{editRoleIndex}}" bindchange="onEditRoleChange">
+      <view class="picker">新角色：{{roleOptions[editRoleIndex].label}}</view>
+    </picker>
+    <button class="btn btn-primary form-action" bindtap="saveRole">保存角色</button>
+  </view>
+
+  <view class="card section log-card">
+    <view class="section-title">权限变更日志</view>
+    <view wx:if="{{!permissionLogs.length}}" class="empty-line">暂无权限变更</view>
+    <view wx:for="{{permissionLogs}}" wx:key="_id" class="log-item">
+      <view class="log-title">{{item.targetOpenid}}</view>
+      <view class="log-meta">{{item.beforeRole}} -> {{item.afterRole}}</view>
+      <view class="log-desc">{{item.reason}}</view>
+    </view>
+  </view>
+
+  <view class="card section log-card">
+    <view class="section-title">最近后台操作</view>
+    <view wx:if="{{!logs.length}}" class="empty-line">暂无操作日志</view>
+    <view wx:for="{{logs}}" wx:key="_id" class="log-item">
+      <view class="log-title">{{item.action}} / {{item.resourceType}}</view>
+      <view class="log-meta">{{item.operatorOpenid}}</view>
+      <view class="log-desc">{{item.description}}</view>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,262 @@
+.admin-recommend-page {
+  background: #F8F4ED;
+}
+
+.admin-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding-top: 10rpx;
+  margin-bottom: 12rpx;
+}
+
+.hero-kicker {
+  color: #8A6A43;
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.hero-title {
+  margin-top: 8rpx;
+  color: #1F1A15;
+  font-size: 48rpx;
+  font-weight: 800;
+  line-height: 1.08;
+}
+
+.hero-desc {
+  margin-top: 10rpx;
+  color: #82776B;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.hero-action {
+  flex: 0 0 auto;
+  min-width: 118rpx;
+  height: 58rpx;
+  line-height: 58rpx;
+  padding: 0 20rpx;
+  border-radius: 999rpx;
+  font-size: 23rpx;
+}
+
+.summary-strip {
+  display: flex;
+  gap: 12rpx;
+  overflow: hidden;
+  margin-bottom: 18rpx;
+}
+
+.summary-pill {
+  flex: 0 0 auto;
+  height: 52rpx;
+  line-height: 52rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  background: #FFFDF9;
+  border: 1rpx solid #E6D8C7;
+  color: #7B6245;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.loading-panel {
+  margin-bottom: 18rpx;
+}
+
+.recommend-card {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 20rpx;
+  padding: 24rpx;
+  border-radius: 28rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.92);
+  background: linear-gradient(180deg, #FFFDF9 0%, #FCF7EF 100%);
+  box-shadow: 0 10rpx 24rpx rgba(86, 62, 34, 0.07);
+}
+
+.recommend-accent {
+  position: absolute;
+  left: 0;
+  top: 24rpx;
+  bottom: 24rpx;
+  width: 6rpx;
+  border-radius: 999rpx;
+  background: #B99C74;
+}
+
+.section-head {
+  align-items: flex-start;
+  gap: 18rpx;
+  padding-bottom: 18rpx;
+  border-bottom: 1rpx solid #EFE6DA;
+}
+
+.section-head-copy {
+  min-width: 0;
+}
+
+.section-title {
+  color: #1F1A15;
+  font-size: 31rpx;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.section-key {
+  margin-top: 6rpx;
+  color: #A79B8B;
+  font-size: 22rpx;
+  word-break: break-all;
+}
+
+.switch-block {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.state-pill {
+  height: 44rpx;
+  line-height: 44rpx;
+  padding: 0 14rpx;
+  border-radius: 999rpx;
+  background: #EFE6DA;
+  color: #82776B;
+  font-size: 21rpx;
+  font-weight: 800;
+}
+
+.state-pill.enabled {
+  background: #EEF4EA;
+  color: #5E7C58;
+}
+
+.config-grid {
+  display: grid;
+  gap: 16rpx;
+  margin-top: 20rpx;
+}
+
+.field-block {
+  min-width: 0;
+}
+
+.label {
+  margin-bottom: 8rpx;
+  color: #82776B;
+  font-size: 23rpx;
+  font-weight: 700;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.picker {
+  margin-top: 16rpx;
+  padding: 18rpx;
+  border-radius: 14rpx;
+  border: 1rpx solid #E6D8C7;
+  background: #FFFCF7;
+  color: #7B6245;
+  font-size: 26rpx;
+}
+
+.preview-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14rpx;
+  margin-top: 20rpx;
+}
+
+.preview-title {
+  color: #1F1A15;
+  font-size: 26rpx;
+  font-weight: 800;
+}
+
+.preview-count {
+  color: #A79B8B;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.product-scroll {
+  white-space: nowrap;
+  margin-top: 12rpx;
+  margin-left: -4rpx;
+}
+
+.product-row {
+  display: flex;
+  gap: 14rpx;
+}
+
+.product-mini {
+  flex: 0 0 180rpx;
+  width: 180rpx;
+  padding: 8rpx;
+  border-radius: 20rpx;
+  background: #FFFDF9;
+  border: 1rpx solid #EFE6DA;
+  white-space: normal;
+  box-sizing: border-box;
+}
+
+.product-image {
+  width: 162rpx;
+  height: 126rpx;
+  border-radius: 14rpx;
+  background: #E6D8C7;
+}
+
+.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #BBAA96;
+  font-size: 22rpx;
+}
+
+.product-name {
+  height: 60rpx;
+  margin-top: 8rpx;
+  color: #1F1A15;
+  font-size: 24rpx;
+  line-height: 30rpx;
+  overflow: hidden;
+}
+
+.mini-meta {
+  margin-top: 4rpx;
+  font-size: 22rpx;
+}
+
+.empty-preview {
+  margin-top: 12rpx;
+}
+
+.save-btn {
+  margin-top: 20rpx;
+  width: 100%;
+  border-radius: 999rpx;
+}
+
+.sticky-sort {
+  margin: 20rpx 0 40rpx;
+  width: 100%;
+  border-radius: 999rpx;
+}
+
+@media (min-width: 700px) {
+  .config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -1,0 +1,116 @@
+<view class="page page-enter payment-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}" wx:if="{{account}}">
+  <ui-skeleton wx:if="{{loading}}" count="{{3}}" showThumb="{{false}}"></ui-skeleton>
+
+  <block wx:if="{{!loading}}">
+    <view class="payment-header">
+      <view class="payment-header-copy">
+        <view class="eyebrow">订单付款</view>
+        <view class="page-title">付款确认</view>
+        <view class="muted">核对本订单金额，选择一种付款方式</view>
+      </view>
+      <view class="payment-state-pill">{{currentOrderPending ? '待财务确认' : '待付款'}}</view>
+    </view>
+
+    <view class="card section amount-card payment-main-card">
+      <view class="amount-label">本订单待付</view>
+      <view class="pay-amount">￥{{account.unpaidText}}</view>
+      <view class="amount-caption">线下付款提交凭证后进入财务确认，不会自动标记为已付款。</view>
+      <view class="amount-grid">
+        <view class="amount-item"><text>账户待付</text><text>￥{{account.totalText}}</text></view>
+        <view class="amount-item"><text>历史未付</text><text>￥{{account.historyText}}</text></view>
+        <view class="amount-item"><text>订单已付</text><text>￥{{account.paidText}}</text></view>
+      </view>
+      <view wx:if="{{hasPendingPayment && !currentOrderPending}}" class="pending-summary"><text>账户待确认</text><text>￥{{account.pendingText}}</text></view>
+      <view wx:if="{{currentOrderPending}}" class="notice notice-warning warning">当前订单付款正在等待财务确认，请勿重复提交。</view>
+    </view>
+
+    <view class="card section payment-card">
+      <view class="payment-section-head">
+        <view>
+          <view class="section-kicker">支付方式</view>
+          <view class="subtitle">选择付款方式</view>
+        </view>
+        <view class="section-count">{{paymentMethods.length}} 种</view>
+      </view>
+      <view wx:if="{{!paymentMethods.length}}" class="empty">暂无可用支付方式，请联系商家。</view>
+      <view wx:if="{{paymentMethods.length}}" class="method-list">
+        <view wx:for="{{paymentMethods}}" wx:key="paymentMethodId" class="method-card {{item.selected ? 'selected' : ''}} {{item.disabled ? 'disabled' : ''}}" bindtap="selectMethod" data-id="{{item.paymentMethodId}}">
+          <view class="method-select-mark {{item.selected ? 'selected' : ''}}"><view wx:if="{{item.selected}}" class="method-select-dot"></view></view>
+          <view class="method-copy">
+            <view class="method-title-row">
+              <view class="method-name">{{item.paymentName}}</view>
+              <view wx:if="{{item.tagText}}" class="recommend">{{item.tagText}}</view>
+            </view>
+            <view class="method-type">{{item.typeText}}</view>
+            <view wx:if="{{item.description}}" class="method-desc">{{item.description}}</view>
+            <view wx:if="{{item.extraTips}}" class="method-extra">{{item.extraTips}}</view>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{selectedMethod && (selectedMethod.paymentType === 'wechat_qr' || selectedMethod.paymentType === 'alipay_qr' || selectedMethod.paymentType === 'custom')}}" class="card section payment-card">
+      <view class="payment-section-head">
+        <view>
+          <view class="section-kicker">收款信息</view>
+          <view class="subtitle">{{selectedMethod.paymentName}}</view>
+        </view>
+      </view>
+      <image wx:if="{{selectedMethod.qrCodeUrl}}" class="pay-qr" src="{{selectedMethod.qrCodeUrl}}" mode="aspectFit" bindtap="previewQr"></image>
+      <view wx:else class="empty compact-empty">收款二维码暂未配置</view>
+      <button wx:if="{{selectedMethod.qrCodeUrl}}" class="btn btn-secondary small" bindtap="previewQr">预览二维码</button>
+      <view class="muted pay-hint">付款后请上传截图，财务确认后才算已付款。</view>
+    </view>
+
+    <view wx:if="{{selectedMethod && selectedMethod.paymentType === 'bank_transfer'}}" class="card section payment-card">
+      <view class="payment-section-head">
+        <view>
+          <view class="section-kicker">收款信息</view>
+          <view class="subtitle">银行卡转账</view>
+        </view>
+      </view>
+      <view class="bank-row"><text>收款户名</text><text>{{selectedMethod.bankAccountName}}</text><button class="btn btn-secondary tiny" bindtap="copyText" data-text="{{selectedMethod.bankAccountName}}">复制</button></view>
+      <view class="bank-row"><text>银行名称</text><text>{{selectedMethod.bankName}}</text><button class="btn btn-secondary tiny" bindtap="copyText" data-text="{{selectedMethod.bankName}}">复制</button></view>
+      <view class="bank-row"><text>开户支行</text><text>{{selectedMethod.bankBranchName}}</text><button class="btn btn-secondary tiny" bindtap="copyText" data-text="{{selectedMethod.bankBranchName}}">复制</button></view>
+      <view class="bank-row"><text>银行卡号</text><text>{{selectedMethod.bankCardNo}}</text><button class="btn btn-secondary tiny" bindtap="copyText" data-text="{{selectedMethod.bankCardNo}}">复制</button></view>
+      <view class="bank-row"><text>转账备注</text><text>{{selectedMethod.transferRemark}}</text><button class="btn btn-secondary tiny" bindtap="copyText" data-text="{{selectedMethod.transferRemark}}">复制</button></view>
+      <button class="btn btn-secondary copy-all" bindtap="copyAllBankInfo">一键复制全部收款信息</button>
+      <view class="muted pay-hint">转账后请上传截图，财务确认后才算已付款。</view>
+    </view>
+
+    <view wx:if="{{selectedMethod && selectedMethod.paymentType === 'wechat_pay'}}" class="card section payment-card">
+      <view class="payment-section-head">
+        <view>
+          <view class="section-kicker">线上支付</view>
+          <view class="subtitle">微信支付</view>
+        </view>
+      </view>
+      <view class="muted pay-hint">如商户配置未完成，系统会提示“微信支付暂未启用”，不会把订单改成已付款。</view>
+      <button class="btn btn-primary submit-btn" bindtap="startWechatPay" loading="{{paying}}" disabled="{{paying}}">{{paying ? '支付中' : '微信支付'}}</button>
+    </view>
+
+    <view wx:if="{{selectedMethod && selectedMethod.paymentType !== 'wechat_pay'}}" class="card section payment-card proof-card">
+      <view class="row between upload-title-row">
+        <view>
+          <view class="section-kicker">付款凭证</view>
+          <view class="subtitle">上传付款截图</view>
+        </view>
+        <view class="upload-count">已选 {{localImages.length}} / {{maxScreenshotCount}} 张</view>
+      </view>
+      <view class="muted pay-hint">付款截图仅用于财务核对订单付款，不会自动标记为已付款。</view>
+      <view class="upload-grid">
+        <view wx:for="{{localImages}}" wx:key="*this" class="screenshot-cell upload-preview-cell">
+          <image class="preview" src="{{item}}" mode="aspectFill" bindtap="previewScreenshot" data-url="{{item}}"></image>
+          <view class="remove upload-remove" bindtap="removeScreenshot" data-index="{{index}}">删除</view>
+        </view>
+        <view wx:if="{{localImages.length < maxScreenshotCount}}" class="upload-box" bindtap="chooseImages">
+          <view class="upload-icon">＋</view>
+          <view class="upload-title">上传截图</view>
+          <view class="muted">最多 {{maxScreenshotCount}} 张</view>
+        </view>
+      </view>
+      <textarea class="textarea remark" maxlength="300" placeholder="付款备注，可选" value="{{remark}}" bindinput="onRemarkInput"></textarea>
+      <button class="btn btn-primary submit-btn" bindtap="submitOfflineProof" disabled="{{submitting || currentOrderPending}}">{{submitting ? '提交中' : (currentOrderPending ? '等待财务确认' : '提交付款凭证')}}</button>
+    </view>
+  </block>
+</view>

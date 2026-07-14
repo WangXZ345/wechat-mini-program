@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "客户管理",
+  "usingComponents": {
+    "ui-skeleton": "/components/ui-skeleton/index"
+  }
+}

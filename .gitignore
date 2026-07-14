@@ -1,0 +1,45 @@
+# Dependencies and generated packages
+**/node_modules/
+**/miniprogram_npm/
+
+# Build, test, and coverage output
+admin-web/dist/
+admin-web/playwright-report/
+admin-web/test-results/
+admin-web/coverage/
+admin-web/.tooling/
+*.tsbuildinfo
+
+# Local environment and credentials
+.env
+.env.*.local
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+project.private.config.json
+
+# Local AI/tool runtime state
+.agents/
+.claude/
+.codex/
+.codex-runtime/
+.codex-cloudfunction-deploy/
+.superpowers/
+
+# Logs and generated operation reports
+*.log
+.codex-inventory-audit.txt
+deploy-*-results.json
+preview-*-info.json
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.tmp
+

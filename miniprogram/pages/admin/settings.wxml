@@ -1,0 +1,118 @@
+<view class="page settings-page page-enter">
+  <view class="settings-hero section">
+    <view>
+      <view class="hero-kicker">系统配置</view>
+      <view class="hero-title">业务配置</view>
+      <view class="hero-desc">维护付款方式、自提信息和合并发货规则。</view>
+    </view>
+    <view class="settings-pill">管理员</view>
+  </view>
+
+  <view class="config-strip section">
+    <view class="config-pill">支付</view>
+    <view class="config-pill">自提</view>
+    <view class="config-pill">合并发货</view>
+  </view>
+
+  <view class="card section config-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">支付配置</view>
+        <view class="card-desc">每行填写一个付款方式，客户付款页会读取可用配置。</view>
+      </view>
+    </view>
+    <textarea class="textarea area" value="{{text}}" bindinput="onInput" placeholder="微信转账&#10;支付宝&#10;银行转账"></textarea>
+    <button class="btn btn-primary config-action" bindtap="save">保存配置</button>
+  </view>
+
+  <view class="card section config-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">自提信息</view>
+        <view class="card-desc">展示给选择自提的客户，用于到店核对和沟通。</view>
+      </view>
+    </view>
+    <view class="field-grid">
+      <view class="field">
+        <view class="label">自提地址</view>
+        <input class="input" value="{{pickup.pickupLocation}}" data-field="pickupLocation" bindinput="onPickupInput" placeholder="请输入自提地址"></input>
+      </view>
+      <view class="field">
+        <view class="label">自提时间说明</view>
+        <input class="input" value="{{pickup.pickupTimeNote}}" data-field="pickupTimeNote" bindinput="onPickupInput" placeholder="例如：周一至周六 10:00-18:00"></input>
+      </view>
+      <view class="field">
+        <view class="label">联系人</view>
+        <input class="input" value="{{pickup.pickupContact}}" data-field="pickupContact" bindinput="onPickupInput" placeholder="请输入联系人"></input>
+      </view>
+      <view class="field">
+        <view class="label">联系电话</view>
+        <input class="input" value="{{pickup.pickupPhone}}" data-field="pickupPhone" bindinput="onPickupInput" placeholder="请输入联系电话"></input>
+      </view>
+    </view>
+    <view class="field note-field">
+      <view class="label">自提备注</view>
+      <textarea class="textarea note-area" value="{{pickup.pickupRemark}}" data-field="pickupRemark" bindinput="onPickupInput" placeholder="可选，展示给选择自提的客户"></textarea>
+    </view>
+    <button class="btn btn-primary config-action" bindtap="savePickup">保存自提配置</button>
+  </view>
+
+  <view class="card section config-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">合并发货配置</view>
+        <view class="card-desc">控制后台合并发货的风险边界和默认物流信息。</view>
+      </view>
+    </view>
+    <view class="switch-row row between">
+      <view class="switch-copy">
+        <view class="label">启用合并发货</view>
+        <view class="muted">后台可将同一客户多单关联同一物流</view>
+      </view>
+      <switch checked="{{mergeSettings.enableMergeShipment}}" data-field="enableMergeShipment" bindchange="onMergeSwitch"></switch>
+    </view>
+    <view class="switch-row row between">
+      <view class="switch-copy">
+        <view class="label">允许不同地址合并</view>
+        <view class="muted">默认关闭，仅建议超级管理员特殊处理</view>
+      </view>
+      <switch checked="{{mergeSettings.allowMergeDifferentAddress}}" data-field="allowMergeDifferentAddress" bindchange="onMergeSwitch"></switch>
+    </view>
+    <view class="switch-row row between">
+      <view class="switch-copy">
+        <view class="label">允许部分付款发货</view>
+        <view class="muted">默认关闭，避免未结清订单发货</view>
+      </view>
+      <switch checked="{{mergeSettings.allowPartialPaidShipment}}" data-field="allowPartialPaidShipment" bindchange="onMergeSwitch"></switch>
+    </view>
+    <view class="switch-row row between">
+      <view class="switch-copy">
+        <view class="label">发货前要求已付款</view>
+        <view class="muted">关闭后未付款订单也可进入发货校验</view>
+      </view>
+      <switch checked="{{mergeSettings.requirePaidBeforeShipment}}" data-field="requirePaidBeforeShipment" bindchange="onMergeSwitch"></switch>
+    </view>
+    <view class="field-grid merge-grid">
+      <view class="field">
+        <view class="label">单次最多订单数</view>
+        <input class="input" type="number" value="{{mergeSettings.maxOrdersPerMergeShipment}}" data-field="maxOrdersPerMergeShipment" bindinput="onMergeInput"></input>
+      </view>
+      <view class="field">
+        <view class="label">单次最多商品件数</view>
+        <input class="input" type="number" value="{{mergeSettings.maxItemsPerMergeShipment}}" data-field="maxItemsPerMergeShipment" bindinput="onMergeInput"></input>
+      </view>
+      <view class="field">
+        <view class="label">默认快递公司</view>
+        <input class="input" value="{{mergeSettings.defaultShippingCompany}}" data-field="defaultShippingCompany" bindinput="onMergeInput" placeholder="可选"></input>
+      </view>
+    </view>
+    <view class="switch-row row between">
+      <view class="switch-copy">
+        <view class="label">未发货允许取消</view>
+        <view class="muted">取消只解除发货关联</view>
+      </view>
+      <switch checked="{{mergeSettings.allowCancelMergeShipmentBeforeShipped}}" data-field="allowCancelMergeShipmentBeforeShipped" bindchange="onMergeSwitch"></switch>
+    </view>
+    <button class="btn btn-primary config-action" bindtap="saveMergeSettings">保存合并发货配置</button>
+  </view>
+</view>

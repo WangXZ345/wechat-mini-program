@@ -1,0 +1,60 @@
+<view class="page bind-phone-page motion-page-enter">
+  <view class="bind-hero">
+    <view class="bind-hero-copy">
+      <view class="section-kicker">账号安全</view>
+      <view class="page-title">{{profile && profile.phoneMasked ? '更换手机号' : '绑定手机号'}}</view>
+      <view class="page-desc">
+        {{profile && profile.phoneMasked ? '更换后，新号码将用于后续订单联系。' : '用于订单核对、发货沟通和售后联系。'}}
+      </view>
+    </view>
+    <view class="phone-state-pill {{profile && profile.phoneMasked ? 'bound' : ''}}">
+      <view class="phone-state-dot"></view>
+      {{profile && profile.phoneMasked ? '已绑定' : '未绑定'}}
+    </view>
+  </view>
+
+  <view class="current-phone-row" wx:if="{{profile && profile.phoneMasked}}">
+    <view class="current-phone-label">当前号码</view>
+    <view class="current-phone-value">{{profile.phoneMasked}}</view>
+  </view>
+
+  <view class="bind-panel">
+    <view class="bind-panel-head">
+      <view class="section-title">绑定方式</view>
+      <view class="panel-note">推荐微信验证</view>
+    </view>
+    <button
+      class="btn btn-primary wechat-bind-action"
+      open-type="getPhoneNumber"
+      bindgetphonenumber="onGetPhoneNumber"
+      loading="{{submitting}}"
+      disabled="{{submitting}}"
+    >
+      使用微信手机号
+    </button>
+
+    <view class="method-divider">
+      <view class="divider-line"></view>
+      <view class="divider-text">或手动填写</view>
+      <view class="divider-line"></view>
+    </view>
+
+    <view class="manual-bind-row">
+      <input
+        class="input phone-input"
+        type="number"
+        maxlength="11"
+        placeholder="请输入手机号"
+        value="{{phoneNumber}}"
+        bindinput="onPhoneInput"
+      ></input>
+      <button
+        class="btn btn-secondary manual-bind-action"
+        bindtap="submitManual"
+        loading="{{submitting}}"
+        disabled="{{submitting}}"
+      >提交</button>
+    </view>
+    <view class="manual-bind-note">手动填写的号码将标记为未验证</view>
+  </view>
+</view>

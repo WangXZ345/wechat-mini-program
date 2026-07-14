@@ -1,0 +1,60 @@
+:root {
+  --el-color-primary: #9a7d5b;
+  --el-color-primary-light-3: #b99c74;
+  --el-color-primary-light-5: #cbb79b;
+  --el-color-primary-light-7: #e1d5c4;
+  --el-color-primary-light-8: #eee6dc;
+  --el-color-primary-light-9: #f8f4ed;
+  --el-color-primary-dark-2: #7b6249;
+  --el-color-success: #5e7c58;
+  --el-color-warning: #a9682e;
+  --el-color-danger: #a94442;
+  --el-color-info: #64747d;
+  --el-border-color: #e6d8c7;
+  --el-border-color-light: #eee5da;
+  --el-border-color-lighter: #f3ede6;
+  --el-fill-color-light: #faf8f5;
+  --el-fill-color-lighter: #fdfbf8;
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f8f4ed;
+  --el-text-color-primary: #1f1a15;
+  --el-text-color-regular: #504940;
+  --el-text-color-secondary: #776f66;
+  --el-border-radius-base: 6px;
+  --el-border-radius-small: 4px;
+  --el-font-size-base: 14px;
+}
+
+.el-button {
+  letter-spacing: 0;
+}
+
+.el-button + .el-button {
+  margin-left: 0;
+}
+
+.el-table {
+  --el-table-header-bg-color: #f8f6f2;
+  --el-table-row-hover-bg-color: #fcf8f2;
+  --el-table-border-color: #eee5da;
+  color: var(--color-text);
+}
+
+.el-table th.el-table__cell {
+  color: #51483f;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.el-table .cell {
+  line-height: 20px;
+}
+
+.el-dialog,
+.el-drawer {
+  --el-dialog-border-radius: 8px;
+}
+
+.el-message-box {
+  border-radius: 8px;
+}

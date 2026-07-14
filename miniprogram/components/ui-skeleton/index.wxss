@@ -1,0 +1,4 @@
+.skeleton-body {
+  flex: 1;
+  padding-left: 20rpx;
+}

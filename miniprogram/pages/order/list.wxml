@@ -1,0 +1,172 @@
+<view class="page page-enter page-with-tabbar order-list-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="order-header">
+    <view class="order-title-line">
+      <view class="page-title">我的订单</view>
+      <view wx:if="{{orders.length}}" class="order-inline-count">{{orders.length}} 笔</view>
+    </view>
+  </view>
+
+  <view class="order-search-row fade-up">
+    <input
+      class="order-search-input"
+      value="{{searchInput}}"
+      placeholder="搜索订单号 / 商品名称"
+      maxlength="64"
+      confirm-type="search"
+      bindinput="onSearchInput"
+      bindconfirm="submitSearch"
+    />
+    <button class="order-filter-trigger {{activeFilterCount ? 'active' : ''}}" bindtap="openFilterDrawer">
+      筛选<text wx:if="{{activeFilterCount}}" class="order-filter-count">{{activeFilterCount}}</text>
+    </button>
+  </view>
+
+  <scroll-view wx:if="{{searchKeyword || activeFilterChips.length}}" class="active-filter-scroll" scroll-x enable-flex>
+    <view class="active-filter-track">
+      <view wx:if="{{searchKeyword}}" class="active-filter-chip">关键词：{{searchKeyword}}</view>
+      <view wx:for="{{activeFilterChips}}" wx:key="key" class="active-filter-chip">{{item.label}}</view>
+      <button class="clear-filter-button" bindtap="clearAllFilters">清除</button>
+    </view>
+  </scroll-view>
+
+  <scroll-view class="order-filter-scroll fade-up" scroll-x enable-flex>
+    <view class="order-filter-track">
+      <view
+        wx:for="{{orderFilters}}"
+        wx:key="value"
+        class="order-filter-tab pressable {{activeOrderFilter === item.value ? 'active' : ''}}"
+        data-filter="{{item.value}}"
+        bindtap="selectOrderFilter"
+      >
+        <text class="order-filter-label">{{item.label}}</text>
+        <view class="order-filter-indicator"></view>
+      </view>
+    </view>
+  </scroll-view>
+
+  <ui-skeleton wx:if="{{loading && !orders.length}}" count="{{4}}" showThumb="{{false}}"></ui-skeleton>
+
+  <view wx:if="{{loadError && !loading}}" class="notice notice-warning order-load-error">
+    <text>{{loadError}}</text>
+    <button class="btn btn-secondary retry-btn" bindtap="refreshOrders">重试</button>
+  </view>
+
+  <ui-empty
+    wx:if="{{initialized && !loading && !orders.length && !hasMore && !loadError}}"
+    icon="≡"
+    title="{{searchKeyword || activeFilterCount || activeOrderFilter !== 'all' ? '没有符合条件的订单' : '暂无订单'}}"
+    description="{{searchKeyword || activeFilterCount || activeOrderFilter !== 'all' ? '调整条件或清除筛选后重试' : '提交预订单后会显示在这里'}}">
+  </ui-empty>
+
+  <button
+    wx:if="{{initialized && !loading && !orders.length && !hasMore && !loadError && (searchKeyword || activeFilterCount || activeOrderFilter !== 'all')}}"
+    class="btn btn-secondary empty-clear-button"
+    bindtap="clearAllFilters"
+  >清除筛选</button>
+
+  <view wx:if="{{orders.length}}" class="order-grid">
+    <view wx:for="{{orders}}" wx:key="_id" class="card order order-card-modern card-press {{item.motionClass}} order-filter-{{item.orderFilter}} {{item.isPaid ? 'paid-order' : ''}}" bindtap="goDetail" data-id="{{item._id}}">
+      <view class="order-card-head">
+        <view class="order-title-block">
+          <view class="order-no">订单号 {{item.orderNo}}</view>
+          <view class="subtitle order-title">{{item.displayName}}</view>
+        </view>
+        <view class="tag order-status-tag {{item.statusClass}}">{{item.statusText}}</view>
+      </view>
+      <view class="order-summary-panel">
+        <view class="order-summary-main">
+          <view class="summary-label">订单金额</view>
+          <view class="price amount">￥{{item.totalText}}</view>
+        </view>
+        <view class="order-summary-metrics">
+          <view class="summary-metric">
+            <view class="summary-value">{{item.itemCount || 1}}</view>
+            <view class="summary-label">种类</view>
+          </view>
+          <view class="summary-divider"></view>
+          <view class="summary-metric">
+            <view class="summary-value">{{item.totalQuantity || item.quantity}}</view>
+            <view class="summary-label">数量</view>
+          </view>
+        </view>
+      </view>
+      <view class="order-next-step {{item.nextStepClass}}">
+        <view class="order-next-mark"></view>
+        <view class="order-next-copy">
+          <view class="order-next-label">下一步</view>
+          <view class="order-next-title">{{item.nextStepTitle}}</view>
+          <view class="order-next-hint">{{item.nextStepHint}}</view>
+        </view>
+      </view>
+      <view class="order-action-row">
+        <view class="tag payment-tag {{item.paymentClass}}">{{item.paymentText}}</view>
+        <view class="detail-action">详情 <text>›</text></view>
+      </view>
+      <view wx:if="{{item.showMergedShipment}}" class="merge-info">
+        <view class="merge-title">已合并发货 · {{item.shipmentStatusText}}</view>
+        <view wx:if="{{item.shippingCompanyDisplay || item.trackingNoDisplay}}" class="muted">{{item.shippingCompanyDisplay}} {{item.trackingNoDisplay}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{searchingOlderOrders}}" class="bottom-loading">
+    <view class="loading-dot"></view>
+    <text>正在查找更早订单</text>
+  </view>
+
+  <view wx:if="{{showContinueOlderSearch}}" class="older-search-action">
+    <text>暂未找到匹配订单，还可以继续查找更早记录</text>
+    <button class="btn btn-secondary older-search-button" bindtap="continueOlderSearch">继续查找更早订单</button>
+  </view>
+
+  <view wx:if="{{loadingMore}}" class="bottom-loading">
+    <view class="loading-dot"></view>
+    <text>继续加载</text>
+  </view>
+  <view wx:if="{{!loadingMore && orders.length && !hasMore}}" class="empty small-empty">没有更多订单了</view>
+
+  <view wx:if="{{filterDrawerVisible}}" class="filter-drawer-layer">
+    <view class="filter-drawer-mask" bindtap="closeFilterDrawer" catchtouchmove="noop"></view>
+    <view class="order-filter-drawer" catchtap="noop">
+      <view class="filter-drawer-head">
+        <view class="filter-drawer-title">筛选订单</view>
+        <button class="filter-close-button" bindtap="closeFilterDrawer">关闭</button>
+      </view>
+
+      <view class="filter-section">
+        <view class="filter-section-title">下单时间</view>
+        <view class="filter-option-grid">
+          <view wx:for="{{timePresets}}" wx:key="value" class="filter-option {{draftFilters.timePreset === item.value ? 'selected' : ''}}" data-value="{{item.value}}" bindtap="selectTimePreset">{{item.label}}</view>
+        </view>
+        <view wx:if="{{draftFilters.timePreset === 'custom'}}" class="custom-date-row">
+          <picker mode="date" value="{{draftFilters.startDate}}" bindchange="onCustomStartDateChange">
+            <view class="date-picker">{{draftFilters.startDate || '开始日期'}}</view>
+          </picker>
+          <text class="date-separator">至</text>
+          <picker mode="date" value="{{draftFilters.endDate}}" bindchange="onCustomEndDateChange">
+            <view class="date-picker">{{draftFilters.endDate || '结束日期'}}</view>
+          </picker>
+        </view>
+      </view>
+
+      <view class="filter-section">
+        <view class="filter-section-title">付款状态（可多选）</view>
+        <view class="filter-option-grid">
+          <view wx:for="{{paymentFilterOptions}}" wx:key="value" class="filter-option {{item.selected ? 'selected' : ''}}" data-value="{{item.value}}" bindtap="togglePaymentStatus">{{item.label}}</view>
+        </view>
+      </view>
+
+      <view class="filter-section">
+        <view class="filter-section-title">配送状态（可多选）</view>
+        <view class="filter-option-grid">
+          <view wx:for="{{deliveryFilterOptions}}" wx:key="value" class="filter-option {{item.selected ? 'selected' : ''}}" data-value="{{item.value}}" bindtap="toggleDeliveryStatus">{{item.label}}</view>
+        </view>
+      </view>
+
+      <view class="filter-drawer-actions">
+        <button class="btn btn-secondary" bindtap="resetDraftFilters">重置</button>
+        <button class="btn btn-primary" bindtap="applyDraftFilters">应用筛选</button>
+      </view>
+    </view>
+  </view>
+</view>

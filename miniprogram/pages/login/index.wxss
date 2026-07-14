@@ -1,0 +1,239 @@
+.login-page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 72rpx 36rpx 48rpx;
+  background:
+    radial-gradient(circle at 12% -8%, rgba(255, 253, 249, 0.95) 0, rgba(255, 253, 249, 0) 320rpx),
+    linear-gradient(180deg, #F9F5EE 0%, var(--color-bg) 46%, var(--color-bg-deep) 100%);
+  color: var(--color-text-main);
+}
+
+.brand {
+  padding: 20rpx 4rpx 44rpx;
+  text-align: left;
+}
+
+.login-hero {
+  position: relative;
+}
+
+.login-hero::after {
+  content: "";
+  display: block;
+  width: 96rpx;
+  height: 8rpx;
+  margin-top: 28rpx;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, #9A856B 0%, rgba(199, 174, 139, 0.18) 100%);
+}
+
+.brand-eyebrow {
+  margin-bottom: 10rpx;
+  color: var(--color-primary-deep);
+  font-size: 24rpx;
+  font-weight: 800;
+}
+
+.brand-title {
+  font-size: 58rpx;
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: 0;
+}
+
+.brand-subtitle {
+  margin-top: 16rpx;
+  color: var(--color-text-secondary);
+  font-size: 28rpx;
+  line-height: 1.45;
+}
+
+.login-card,
+.reset-panel {
+  border: 1rpx solid rgba(230, 216, 199, 0.9);
+  border-radius: 36rpx;
+  background: linear-gradient(180deg, var(--color-card) 0%, var(--color-card-warm) 100%);
+  padding: 34rpx;
+  box-shadow: var(--shadow-card);
+  box-sizing: border-box;
+}
+
+.login-card-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin-bottom: 30rpx;
+}
+
+.section-kicker {
+  color: var(--color-primary-deep);
+  font-size: 22rpx;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.login-card-title {
+  margin-top: 6rpx;
+  color: var(--color-text-main);
+  font-size: 38rpx;
+  font-weight: 800;
+  line-height: 1.18;
+}
+
+.wechat-button,
+.primary-button,
+.secondary-button {
+  height: 88rpx;
+  line-height: 88rpx;
+  border-radius: var(--radius-pill);
+  border: 0;
+  font-size: 29rpx;
+  font-weight: 800;
+}
+
+.login-card > .wechat-button,
+.login-card > .form > .primary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 0;
+  line-height: 1;
+}
+
+.wechat-button,
+.primary-button {
+  background: linear-gradient(180deg, #C7AE8B 0%, #B99C74 52%, #9A856B 100%);
+  color: #FFFDF9;
+  box-shadow: var(--shadow-button), var(--shadow-inset);
+}
+
+.wechat-button::after,
+.primary-button::after,
+.secondary-button::after,
+.helper-link::after,
+.legal-link::after {
+  border: 0;
+}
+
+.secondary-button {
+  border: 1rpx solid var(--color-border);
+  background: var(--color-card);
+  color: var(--color-primary-deep);
+}
+
+.primary-button.small {
+  height: 80rpx;
+  line-height: 80rpx;
+  font-size: 27rpx;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  margin: 34rpx 0;
+  color: var(--color-text-muted);
+  font-size: 24rpx;
+}
+
+.line {
+  flex: 1;
+  height: 1rpx;
+  background: var(--color-border-light);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 22rpx;
+}
+
+.input {
+  height: 88rpx;
+  box-sizing: border-box;
+  padding: 0 26rpx;
+  border: 1rpx solid var(--color-border);
+  border-radius: 24rpx;
+  background: var(--color-search-bg);
+  color: var(--color-text-main);
+  font-size: 28rpx;
+}
+
+.helper-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-top: 28rpx;
+}
+
+.helper-link,
+.legal-link {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--color-primary-deep);
+  font-size: 26rpx;
+  line-height: 40rpx;
+}
+
+.reset-panel {
+  margin-top: 24rpx;
+}
+
+.reset-title {
+  font-size: 32rpx;
+  font-weight: 800;
+}
+
+.reset-desc {
+  margin: 10rpx 0 22rpx;
+  color: var(--color-text-secondary);
+  font-size: 25rpx;
+  line-height: 1.55;
+}
+
+.reset-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20rpx;
+  margin-top: 22rpx;
+}
+
+.legal-links {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16rpx;
+  margin-top: 34rpx;
+  color: var(--color-text-secondary);
+}
+
+.dot {
+  color: var(--color-primary);
+}
+
+.login-page.is-landscape {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 32rpx;
+  align-items: center;
+  padding-top: 36rpx;
+}
+
+.login-page.is-landscape .brand {
+  padding: 0 0 0 12rpx;
+}
+
+.login-page.is-landscape .login-card,
+.login-page.is-landscape .reset-panel {
+  max-width: 680rpx;
+}
+
+.login-page.is-wide {
+  max-width: 1180rpx;
+  margin: 0 auto;
+}

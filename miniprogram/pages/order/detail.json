@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "订单详情",
+  "usingComponents": {
+    "ui-empty": "/components/ui-empty/index",
+    "ui-skeleton": "/components/ui-skeleton/index",
+    "ui-status-step": "/components/ui-status-step/index"
+  }
+}

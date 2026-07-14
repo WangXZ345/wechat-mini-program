@@ -1,0 +1,334 @@
+.after-sale-detail-page {
+  padding-bottom: 88rpx;
+}
+
+.after-sale-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 22rpx;
+  padding: 18rpx 2rpx 16rpx;
+  margin: 0 0 16rpx;
+}
+
+.after-sale-header-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.eyebrow {
+  color: #8A6A43;
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.after-sale-header .page-title {
+  margin-top: 6rpx;
+  color: #1F1A15;
+  font-size: 62rpx;
+  font-weight: 900;
+  line-height: 1.06;
+  letter-spacing: 0;
+}
+
+.after-sale-header .muted {
+  margin-top: 8rpx;
+  color: rgba(31, 26, 21, 0.60);
+  font-size: 25rpx;
+  line-height: 1.38;
+}
+
+.after-sale-state-pill {
+  flex-shrink: 0;
+  min-height: 50rpx;
+  line-height: 50rpx;
+  margin-top: 8rpx;
+  padding: 0 16rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.92);
+  border-radius: 999rpx;
+  background: rgba(255, 253, 249, 0.86);
+  color: #8A6A43;
+  font-size: 23rpx;
+  font-weight: 800;
+  box-shadow: 0 8rpx 20rpx rgba(142, 116, 86, 0.06);
+}
+
+.after-sale-status-card,
+.after-sale-card {
+  border-radius: 30rpx;
+  border-color: rgba(230, 216, 199, 0.82);
+  background: linear-gradient(180deg, #FFFDF9 0%, #FCF7EF 100%);
+  box-shadow: 0 10rpx 28rpx rgba(142, 116, 86, 0.08);
+}
+
+.status-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 10rpx;
+}
+
+.step-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40rpx;
+  padding: 0 16rpx;
+  margin-bottom: 12rpx;
+  border-radius: var(--radius-pill);
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.refund-summary {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.refund-summary .price {
+  margin-top: 4rpx;
+  font-size: 38rpx;
+  line-height: 1.08;
+}
+
+.refund-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38rpx;
+  margin-top: 8rpx;
+  padding: 0 14rpx;
+  border-radius: 999rpx;
+  background: #F3E7D6;
+  color: #8A6A43;
+  font-size: 21rpx;
+  font-weight: 800;
+}
+
+.progress-strip {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  margin: 18rpx 0 16rpx;
+  padding: 14rpx 16rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.76);
+  border-radius: 22rpx;
+  background: rgba(255, 252, 247, 0.78);
+}
+
+.progress-node {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.progress-node.active {
+  color: var(--color-primary-deep);
+}
+
+.progress-dot {
+  flex-shrink: 0;
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  background: var(--color-border);
+}
+
+.progress-node.active .progress-dot {
+  background: var(--color-primary-active);
+  box-shadow: 0 0 0 7rpx rgba(168, 121, 58, 0.10);
+}
+
+.progress-copy {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-line {
+  flex: 1;
+  min-width: 22rpx;
+  height: 2rpx;
+  background: rgba(230, 216, 199, 0.88);
+}
+
+.status-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10rpx;
+}
+
+.status-metric {
+  min-width: 0;
+  padding: 14rpx 16rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.72);
+  border-radius: 18rpx;
+  background: rgba(255, 253, 249, 0.74);
+}
+
+.metric-label {
+  color: var(--color-text-muted);
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.metric-value {
+  margin-top: 6rpx;
+  color: var(--color-text-main);
+  font-size: 26rpx;
+  font-weight: 800;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order-no,
+.remark {
+  margin-top: 12rpx;
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 14rpx;
+}
+
+.section-kicker {
+  margin-bottom: 4rpx;
+  color: var(--color-primary-deep);
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.section-count {
+  flex-shrink: 0;
+  max-width: 180rpx;
+  padding: 7rpx 14rpx;
+  border-radius: 999rpx;
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding: 14rpx 0;
+  border-bottom: 1rpx solid #EFE6DA;
+  color: #82776B;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.kv text:last-child {
+  max-width: 430rpx;
+  text-align: right;
+  color: #1F1A15;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.reason-text {
+  margin-top: 14rpx;
+  padding: 18rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.76);
+  border-radius: 22rpx;
+  background: rgba(255, 252, 247, 0.82);
+  line-height: 1.7;
+  color: #1F1A15;
+}
+
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14rpx;
+  margin-top: 18rpx;
+}
+
+.image-grid image {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 20rpx;
+  background: #EFE6DA;
+}
+
+.item-line {
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #EFE6DA;
+}
+
+.item-line:last-child {
+  border-bottom: 0;
+}
+
+.item-name {
+  max-width: 430rpx;
+  font-weight: 700;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 72rpx;
+  margin-top: 16rpx;
+  padding: 0 20rpx;
+  border: 1rpx solid #E7D8C5;
+  border-radius: 20rpx;
+  background: #FFFDF9;
+}
+
+.logistics-panel {
+  padding: 16rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.76);
+  border-radius: 22rpx;
+  background: rgba(255, 252, 247, 0.78);
+}
+
+.logistics-hint {
+  line-height: 1.45;
+}
+
+.action-full {
+  width: 100%;
+  margin-top: 18rpx;
+}
+
+.timeline-row {
+  position: relative;
+  display: flex;
+  gap: 16rpx;
+  padding: 16rpx 0;
+}
+
+.dot {
+  width: 18rpx;
+  height: 18rpx;
+  margin-top: 10rpx;
+  border-radius: 50%;
+  background: #B99C74;
+  box-shadow: 0 0 0 8rpx rgba(185, 156, 116, 0.14);
+}
+
+.timeline-main {
+  flex: 1;
+}
+
+.timeline-title {
+  color: #1F1A15;
+  font-weight: 800;
+}

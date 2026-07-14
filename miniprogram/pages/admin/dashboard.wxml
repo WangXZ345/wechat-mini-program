@@ -1,0 +1,70 @@
+<view class="page legacy-dashboard-page page-enter">
+  <view class="legacy-hero section">
+    <view>
+      <view class="hero-kicker">管理工作台</view>
+      <view class="hero-title">后台首页</view>
+      <view class="hero-desc">管理商品、库存、订单和账款。此页为旧入口，仍保留原权限和跳转逻辑。</view>
+    </view>
+  </view>
+
+  <view class="summary-grid section">
+    <view class="summary-card"><view class="summary-num">{{stats.products || 0}}</view><view class="summary-label">上架商品</view></view>
+    <view class="summary-card"><view class="summary-num">{{stats.zeroStockPricedProducts || 0}}</view><view class="summary-label">0 库存有价</view></view>
+    <view class="summary-card"><view class="summary-num">{{stats.pendingAdminOrders || 0}}</view><view class="summary-label">待审核</view></view>
+    <view class="summary-card"><view class="summary-num">{{stats.pendingPaymentConfirm || 0}}</view><view class="summary-label">待确认付款</view></view>
+    <view class="summary-card"><view class="summary-num">{{stats.unpaidOrders || 0}}</view><view class="summary-label">未付款订单</view></view>
+  </view>
+
+  <view class="card section menu-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">管理入口</view>
+        <view class="card-desc">按当前账号权限显示可进入的后台模块。</view>
+      </view>
+      <view class="count-pill">{{menuItems.length || 0}} 项</view>
+    </view>
+    <view class="menu-grid">
+      <button wx:for="{{menuItems}}" wx:key="url" class="btn btn-secondary menu-btn" bindtap="go" data-url="{{item.url}}">{{item.text}}</button>
+    </view>
+  </view>
+
+  <view class="card section stock-alert-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">库存预警</view>
+        <view class="card-desc">低库存和缺货商品提醒。</view>
+      </view>
+      <view class="link-pill" bindtap="go" data-url="/pages/admin/stock-alerts/index">查看全部</view>
+    </view>
+    <view class="remind-grid">
+      <view class="remind-cell"><view class="remind-label">低库存</view><view class="remind-value">{{stats.stockWarningProducts || 0}} 个</view></view>
+      <view class="remind-cell danger"><view class="remind-label">已缺货</view><view class="remind-value">{{stats.outOfStockProducts || 0}} 个</view></view>
+    </view>
+    <view wx:if="{{!stockAlerts.length}}" class="empty-note">暂无库存预警商品</view>
+    <view wx:for="{{stockAlerts}}" wx:key="_id" class="alert-row">
+      <text>{{index + 1}}. {{item.message}}</text>
+      <text class="alert-status">{{item.statusText}}</text>
+    </view>
+    <view class="dashboard-actions">
+      <button class="btn btn-secondary action-btn" bindtap="go" data-url="/pages/admin/stock-alerts/index">查看全部</button>
+      <button class="btn btn-secondary action-btn" bindtap="go" data-url="/pages/admin/products">商品管理</button>
+      <button class="btn btn-primary action-btn" loading="{{checkingStockAlerts}}" disabled="{{checkingStockAlerts}}" bindtap="checkStockAlerts">一键检查</button>
+    </view>
+  </view>
+
+  <view class="card section unsold-card" bindtap="go" data-url="/pages/admin/unsold/index">
+    <view class="card-head">
+      <view>
+        <view class="section-title">未售商品提醒</view>
+        <view class="card-desc">点击进入未售商品分析。</view>
+      </view>
+      <view class="link-pill">进入分析</view>
+    </view>
+    <view class="remind-grid">
+      <view class="remind-cell"><view class="remind-label">今日未售</view><view class="remind-value">{{unsoldSummary.todayUnsoldCount || 0}} 个</view></view>
+      <view class="remind-cell"><view class="remind-label">近 3 天</view><view class="remind-value">{{unsoldSummary.threeDaysUnsoldCount || 0}} 个</view></view>
+      <view class="remind-cell"><view class="remind-label">近 7 天</view><view class="remind-value">{{unsoldSummary.sevenDaysUnsoldCount || 0}} 个</view></view>
+      <view class="remind-cell warning"><view class="remind-label">高库存 7 天未售</view><view class="remind-value">{{unsoldSummary.highStockSevenDaysUnsoldCount || 0}} 个</view></view>
+    </view>
+  </view>
+</view>

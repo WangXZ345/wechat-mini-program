@@ -1,0 +1,204 @@
+<view class="page dashboard-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="workbench-hero section">
+    <view class="hero-topline">
+      <view class="hero-kicker">管理工作台</view>
+      <view class="hero-role">{{adminProfile.roleName || "后台角色"}}</view>
+    </view>
+    <view class="workbench-title">工作台</view>
+    <view class="hero-subtitle">处理今日待办、查看权限内数据，并进入高频业务模块</view>
+    <view class="hero-meta">
+      <view class="hero-update">更新：{{updatedAt || "暂无"}}</view>
+    </view>
+    <view class="range-panel">
+      <view class="range-label">时间范围</view>
+      <scroll-view class="range-scroll" scroll-x enhanced show-scrollbar="{{false}}">
+        <view class="range-chip-row">
+          <view wx:for="{{rangeOptions}}" wx:key="value" class="range-chip {{index == rangeIndex ? 'is-active' : ''}}" bindtap="onRangeChipTap" data-index="{{index}}">{{item.label}}</view>
+        </view>
+      </scroll-view>
+      <picker mode="selector" range="{{rangeOptions}}" range-key="label" value="{{rangeIndex}}" bindchange="onRangeChange">
+        <view class="range-picker">切换</view>
+      </picker>
+    </view>
+  </view>
+
+  <view wx:if="{{errorMessage}}" class="card section error-card">
+    <view class="subtitle">加载失败</view>
+    <view class="muted error-text">{{errorMessage}}</view>
+    <button class="btn btn-primary retry-btn" bindtap="retry" loading="{{loading}}" disabled="{{loading}}">重试</button>
+  </view>
+
+  <ui-skeleton wx:if="{{loading && !summaryCards.length}}" count="{{4}}" showThumb="{{false}}"></ui-skeleton>
+
+  <view wx:if="{{initialized && !loading && !summaryCards.length && !errorMessage}}" class="card section">
+    <ui-empty icon="⌁" title="暂无看板数据" description="刷新后仍无数据时，请检查后台统计云函数是否已上传"></ui-empty>
+  </view>
+
+  <view wx:if="{{summaryMetricCards.length}}" class="overview-section section">
+    <view class="section-head">
+      <view>
+        <view class="section-eyebrow">数据概览</view>
+        <view class="section-heading">{{rangeOptions[rangeIndex].label}}统计</view>
+      </view>
+      <view class="section-note">仅展示当前角色可见数据</view>
+    </view>
+    <view class="summary-grid">
+      <view wx:for="{{summaryMetricCards}}" wx:key="label" class="metric-card {{item.warning ? 'metric-warning' : ''}}" bindtap="go" data-url="{{item.url}}">
+        <view class="metric-top">
+          <view class="metric-label">{{item.label}}</view>
+          <view class="metric-status {{item.warning ? 'is-warning' : ''}}"></view>
+        </view>
+        <view class="metric-value">{{item.valueText}}<text wx:if="{{item.unit}}" class="metric-unit">{{item.unit}}</text></view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{showTodoItems}}" class="todo-section section">
+    <view class="section-head">
+      <view>
+        <view class="section-eyebrow">今日待办</view>
+        <view class="section-heading">需要处理的事项</view>
+      </view>
+      <view class="section-note">点击进入对应后台页面</view>
+    </view>
+    <view class="todo-panel">
+      <view wx:for="{{todoItems}}" wx:key="label" class="todo-row {{item.warning ? 'todo-warning' : ''}}" bindtap="go" data-url="{{item.url}}">
+        <view class="todo-main">
+          <view class="todo-title">{{item.label}}</view>
+          <view class="muted todo-hint">{{item.hint}}</view>
+        </view>
+        <view class="todo-count">{{item.valueText}}<text class="todo-unit">{{item.unit}}</text></view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{adminMenuGroups.length}}" class="business-section section">
+    <view class="section-head">
+      <view>
+        <view class="section-eyebrow">业务分组</view>
+        <view class="section-heading">按职责进入模块</view>
+      </view>
+      <view class="section-note">{{adminProfile.roleName || "后台"}}</view>
+    </view>
+    <view wx:for="{{adminMenuGroups}}" wx:key="title" class="menu-group-panel">
+      <view class="menu-group-head">
+        <view class="menu-group-title">{{item.title}}</view>
+        <view class="muted menu-group-hint">{{item.hint}}</view>
+      </view>
+      <view class="menu-action-grid">
+        <view wx:for="{{item.items}}" wx:for-item="menu" wx:key="label" class="menu-tile" bindtap="go" data-url="{{menu.url}}">
+          <view class="menu-tile-title">{{menu.label}}</view>
+          <view class="muted menu-tile-hint">{{menu.hint}}</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{quickActionCards.length}}" class="quick-section section">
+    <view class="section-head">
+      <view>
+        <view class="section-eyebrow">快捷入口</view>
+        <view class="section-heading">常用操作</view>
+      </view>
+      <view class="section-note">低频配置与快捷入口</view>
+    </view>
+    <view class="product-action-grid quick-action-grid">
+      <view wx:for="{{quickActionCards}}" wx:key="label" class="product-action" bindtap="go" data-url="{{item.url}}">
+        <view class="product-action-title">{{item.label}}</view>
+        <view class="muted product-action-hint">{{item.valueText}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{showProductSection}}" class="product-entry-card section">
+    <view class="section-title-row">
+      <view>
+        <view class="section-eyebrow">商品库存</view>
+        <view class="section-heading">商品管理</view>
+        <view class="muted product-entry-desc">统一维护商品资料、价格、库存、标签和上下架状态</view>
+      </view>
+      <view class="entry-badge">管理</view>
+    </view>
+    <view class="product-action-grid">
+      <view wx:for="{{productActions}}" wx:key="label" class="product-action {{item.type === 'primary' ? 'primary-action' : ''}} {{item.type === 'warning' ? 'warning-action' : ''}}" bindtap="go" data-url="{{item.url}}">
+        <view class="product-action-title">{{item.label}}</view>
+        <view class="muted product-action-hint">{{item.hint}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{showSalesTrend}}" class="insight-card section">
+    <view class="section-heading compact-heading">销售趋势</view>
+    <view wx:if="{{!salesTrend.length}}" class="empty compact-empty">暂无销售数据</view>
+    <view wx:for="{{salesTrend}}" wx:key="date" class="trend-row">
+      <view class="trend-date">{{item.date}}</view>
+      <view class="trend-info">订单 {{item.orderCount}} 单</view>
+      <view class="trend-money">{{item.salesAmountText}}</view>
+      <view class="muted trend-sub">已付 {{item.paidAmountText}} / 未付 {{item.unpaidAmountText}}</view>
+    </view>
+  </view>
+
+  <view wx:if="{{showTopSellingProducts}}" class="insight-card section">
+    <view class="section-heading compact-heading">热销商品排行</view>
+    <view wx:if="{{!topSellingProducts.length}}" class="empty compact-empty">暂无热销商品</view>
+    <view wx:for="{{topSellingProducts}}" wx:key="productId" class="rank-row">
+      <view class="rank-no">{{index + 1}}</view>
+      <view class="rank-main">
+        <view class="rank-title">{{item.productName}}</view>
+        <view class="muted rank-meta">{{item.specification || "无规格"}}｜{{item.productionDate || "无生产日期"}}</view>
+      </view>
+      <view class="rank-side">
+        <view class="rank-value">{{item.soldQuantityText}} 件</view>
+        <view class="muted rank-meta">{{item.salesAmountText}}｜库存 {{item.currentStockText}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{showInventorySections}}" class="insight-card section">
+    <view class="section-heading compact-heading">库存预警</view>
+    <view wx:if="{{!lowStockProducts.length}}" class="empty compact-empty">暂无库存预警商品</view>
+    <view wx:for="{{lowStockProducts}}" wx:key="productId" class="list-row">
+      <view>
+        <view class="row-title">{{item.productName}}</view>
+        <view class="muted row-meta">{{item.specification || "无规格"}}｜{{item.productionDate || "无生产日期"}}｜{{item.activeText}}</view>
+      </view>
+      <view class="row-right">
+        <view class="danger-text">{{item.stockText}} / {{item.warningStockText}}</view>
+        <view class="risk-tag">{{item.stockTag}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{showInventorySections}}" class="insight-card section">
+    <view class="section-heading compact-heading">滞销商品提醒</view>
+    <view wx:if="{{!slowMovingProducts.length}}" class="empty compact-empty">暂无滞销商品</view>
+    <view wx:for="{{slowMovingProducts}}" wx:key="productId" class="list-row">
+      <view>
+        <view class="row-title">{{item.productName}}</view>
+        <view class="muted row-meta">{{item.specification || "无规格"}}｜{{item.productionDate || "无生产日期"}}</view>
+        <view class="muted row-meta">最近销售：{{item.lastSoldAt}}</view>
+      </view>
+      <view class="row-right">
+        <view class="row-number">库存 {{item.currentStockText}}</view>
+        <view class="muted row-meta">{{item.daysWithoutSaleText}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{showCustomerAccountInsights}}" class="insight-card section">
+    <view class="section-heading compact-heading">客户欠款提醒</view>
+    <view wx:if="{{!unpaidCustomers.length}}" class="empty compact-empty">暂无欠款客户</view>
+    <view wx:for="{{unpaidCustomers}}" wx:key="userId" class="list-row">
+      <view>
+        <view class="row-title">{{item.nickname}}</view>
+        <view class="muted row-meta">{{item.displayUserId || "无用户 ID"}}</view>
+        <view class="muted row-meta">最近下单：{{item.lastOrderAt || "暂无"}}｜最近付款：{{item.lastPaidAt || "暂无"}}</view>
+        <view wx:if="{{item.remarkSummary}}" class="muted row-meta">备注：{{item.remarkSummary}}</view>
+      </view>
+      <view class="row-right">
+        <view class="danger-text">{{item.unpaidAmountText}}</view>
+        <view class="muted row-meta">{{item.unpaidDaysText}}</view>
+      </view>
+    </view>
+  </view>
+</view>

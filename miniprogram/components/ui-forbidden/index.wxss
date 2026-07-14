@@ -1,0 +1,8 @@
+.forbidden {
+  padding-top: 160rpx;
+}
+
+.forbidden-btn {
+  width: 260rpx;
+  margin: 30rpx auto 0;
+}

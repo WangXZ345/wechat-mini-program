@@ -1,0 +1,182 @@
+.settings-page {
+  min-height: 100vh;
+  padding: 24rpx;
+  box-sizing: border-box;
+  background: #F8F4ED;
+}
+
+.section {
+  margin-bottom: 22rpx;
+}
+
+.settings-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding-top: 10rpx;
+}
+
+.hero-kicker {
+  color: #8A6A43;
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.hero-title {
+  margin-top: 8rpx;
+  color: #1F1A15;
+  font-size: 48rpx;
+  font-weight: 800;
+  line-height: 1.08;
+}
+
+.hero-desc {
+  margin-top: 10rpx;
+  color: #82776B;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.settings-pill {
+  flex: 0 0 auto;
+  height: 58rpx;
+  line-height: 58rpx;
+  padding: 0 20rpx;
+  border-radius: 999rpx;
+  background: #FFFDF9;
+  border: 1rpx solid #E6D8C7;
+  color: #7B6245;
+  font-size: 23rpx;
+  font-weight: 800;
+  box-shadow: 0 8rpx 18rpx rgba(86, 62, 34, 0.06);
+}
+
+.config-strip {
+  display: flex;
+  gap: 12rpx;
+  overflow: hidden;
+}
+
+.config-pill {
+  flex: 0 0 auto;
+  height: 52rpx;
+  line-height: 52rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  background: #FFFDF9;
+  border: 1rpx solid #E6D8C7;
+  color: #7B6245;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.config-card {
+  padding: 24rpx;
+  border-radius: 28rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.92);
+  background: linear-gradient(180deg, #FFFDF9 0%, #FCF7EF 100%);
+  box-shadow: 0 10rpx 24rpx rgba(86, 62, 34, 0.07);
+}
+
+.card-head {
+  margin-bottom: 18rpx;
+  padding-bottom: 16rpx;
+  border-bottom: 1rpx solid #EFE6DA;
+}
+
+.section-title {
+  color: #1F1A15;
+  font-size: 30rpx;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.card-desc {
+  margin-top: 6rpx;
+  color: #82776B;
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+
+.area {
+  height: 320rpx;
+  line-height: 1.6;
+  box-sizing: border-box;
+}
+
+.field-grid {
+  display: grid;
+  gap: 16rpx;
+}
+
+.field {
+  min-width: 0;
+}
+
+.note-field {
+  margin-top: 16rpx;
+}
+
+.label {
+  margin-bottom: 8rpx;
+  color: #82776B;
+  font-size: 23rpx;
+  font-weight: 700;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.note-area {
+  min-height: 160rpx;
+  line-height: 1.6;
+}
+
+.switch-row {
+  align-items: flex-start;
+  margin-top: 16rpx;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #EFE6DA;
+}
+
+.switch-row:first-of-type {
+  margin-top: 0;
+}
+
+.switch-copy {
+  flex: 1;
+  min-width: 0;
+  padding-right: 18rpx;
+}
+
+.muted {
+  color: #82776B;
+  font-size: 23rpx;
+  line-height: 1.45;
+}
+
+.merge-grid {
+  margin-top: 18rpx;
+}
+
+.config-action {
+  width: 100%;
+  margin-top: 20rpx;
+  border-radius: 999rpx;
+}
+
+@media (min-width: 700px) {
+  .field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .note-field,
+  .merge-grid .field:last-child {
+    grid-column: 1 / -1;
+  }
+}

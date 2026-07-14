@@ -1,0 +1,335 @@
+.custom-tabbar {
+  position: fixed;
+  left: 46rpx;
+  right: 46rpx;
+  bottom: 14rpx;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  height: 98rpx;
+  height: calc(98rpx + constant(safe-area-inset-bottom));
+  height: calc(98rpx + env(safe-area-inset-bottom));
+  max-width: 660rpx;
+  margin: 0 auto;
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: border-box;
+  border: 1rpx solid rgba(255, 253, 249, 0.78);
+  border-radius: 40rpx;
+  background: #FFFDF9;
+  background: rgba(255, 253, 249, 0.86);
+  -webkit-backdrop-filter: blur(26rpx) saturate(135%);
+  backdrop-filter: blur(26rpx) saturate(135%);
+  box-shadow:
+    0 18rpx 46rpx rgba(76, 56, 34, 0.18),
+    inset 0 1rpx 0 rgba(255, 255, 255, 0.82),
+    inset 0 -1rpx 0 rgba(185, 156, 116, 0.12);
+  overflow: hidden;
+}
+
+.custom-tabbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.38) 0%,
+    rgba(255, 253, 249, 0.08) 52%,
+    rgba(185, 156, 116, 0.05) 100%
+  );
+  pointer-events: none;
+}
+
+.custom-tabbar.is-landscape {
+  left: calc(56rpx + constant(safe-area-inset-left));
+  left: calc(56rpx + env(safe-area-inset-left));
+  right: calc(56rpx + constant(safe-area-inset-right));
+  right: calc(56rpx + env(safe-area-inset-right));
+  height: 98rpx;
+  height: calc(98rpx + constant(safe-area-inset-bottom));
+  height: calc(98rpx + env(safe-area-inset-bottom));
+  max-width: 650rpx;
+  border-radius: 40rpx;
+}
+
+.custom-tabbar.is-wide {
+  left: 50%;
+  right: auto;
+  width: 660rpx;
+  max-width: 660rpx;
+  transform: translateX(-50%);
+}
+
+.tabbar-list {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1;
+  min-height: 88rpx;
+  padding: 8rpx;
+  gap: 6rpx;
+  box-sizing: border-box;
+}
+
+.custom-tabbar.is-landscape .tabbar-list {
+  min-height: 88rpx;
+  padding: 8rpx;
+}
+
+.tabbar-item {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  color: var(--color-tabbar-text);
+  overflow: hidden;
+  border-radius: 36rpx;
+}
+
+.tabbar-item.active {
+  color: var(--color-tabbar-active);
+}
+
+.active-pill {
+  position: absolute;
+  left: 8rpx;
+  right: 8rpx;
+  top: 4rpx;
+  bottom: 4rpx;
+  z-index: 0;
+  border-radius: 30rpx;
+  border: 1rpx solid rgba(185, 156, 116, 0.24);
+  background: rgba(243, 231, 214, 0.82);
+  box-sizing: border-box;
+  box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, 0.58);
+}
+
+.custom-tabbar.is-landscape .active-pill {
+  top: 4rpx;
+  bottom: 4rpx;
+}
+
+.icon-wrap {
+  position: relative;
+  z-index: 1;
+  width: 54rpx;
+  height: 40rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.custom-tabbar.is-landscape .icon-wrap {
+  height: 40rpx;
+}
+
+.tab-icon {
+  position: relative;
+  color: currentColor;
+  box-sizing: border-box;
+  transform: none;
+}
+
+.tabbar-item.active .tab-icon {
+  color: var(--color-tabbar-active);
+  transform: translateY(-1rpx);
+}
+
+.icon-bag {
+  width: 31rpx;
+  height: 31rpx;
+  margin-top: 7rpx;
+  border: 3rpx solid currentColor;
+  border-radius: 8rpx;
+}
+
+.bag-handle {
+  position: absolute;
+  left: 7rpx;
+  top: -13rpx;
+  width: 12rpx;
+  height: 13rpx;
+  border: 3rpx solid currentColor;
+  border-bottom: 0;
+  border-radius: 999rpx 999rpx 0 0;
+  box-sizing: border-box;
+}
+
+.icon-cart {
+  width: 42rpx;
+  height: 40rpx;
+}
+
+.cart-handle {
+  position: absolute;
+  left: 1rpx;
+  top: 8rpx;
+  width: 12rpx;
+  height: 3rpx;
+  border-radius: 999rpx;
+  background: currentColor;
+  transform: rotate(12deg);
+}
+
+.cart-basket {
+  position: absolute;
+  left: 10rpx;
+  top: 12rpx;
+  width: 28rpx;
+  height: 16rpx;
+  border: 3rpx solid currentColor;
+  border-top: 0;
+  border-radius: 0 0 6rpx 6rpx;
+  box-sizing: border-box;
+  transform: skewX(-8deg);
+}
+
+.cart-wheel {
+  position: absolute;
+  bottom: 3rpx;
+  width: 7rpx;
+  height: 7rpx;
+  border: 3rpx solid currentColor;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.cart-wheel-left {
+  left: 15rpx;
+}
+
+.cart-wheel-right {
+  right: 5rpx;
+}
+
+.icon-order {
+  width: 33rpx;
+  height: 38rpx;
+  border: 3rpx solid currentColor;
+  border-radius: 7rpx;
+}
+
+.order-clip {
+  position: absolute;
+  left: 8rpx;
+  top: -6rpx;
+  width: 12rpx;
+  height: 8rpx;
+  border: 3rpx solid currentColor;
+  border-radius: 5rpx;
+  background: rgba(255, 253, 249, 0.94);
+  box-sizing: border-box;
+}
+
+.tabbar-item.active .order-clip {
+  background: rgba(243, 231, 214, 0.94);
+}
+
+.order-line {
+  position: absolute;
+  left: 8rpx;
+  width: 15rpx;
+  height: 3rpx;
+  border-radius: 999rpx;
+  background: currentColor;
+}
+
+.order-line-top {
+  top: 13rpx;
+}
+
+.order-line-bottom {
+  top: 23rpx;
+}
+
+.icon-admin,
+.icon-profile {
+  width: 40rpx;
+  height: 40rpx;
+}
+
+.admin-head {
+  position: absolute;
+  left: 13rpx;
+  top: 2rpx;
+  width: 15rpx;
+  height: 15rpx;
+  border: 3rpx solid currentColor;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.admin-body {
+  position: absolute;
+  left: 6rpx;
+  bottom: 2rpx;
+  width: 28rpx;
+  height: 18rpx;
+  border: 3rpx solid currentColor;
+  border-bottom: 0;
+  border-radius: 999rpx 999rpx 0 0;
+  box-sizing: border-box;
+}
+
+.tabbar-text {
+  position: relative;
+  z-index: 1;
+  margin-top: 1rpx;
+  color: currentColor;
+  font-size: 21rpx;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.custom-tabbar.is-landscape .tabbar-text {
+  margin-top: 1rpx;
+  font-size: 21rpx;
+}
+
+.tabbar-item.active .tabbar-text {
+  color: var(--color-tabbar-active);
+  font-weight: 700;
+}
+
+.cart-badge {
+  position: absolute;
+  top: -7rpx;
+  right: -12rpx;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32rpx;
+  height: 32rpx;
+  padding: 0 8rpx;
+  border: 2rpx solid #FFFDF9;
+  border-radius: 999rpx;
+  background: #A92C2C;
+  color: #FFFDF9;
+  box-shadow: 0 4rpx 10rpx rgba(120, 30, 30, 0.24);
+  font-size: 20rpx;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+}
+
+.home-indicator {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabbar-item,
+  .active-pill,
+  .tab-icon {
+    animation: none !important;
+    transition: none !important;
+  }
+}

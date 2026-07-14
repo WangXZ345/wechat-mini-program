@@ -1,0 +1,39 @@
+.ui-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40rpx;
+  padding: 4rpx 16rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.72);
+  border-radius: var(--radius-pill);
+  box-sizing: border-box;
+  font-size: 24rpx;
+  font-weight: 600;
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+}
+
+.tag-success {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.tag-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+.tag-danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+}
+
+.tag-info {
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+}
+
+.tag-muted {
+  background: var(--color-muted-bg);
+  color: var(--color-text-muted);
+}

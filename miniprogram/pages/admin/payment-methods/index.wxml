@@ -1,0 +1,166 @@
+<view class="page payment-method-page admin-responsive-page fade-in {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="payment-hero section">
+    <view class="hero-copy">
+      <view class="hero-kicker">财务配置</view>
+      <view class="hero-title">支付配置</view>
+      <view class="hero-desc">维护收款码、银行卡转账和微信支付启用状态。历史订单仍使用下单时的付款快照。</view>
+    </view>
+    <button class="btn btn-primary hero-action" bindtap="startCreate">新增</button>
+  </view>
+
+  <view class="summary-grid section">
+    <view class="summary-card">
+      <view class="summary-num">{{methods.length || 0}}</view>
+      <view class="summary-label">支付方式</view>
+    </view>
+    <view class="summary-card">
+      <view class="summary-num">{{canViewSensitive ? '可见' : '受限'}}</view>
+      <view class="summary-label">敏感配置</view>
+    </view>
+  </view>
+
+  <view wx:if="{{wechatPaySettings}}" class="card section wechat-pay-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">微信支付在线支付</view>
+        <view class="card-desc">AppID：{{wechatPaySettings.appId || '未设置'}}</view>
+      </view>
+      <view class="status-pill {{wechatPaySettings.configStatus === 'configured' ? 'enabled' : 'disabled'}}">{{wechatPaySettings.configStatus}}</view>
+    </view>
+    <view class="wechat-grid">
+      <view class="info-cell">
+        <view class="info-label">启用状态</view>
+        <view class="info-value">{{wechatPaySettings.enabled ? '已启用' : '未启用'}}</view>
+      </view>
+      <view class="info-cell">
+        <view class="info-label">配置状态</view>
+        <view class="info-value">{{wechatPaySettings.configStatus === 'configured' ? '已配置' : '未配置'}}</view>
+      </view>
+      <view class="info-cell wide-cell">
+        <view class="info-label">商户号</view>
+        <view class="info-value">{{wechatPaySettings.mchIdMasked || '未设置'}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="card section loading-panel">加载中...</view>
+  <view wx:elif="{{!methods.length}}" class="card section loading-panel">暂无支付方式</view>
+
+  <view wx:for="{{methods}}" wx:key="_id" class="card section method-card">
+    <view class="method-accent {{item.statusClass}}"></view>
+    <view class="method-head">
+      <view class="method-main">
+        <view class="method-title">{{item.paymentName}}</view>
+        <view class="method-meta">{{item.typeText}} / 排序 {{item.sortIndex}}</view>
+      </view>
+      <view class="status-pill {{item.statusClass}}">{{item.enabledText}}</view>
+    </view>
+    <view wx:if="{{item.description}}" class="method-desc">{{item.description}}</view>
+    <view class="method-grid">
+      <view class="info-cell"><view class="info-label">最低金额</view><view class="info-value">{{item.minAmountText}}</view></view>
+      <view class="info-cell"><view class="info-label">最高金额</view><view class="info-value">{{item.maxAmountText}}</view></view>
+      <view class="info-cell"><view class="info-label">默认推荐</view><view class="info-value">{{item.isDefault ? '是' : '否'}}</view></view>
+      <view class="info-cell"><view class="info-label">{{item.configLabel}}</view><view class="info-value">{{item.configText}}</view></view>
+    </view>
+    <view wx:if="{{item.qrCodeUrl}}" class="qr-row">
+      <image class="qr-preview" src="{{item.qrCodeUrl}}" mode="aspectFit" bindtap="previewQr" data-url="{{item.qrCodeUrl}}"></image>
+      <view class="qr-copy">
+        <view class="qr-title">收款二维码</view>
+        <view class="qr-desc">点击图片或预览按钮查看大图。</view>
+      </view>
+    </view>
+    <view class="method-actions">
+      <button class="btn btn-secondary small" bindtap="startEdit" data-id="{{item._id}}">编辑</button>
+      <button class="btn btn-secondary small" bindtap="toggleEnabled" data-id="{{item._id}}" data-enabled="{{item.enabled ? 'true' : 'false'}}">{{item.enabled ? '停用' : '启用'}}</button>
+      <button wx:if="{{item.qrCodeUrl}}" class="btn btn-secondary small" bindtap="previewQr" data-url="{{item.qrCodeUrl}}">预览</button>
+      <button class="btn btn-danger small" bindtap="deleteMethod" data-id="{{item._id}}">删除</button>
+    </view>
+  </view>
+
+  <view wx:if="{{formVisible}}" class="form-mask motion-modal-overlay">
+    <view class="form-panel motion-modal-panel">
+      <view class="form-title-row">
+        <view>
+          <view class="form-kicker">{{isEditing ? '编辑配置' : '新增配置'}}</view>
+          <view class="form-title">{{isEditing ? '编辑支付方式' : '新增支付方式'}}</view>
+        </view>
+        <button class="btn btn-secondary tiny close-btn" bindtap="closeForm">关闭</button>
+      </view>
+
+      <view class="form-section">
+        <view class="section-title">基础信息</view>
+        <view class="field">
+          <view class="label">支付方式名称</view>
+          <input class="input" value="{{form.paymentName}}" data-field="paymentName" bindinput="onInput" placeholder="例如：微信收款码"></input>
+        </view>
+        <view class="field">
+          <view class="label">支付类型</view>
+          <picker wx:if="{{isEditing}}" mode="selector" range="{{typeOptions}}" range-key="label" value="{{typeIndex}}" bindchange="onTypeChange">
+            <view class="input picker-value">{{typeOptions[typeIndex].label}}</view>
+          </picker>
+          <view wx:else class="input readonly-value">{{typeOptions[typeIndex].label}}</view>
+        </view>
+        <view class="field">
+          <view class="label">支付说明</view>
+          <textarea class="textarea" value="{{form.description}}" data-field="description" bindinput="onInput" placeholder="展示给客户的付款说明"></textarea>
+        </view>
+      </view>
+
+      <view wx:if="{{form.paymentType === 'wechat_qr' || form.paymentType === 'alipay_qr' || form.paymentType === 'custom'}}" class="form-section">
+        <view class="section-title">收款二维码</view>
+        <view class="qr-upload">
+          <image wx:if="{{form.qrCodeUrl}}" class="form-qr" src="{{form.qrCodeUrl}}" mode="aspectFit" bindtap="previewQr"></image>
+          <view wx:else class="qr-empty">暂未上传二维码</view>
+          <button class="btn btn-secondary small upload-btn" bindtap="chooseQrCode" loading="{{uploading}}" disabled="{{uploading}}">上传二维码</button>
+        </view>
+      </view>
+
+      <view wx:if="{{form.paymentType === 'bank_transfer'}}" class="form-section">
+        <view class="section-title">银行卡转账</view>
+        <view class="notice notice-warning bank-copy-note">客户支付页会展示以下转账信息，并提供逐项复制和一键复制全部收款信息。</view>
+        <view class="bank-grid">
+          <view class="field"><view class="label">收款户名</view><input class="input" value="{{form.bankAccountName}}" data-field="bankAccountName" bindinput="onInput"></input></view>
+          <view class="field"><view class="label">银行名称</view><input class="input" value="{{form.bankName}}" data-field="bankName" bindinput="onInput"></input></view>
+          <view class="field"><view class="label">开户支行</view><input class="input" value="{{form.bankBranchName}}" data-field="bankBranchName" bindinput="onInput"></input></view>
+          <view class="field"><view class="label">银行卡号</view><input class="input" value="{{form.bankCardNo}}" data-field="bankCardNo" bindinput="onInput" type="number"></input></view>
+          <view class="field bank-remark"><view class="label">转账备注</view><input class="input" value="{{form.transferRemark}}" data-field="transferRemark" bindinput="onInput" placeholder="请备注订单号或手机号"></input></view>
+        </view>
+      </view>
+
+      <view class="form-section">
+        <view class="section-title">展示规则</view>
+        <view class="rule-grid">
+          <view class="field"><view class="label">排序</view><input class="input" value="{{form.sortIndex}}" data-field="sortIndex" bindinput="onInput" type="number"></input></view>
+          <view class="field"><view class="label">最低金额（分）</view><input class="input" value="{{form.minAmount}}" data-field="minAmount" bindinput="onInput" type="number" placeholder="可空"></input></view>
+          <view class="field"><view class="label">最高金额（分）</view><input class="input" value="{{form.maxAmount}}" data-field="maxAmount" bindinput="onInput" type="number" placeholder="可空"></input></view>
+        </view>
+        <view class="field">
+          <view class="label">额外提示</view>
+          <textarea class="textarea" value="{{form.extraTips}}" data-field="extraTips" bindinput="onInput" placeholder="例如：转账后请上传截图"></textarea>
+        </view>
+        <view class="switch-list">
+          <view class="switch-row"><text>启用</text><switch checked="{{form.enabled}}" data-field="enabled" bindchange="onSwitch"></switch></view>
+          <view class="switch-row"><text>默认推荐</text><switch checked="{{form.isDefault}}" data-field="isDefault" bindchange="onSwitch"></switch></view>
+        </view>
+      </view>
+
+      <button class="btn btn-primary submit-btn" bindtap="save" loading="{{saving}}" disabled="{{saving}}">{{saving ? '保存中' : '保存支付方式'}}</button>
+    </view>
+  </view>
+
+  <view wx:if="{{typeChooserVisible}}" class="form-mask motion-modal-overlay">
+    <view class="form-panel type-panel motion-modal-panel">
+      <view class="form-title-row">
+        <view>
+          <view class="form-kicker">新增配置</view>
+          <view class="form-title">选择新增类型</view>
+        </view>
+        <button class="btn btn-secondary tiny close-btn" bindtap="closeTypeChooser">关闭</button>
+      </view>
+      <view wx:for="{{createTypes}}" wx:key="value" class="type-option" bindtap="chooseCreateType" data-type="{{item.value}}">
+        <view class="type-name">{{item.label}}</view>
+        <view class="type-desc">{{item.desc}}</view>
+      </view>
+    </view>
+  </view>
+</view>

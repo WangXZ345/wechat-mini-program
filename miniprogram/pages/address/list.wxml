@@ -1,0 +1,47 @@
+<view class="page address-page fade-in page-safe-bottom">
+  <view class="address-hero section">
+    <view class="address-hero-copy">
+      <view class="section-kicker">收货信息</view>
+      <view class="page-title">收货地址</view>
+      <view class="page-desc">{{selectMode ? '选择一个地址用于本次订单配送' : '管理常用收货地址，保持下单信息准确'}}</view>
+    </view>
+    <view class="address-count-pill">{{addresses.length}} 个</view>
+  </view>
+
+  <ui-skeleton wx:if="{{loading}}" count="{{3}}" showThumb="{{false}}"></ui-skeleton>
+
+  <ui-empty
+    wx:if="{{!loading && !addresses.length}}"
+    icon="+"
+    title="暂无收货地址"
+    description="新增地址后，下单时可以快速选择。"
+    buttonText="新增收货地址"
+    bind:action="addAddress">
+  </ui-empty>
+
+  <view wx:for="{{addresses}}" wx:key="_id" class="card address-card tap-card {{item.isDefault ? 'is-default' : ''}}" bindtap="selectAddress" data-id="{{item._id}}">
+    <view class="address-card-accent"></view>
+    <view class="row between top-row">
+      <view class="receiver-block">
+        <view class="receiver">
+          <text>{{item.receiverName}}</text>
+          <text class="phone">{{item.receiverPhoneDisplay}}</text>
+        </view>
+        <view wx:if="{{selectMode}}" class="select-hint">点选用于本次订单</view>
+      </view>
+      <view wx:if="{{item.isDefault}}" class="tag default-tag">默认</view>
+    </view>
+    <view class="address-line">{{item.regionText || '未填写地区'}}</view>
+    <view class="address-detail">{{item.detailAddress}}</view>
+    <view wx:if="{{item.addressTag}}" class="address-tag-line">{{item.addressTag}}</view>
+    <view class="row actions" catchtap="noop">
+      <button class="btn btn-secondary address-action" catchtap="editAddress" data-id="{{item._id}}">编辑</button>
+      <button wx:if="{{!item.isDefault}}" class="btn btn-secondary address-action" catchtap="setDefault" data-id="{{item._id}}">设为默认</button>
+      <button class="btn btn-danger address-action danger" catchtap="deleteAddress" data-id="{{item._id}}">删除</button>
+    </view>
+  </view>
+
+  <view class="bottom-action">
+    <button class="btn btn-primary" bindtap="addAddress">新增收货地址</button>
+  </view>
+</view>

@@ -1,0 +1,6 @@
+<view class="status-steps">
+  <view wx:for="{{steps}}" wx:key="key" class="status-step {{index <= activeIndex ? 'is-active' : ''}}">
+    <view class="status-dot"></view>
+    <view class="status-label">{{item.label}}</view>
+  </view>
+</view>

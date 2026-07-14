@@ -1,0 +1,99 @@
+<view class="page customer-detail-page page-enter">
+  <view class="detail-hero section">
+    <view class="detail-hero-copy">
+      <view class="hero-kicker">客户详情</view>
+      <view class="hero-title">{{user.nickname || user.openid || userId}}</view>
+      <view class="hero-desc">{{user.openid || userId}}</view>
+    </view>
+    <button class="btn btn-secondary hero-action" bindtap="load">刷新</button>
+  </view>
+
+  <view class="detail-grid section">
+    <view class="card info-card">
+      <view class="section-title">手机号</view>
+      <view class="kv"><text>手机号</text><text>{{user.phoneMasked || user.phoneNumber || '-'}}</text></view>
+      <view class="kv"><text>验证状态</text><text>{{user.phoneVerified ? '已验证' : '未验证'}}</text></view>
+      <view class="kv"><text>绑定方式</text><text>{{user.phoneBindMethod || '-'}}</text></view>
+      <view class="kv"><text>绑定次数</text><text>{{user.phoneChangeCount || 0}}</text></view>
+    </view>
+
+    <view class="card info-card">
+      <view class="section-title">账款信息</view>
+      <view class="account-grid">
+        <view class="account-cell"><view class="metric-label">今日订单</view><view class="metric-value">￥{{account.todayText}}</view></view>
+        <view class="account-cell"><view class="metric-label">累计应收</view><view class="metric-value">￥{{account.totalText}}</view></view>
+        <view class="account-cell"><view class="metric-label">已付金额</view><view class="metric-value">￥{{account.paidText}}</view></view>
+        <view class="account-cell"><view class="metric-label">历史未付</view><view class="metric-value">￥{{account.historyUnpaidText}}</view></view>
+        <view class="account-cell main"><view class="metric-label">当前未付</view><view class="metric-value price">￥{{account.unpaidText}}</view></view>
+      </view>
+    </view>
+  </view>
+
+  <view class="card section note-card">
+    <view class="card-head">
+      <view>
+        <view class="section-title">客户备注</view>
+        <view class="card-desc">仅后台可见，风险等级会影响人工审核和下单限制。</view>
+      </view>
+    </view>
+    <view class="label">客户备注</view>
+    <textarea class="textarea" maxlength="1000" placeholder="仅后台可见，最多 1000 字" value="{{adminNote}}" bindinput="onNoteInput"></textarea>
+
+    <view class="label">客户标签</view>
+    <input class="input" placeholder="用逗号分隔标签" value="{{tagInput}}" bindinput="onTagInput"></input>
+    <view class="tag-list">
+      <view wx:for="{{adminTags}}" wx:key="*this" class="tag-pill" bindtap="removeTag" data-tag="{{item}}">{{item}} ×</view>
+    </view>
+    <view class="preset-list">
+      <view wx:for="{{presetTags}}" wx:key="*this" class="preset" bindtap="addPresetTag" data-tag="{{item}}">{{item}}</view>
+    </view>
+
+    <view class="label">风险等级</view>
+    <picker mode="selector" range="{{riskOptions}}" range-key="label" value="{{riskIndex}}" bindchange="onRiskChange">
+      <view class="input picker-value">{{selectedRiskLabel}}</view>
+    </picker>
+
+    <view class="row actions">
+      <button class="btn btn-primary action-btn" loading="{{saving}}" bindtap="save">保存</button>
+      <button class="btn btn-danger action-btn" bindtap="clearNote">清空备注</button>
+    </view>
+  </view>
+
+  <view class="card section timeline-card">
+    <view class="section-title">最近订单</view>
+    <view wx:if="{{!orders.length}}" class="empty-line">暂无订单</view>
+    <view wx:for="{{orders}}" wx:key="_id" class="order-row">
+      <view class="row between">
+        <text class="row-title">{{item.orderNo}}</text>
+        <text class="price">￥{{item.totalText}}</text>
+      </view>
+      <view class="row-meta">{{item.createdAtText}}｜{{item.statusText}}｜{{item.paymentText}}</view>
+    </view>
+  </view>
+
+  <view class="card section timeline-card">
+    <view class="section-title">手机号绑定记录</view>
+    <view wx:if="{{!phoneLogs.length}}" class="empty-line">暂无记录或无查看权限</view>
+    <view wx:for="{{phoneLogs}}" wx:key="_id" class="log-row">
+      <view class="row between">
+        <text class="row-title">{{item.action}} / {{item.bindMethod}}</text>
+        <text class="row-time">{{item.createdAtText}}</text>
+      </view>
+      <view class="row-meta">{{item.beforePhoneMasked || '空'}} → {{item.afterPhoneMasked || '空'}}，{{item.verifiedText}}</view>
+    </view>
+  </view>
+
+  <view class="card section timeline-card">
+    <view class="section-title">备注修改记录</view>
+    <view wx:if="{{!noteLogs.length}}" class="empty-line">暂无修改记录</view>
+    <view wx:for="{{noteLogs}}" wx:key="_id" class="log-row">
+      <view class="row between">
+        <text class="row-title">{{item.operatorName || item.operatorOpenid}}</text>
+        <text class="row-time">{{item.createdAtText}}</text>
+      </view>
+      <view class="row-meta">备注：{{item.beforeNote || '空'}} → {{item.afterNote || '空'}}</view>
+      <view class="row-meta">风险：{{item.beforeRiskLevel || 'normal'}} → {{item.afterRiskLevel || 'normal'}}</view>
+      <view class="row-meta">标签：{{item.afterTagsText}}</view>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,112 @@
+<view class="page legal-page page-enter {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="legal-title">用户协议</view>
+  <view class="card legal-content">
+    <view class="paragraph">欢迎使用本美妆批发订货小程序。本协议由您与森原国际美妆（以下简称"我们"）共同订立，具有合同效力。请您在使用本小程序前仔细阅读并充分理解本协议的全部内容。</view>
+
+    <view class="paragraph">您使用本小程序即表示您已阅读、理解并同意接受本协议的全部条款。如您对本协议有任何疑问，可通过本页面底部的联系方式与我们沟通。</view>
+
+    <view class="paragraph legal-heading">一、服务说明</view>
+
+    <view class="paragraph">本小程序为美妆批发订货平台，提供以下服务：</view>
+    <view class="paragraph">• 商品浏览和搜索</view>
+    <view class="paragraph">• 购物车管理</view>
+    <view class="paragraph">• 订单提交和管理</view>
+    <view class="paragraph">• 付款凭证提交</view>
+    <view class="paragraph">• 发货和自提服务</view>
+    <view class="paragraph">• 售后申请和处理</view>
+    <view class="paragraph">• 收货地址管理</view>
+    <view class="paragraph">• 常购商品记录</view>
+
+    <view class="paragraph legal-heading">二、用户资格与账号管理</view>
+
+    <view class="paragraph">您应保证提交的信息真实、准确、完整、有效，并对使用您账号进行的所有操作承担责任。如发现账号信息不实或存在异常使用情况，我们有权暂停或终止服务。</view>
+
+    <view class="paragraph">您应妥善保管账号和密码，不得将账号出借、转让或以其他方式提供给他人使用。因您保管不善导致的损失由您自行承担。</view>
+
+    <view class="paragraph legal-heading">三、商品信息</view>
+
+    <view class="paragraph">商品的图片、规格、生产日期、标签、价格等信息以页面展示和后台最终确认为准。我们会尽力确保商品信息的准确性，但因供应商变更、批次差异等原因，实际商品可能与页面展示存在差异。</view>
+
+    <view class="paragraph">商品库存以我们后台最终审核为准。用户端不展示真实库存数据。商品价格可能因批次、报价更新、促销活动等原因发生变化，以订单最终确认为准。</view>
+
+    <view class="paragraph legal-heading">四、订单规则</view>
+
+    <view class="paragraph">您提交订单后，订单将进入审核流程。提交订单不代表订单最终成立，订单需经系统或后台审核确认后方可进入后续流程。</view>
+
+    <view class="paragraph">以下情况可能导致订单被拒绝或调整：</view>
+    <view class="paragraph">• 库存不足</view>
+    <view class="paragraph">• 价格异常</view>
+    <view class="paragraph">• 商品已下架</view>
+    <view class="paragraph">• 客户信息异常</view>
+    <view class="paragraph">• 订单金额或数量异常</view>
+    <view class="paragraph">• 其他不符合正常交易特征的情况</view>
+
+    <view class="paragraph">订单审核通过后，系统将扣减相应库存并进入付款和发货流程。</view>
+
+    <view class="paragraph legal-heading">五、付款规则</view>
+
+    <view class="paragraph">当前主要支持线下付款方式，包括收款码付款、银行转账等。您需要按照订单金额完成付款，并上传付款凭证。</view>
+
+    <view class="paragraph">上传付款截图不代表付款已确认。付款需经财务审核通过后，订单付款状态才会更新。</view>
+
+    <view class="paragraph">付款凭证应清晰完整，包含付款金额、付款时间、收款方信息、交易状态等必要信息。如凭证不清晰、金额不符或存在其他异常，我们可能要求您补充说明或重新提交。</view>
+
+    <view class="paragraph legal-heading">六、发货与自提</view>
+
+    <view class="paragraph">您可以根据页面提供的方式选择发货或自提。发货时间受付款确认、库存准备、物流安排等因素影响。</view>
+
+    <view class="paragraph">物流信息以后台填写和物流服务方实际情况为准。如遇物流延误、地址错误等问题，请及时联系客服处理。</view>
+
+    <view class="paragraph legal-heading">七、售后规则</view>
+
+    <view class="paragraph">如您收到的商品存在错发、少发、破损、与订单不符、质量异常等问题，可以申请售后。售后申请需提交详细原因和必要凭证。</view>
+
+    <view class="paragraph">所有售后申请需经人工审核。审核通过后才进入退款或退货流程。退款金额不超过实际已付款金额及审核通过金额。</view>
+
+    <view class="paragraph">具体售后规则请查看"售后规则"页面。</view>
+
+    <view class="paragraph legal-heading">八、用户禁止行为</view>
+
+    <view class="paragraph">您在使用本小程序时不得从事以下行为：</view>
+    <view class="paragraph">• 恶意下单或批量下单后不履行付款义务</view>
+    <view class="paragraph">• 提交虚假付款截图</view>
+    <view class="paragraph">• 冒用他人信息进行订货</view>
+    <view class="paragraph">• 利用系统漏洞获取不当利益</view>
+    <view class="paragraph">• 干扰系统正常运行</view>
+    <view class="paragraph">• 非法获取他人订单信息或后台信息</view>
+    <view class="paragraph">• 传播违法违规信息</view>
+    <view class="paragraph">• 其他违反法律法规或本协议的行为</view>
+
+    <view class="paragraph">如发现上述行为，我们有权暂停或终止服务，并保留追究法律责任的权利。</view>
+
+    <view class="paragraph legal-heading">九、责任限制</view>
+
+    <view class="paragraph">因以下原因导致的服务延迟、中断或异常，我们将协助处理，但不承担超出法律规定或双方约定范围的责任：</view>
+    <view class="paragraph">• 网络故障或通信线路故障</view>
+    <view class="paragraph">• 物流服务方原因</view>
+    <view class="paragraph">• 支付渠道故障</view>
+    <view class="paragraph">• 用户信息错误或不完整</view>
+    <view class="paragraph">• 不可抗力因素（自然灾害、战争、政府行为等）</view>
+    <view class="paragraph">• 其他非因我们故意或重大过失造成的情况</view>
+
+    <view class="paragraph legal-heading">十、知识产权</view>
+
+    <view class="paragraph">本小程序的所有内容，包括但不限于文字、图片、标识、界面设计、程序代码等，均归我们或相关权利人所有，受知识产权法律保护。未经许可，不得擅自使用、复制、传播。</view>
+
+    <view class="paragraph legal-heading">十一、协议变更</view>
+
+    <view class="paragraph">我们可能根据业务发展和法律要求更新本协议。更新后的协议将在本页面展示。重大变更我们会通过适当方式通知您。您继续使用本小程序即视为接受更新后的协议。</view>
+
+    <view class="paragraph legal-heading">十二、争议解决</view>
+
+    <view class="paragraph">本协议的订立、执行、解释及争议解决均适用中华人民共和国法律。如发生争议，双方应友好协商解决；协商不成的，任何一方可向我们所在地有管辖权的人民法院提起诉讼。</view>
+
+    <view class="paragraph legal-heading">十三、联系我们</view>
+
+    <view class="paragraph">如您对本协议有任何疑问或建议，请通过以下方式联系我们：</view>
+    <view class="paragraph">经营主体：森原国际美妆</view>
+    <view class="paragraph">联系电话：13631669161</view>
+
+    <view class="paragraph legal-footnote">本协议自2026年7月5日起生效。</view>
+  </view>
+</view>

@@ -1,0 +1,244 @@
+.account-detail-page {
+  padding-bottom: 56rpx;
+}
+
+.detail-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 32rpx;
+  border: 1rpx solid rgba(230, 216, 199, 0.92);
+  border-radius: var(--radius-xxl);
+  background:
+    linear-gradient(135deg, rgba(255, 253, 249, 0.88), rgba(255, 253, 249, 0) 58%),
+    linear-gradient(160deg, #FFFDF9 0%, #F3E7D6 100%);
+  box-shadow: var(--shadow-card);
+  box-sizing: border-box;
+}
+
+.hero-copy {
+  padding-right: 168rpx;
+}
+
+.hero-kicker {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42rpx;
+  padding: 0 18rpx;
+  border-radius: var(--radius-pill);
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.hero-title {
+  margin-top: 16rpx;
+  color: var(--color-text-main);
+  font-size: 48rpx;
+  font-weight: 800;
+  line-height: 1.16;
+  word-break: break-all;
+}
+
+.hero-desc {
+  margin-top: 12rpx;
+  color: var(--color-text-secondary);
+  font-size: 26rpx;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.hero-risk {
+  position: absolute;
+  top: 32rpx;
+  right: 32rpx;
+}
+
+.risk {
+  padding: 8rpx 16rpx;
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary-bg);
+  color: var(--color-tag-text);
+  font-size: 24rpx;
+  font-weight: 800;
+}
+
+.risk.risky,
+.risk.blocked {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+}
+
+.risk.watch {
+  background: var(--color-tag-bg);
+  color: var(--color-tag-text);
+}
+
+.hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14rpx;
+  margin-top: 28rpx;
+}
+
+.hero-metric,
+.metric-box {
+  min-height: 98rpx;
+  padding: 16rpx;
+  border: 1rpx solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  background: rgba(255, 253, 249, 0.72);
+  box-sizing: border-box;
+}
+
+.metric-label,
+.label {
+  color: var(--color-text-muted);
+  font-size: 22rpx;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.metric-value,
+.metric-box text:last-child {
+  display: block;
+  margin-top: 6rpx;
+  color: var(--color-text-main);
+  font-size: 25rpx;
+  font-weight: 800;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.detail-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20rpx;
+}
+
+.main-column,
+.side-column {
+  min-width: 0;
+}
+
+.info-card,
+.action-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.info-card::before,
+.action-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 8rpx;
+  height: 100%;
+  background: linear-gradient(180deg, var(--color-primary-light), var(--color-primary-deep));
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid var(--color-border-light);
+}
+
+.kv text:first-child {
+  flex: 0 0 150rpx;
+  color: var(--color-text-muted);
+}
+
+.kv text:last-child {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  word-break: break-all;
+}
+
+.remark {
+  margin-top: 16rpx;
+  padding: 16rpx;
+  background: var(--color-search-bg);
+  border: 1rpx solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12rpx;
+  margin-top: 18rpx;
+}
+
+.primary-metric {
+  grid-column: 1 / -1;
+  background: linear-gradient(180deg, #FFFDF9 0%, #F3E7D6 100%);
+  border-color: rgba(185, 156, 116, 0.36);
+}
+
+.line-card {
+  padding: 18rpx 0;
+  border-bottom: 1rpx solid var(--color-border-light);
+}
+
+.line-card:last-child {
+  border-bottom: 0;
+}
+
+.line-title {
+  flex: 1;
+  min-width: 0;
+  padding-right: 16rpx;
+  font-weight: 800;
+  word-break: break-all;
+}
+
+.compact {
+  padding: 20rpx 0;
+}
+
+.actions {
+  gap: 12rpx;
+  margin-top: 18rpx;
+  flex-wrap: wrap;
+}
+
+.small {
+  min-width: 128rpx;
+  height: 60rpx;
+  line-height: 60rpx;
+  padding: 0 18rpx;
+  font-size: 24rpx;
+}
+
+.wide-action {
+  flex: 1;
+  min-width: 220rpx;
+}
+
+.account-detail-page.is-landscape .detail-layout {
+  grid-template-columns: minmax(0, 1fr) 450rpx;
+  align-items: start;
+}
+
+.account-detail-page.is-landscape .side-column {
+  position: sticky;
+  top: 24rpx;
+}
+
+@media (min-width: 1024px) {
+  .account-detail-page .detail-layout {
+    grid-template-columns: minmax(0, 1fr) 500rpx;
+    align-items: start;
+  }
+
+  .account-detail-page .side-column {
+    position: sticky;
+    top: 24rpx;
+  }
+}

@@ -1,0 +1,78 @@
+<view class="page page-enter admin-responsive-page after-sales-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <view class="after-hero section">
+    <view class="hero-copy">
+      <view class="hero-kicker">售后与退款</view>
+      <view class="hero-title">售后工作台</view>
+      <view class="hero-desc">集中处理待审核申请、退货验收和退款前置状态，危险操作仍需进入详情确认。</view>
+    </view>
+    <button class="btn btn-secondary btn-sm hero-action" bindtap="goRefunds">退款记录</button>
+  </view>
+
+  <view class="card filter-panel section">
+    <view class="filter-summary">
+      <view>
+        <view class="subtitle">售后筛选</view>
+        <view class="muted">当前：{{statusOptions[statusIndex].label}}</view>
+      </view>
+      <view class="tag">共 {{afterSales.length || 0}} 单</view>
+    </view>
+    <view class="filter-grid">
+      <picker class="filter-picker" mode="selector" range="{{statusOptions}}" range-key="label" value="{{statusIndex}}" bindchange="onStatusChange">
+        <view>{{statusOptions[statusIndex].label}}</view>
+      </picker>
+      <view class="search-row">
+        <input class="search-input" value="{{keyword}}" bindinput="onKeyword" confirm-type="search" bindconfirm="load" placeholder="售后单号/订单号/客户/手机号" />
+        <button class="mini-btn search-btn" bindtap="load">搜索</button>
+      </view>
+    </view>
+    <view class="row export-row">
+      <button class="mini-btn export-btn" loading="{{exporting}}" disabled="{{exporting}}" bindtap="exportExcel">导出 Excel</button>
+      <button wx:if="{{exportResult.fileUrl}}" class="mini-btn export-btn" bindtap="copyExportLink">复制链接</button>
+    </view>
+  </view>
+
+  <ui-skeleton wx:if="{{loading}}" count="{{4}}" showThumb="{{false}}"></ui-skeleton>
+  <ui-empty wx:if="{{!loading && !afterSales.length}}" icon="售" title="暂无售后单" description="当前筛选条件下没有售后记录"></ui-empty>
+
+  <view wx:if="{{afterSales.length}}" class="queue-title section">
+    <view>
+      <view class="subtitle">售后队列</view>
+      <view class="muted">点击卡片进入详情处理审核、退货和退款前置流程。</view>
+    </view>
+  </view>
+
+  <view wx:for="{{afterSales}}" wx:key="_id" class="card section after-card card-press" bindtap="goDetail" data-id="{{item._id}}">
+    <view class="card-line"></view>
+    <view class="after-head">
+      <view>
+        <view class="subtitle after-no">{{item.afterSaleNo}}</view>
+        <view class="muted order-no">订单号：{{item.orderNo}}</view>
+      </view>
+      <view class="tag {{item.needReview ? 'tag-warning' : ''}}">{{item.statusText}}</view>
+    </view>
+    <view class="badge-row">
+      <view wx:if="{{item.needReview}}" class="review-badge">需要人工审核</view>
+      <view wx:if="{{item.highRiskReason}}" class="risk-badge">质量/破损类，验货后再处理库存</view>
+    </view>
+    <view class="customer-line">客户：{{item.customerName || "未填写"}}</view>
+    <view class="metric-grid">
+      <view class="metric-box">
+        <view class="metric-label">售后类型</view>
+        <view class="metric-value">{{item.typeText}}</view>
+      </view>
+      <view class="metric-box">
+        <view class="metric-label">退款状态</view>
+        <view class="metric-value">{{item.refundText}}</view>
+      </view>
+      <view class="metric-box">
+        <view class="metric-label">申请退款</view>
+        <view class="metric-value price">￥{{item.requestedText}}</view>
+      </view>
+      <view class="metric-box">
+        <view class="metric-label">审批退款</view>
+        <view class="metric-value">￥{{item.approvedText}}</view>
+      </view>
+    </view>
+    <view class="muted created">提交时间：{{item.createdAtText}}</view>
+  </view>
+</view>

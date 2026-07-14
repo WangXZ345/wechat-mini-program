@@ -1,0 +1,156 @@
+<view class="page page-enter order-detail-page {{isLandscape ? 'is-landscape' : 'is-portrait'}} {{isWideScreen ? 'is-wide' : ''}}">
+  <ui-skeleton wx:if="{{loading}}" count="{{3}}" showThumb="{{false}}"></ui-skeleton>
+
+  <ui-empty
+    wx:if="{{initialized && !loading && !order}}"
+    icon="!"
+    title="订单不存在"
+    description="请返回订单列表重新打开">
+  </ui-empty>
+
+  <block wx:if="{{!loading && order}}">
+    <view class="order-detail-hero">
+      <view>
+        <view class="eyebrow">订单详情</view>
+        <view class="page-title">当前订单进度</view>
+        <view class="muted">订单号 {{order.orderNo}}</view>
+      </view>
+      <view class="tag {{order.statusClass}}">{{order.statusText}}</view>
+    </view>
+    <view class="order-detail-grid">
+      <view wx:if="{{order.paymentStatus === 'paid' || order.status === 'paid'}}" class="notice notice-success paid-banner detail-full">该订单已付款</view>
+
+    <view class="card section next-action-card detail-full">
+      <view class="row between next-action-head">
+        <view>
+          <view class="subtitle">当前进度</view>
+          <view class="muted next-action-desc">{{order.statusDescription}}</view>
+        </view>
+        <view class="tag {{order.statusClass}}">{{order.statusText}}</view>
+      </view>
+      <view class="next-action-buttons">
+        <button wx:if="{{order.status === 'auto_reviewing'}}" class="btn btn-secondary btn-sm next-action-btn" bindtap="triggerAutoReview">刷新审核结果</button>
+        <button wx:if="{{order.status === 'approved_pending_payment'}}" class="btn btn-primary btn-sm next-action-btn" bindtap="goPayment">去付款</button>
+        <button wx:if="{{order.showAfterSaleEntry}}" class="btn btn-secondary btn-sm next-action-btn" bindtap="goAfterSaleApply">申请售后</button>
+        <button wx:if="{{order.hasAfterSale}}" class="btn btn-secondary btn-sm next-action-btn" bindtap="goAfterSaleDetail">查看售后</button>
+      </view>
+    </view>
+
+    <view class="card section detail-side-card">
+      <ui-status-step status="{{order.status}}"></ui-status-step>
+      <view class="status-desc">{{order.statusDescription}}</view>
+    </view>
+
+    <view class="card section detail-side-card {{order.paymentStatus === 'paid' || order.status === 'paid' ? 'paid-order' : ''}}">
+      <view class="row between">
+        <view class="detail-title">{{order.displayName}}</view>
+        <view class="tag {{order.statusClass}}">{{order.statusText}}</view>
+      </view>
+      <view class="muted order-no">订单号：{{order.orderNo}}</view>
+      <view class="kv"><text>种类</text><text>{{order.itemCount || 1}}</text></view>
+      <view class="kv"><text>数量</text><text>{{order.totalQuantity || order.quantity}}</text></view>
+      <view class="kv"><text>金额</text><text class="price">￥{{order.totalText}}</text></view>
+      <view class="kv"><text>付款</text><text class="tag {{order.paymentClass}}">{{order.paymentText}}</text></view>
+    </view>
+
+    <view class="card section detail-items-card">
+      <view class="subtitle">商品明细</view>
+      <view wx:for="{{order.items}}" wx:key="productId" class="item-line">
+        <view class="row between">
+          <view class="item-name">{{item.productName}}</view>
+          <view class="price">￥{{item.totalText}}</view>
+        </view>
+        <view class="muted">{{item.specification || '无规格'}}</view>
+        <view class="muted">生产日期：{{item.productionDate || '未设置'}}</view>
+        <view class="row between muted">
+          <text>￥{{item.unitPriceText}} x {{item.quantity}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="card section detail-side-card">
+      <view class="subtitle">配送信息</view>
+      <view class="kv"><text>配送方式</text><text>{{order.deliveryTypeText}}</text></view>
+      <view class="kv"><text>配送状态</text><text>{{order.deliveryStatusText}}</text></view>
+
+      <block wx:if="{{order.deliveryType === 'self_pickup'}}">
+        <view class="kv"><text>自提地址</text><text>{{order.pickupInfo.pickupLocation || '未保存'}}</text></view>
+        <view class="kv"><text>自提时间</text><text>{{order.pickupInfo.pickupTimeNote || '未保存'}}</text></view>
+        <view class="kv"><text>联系人</text><text>{{order.pickupInfo.pickupContact || '未保存'}}</text></view>
+        <view class="kv"><text>联系电话</text><text>{{order.pickupInfo.pickupPhone || '未保存'}}</text></view>
+        <view wx:if="{{order.pickedUpAtText}}" class="kv"><text>实际自提时间</text><text>{{order.pickedUpAtText}}</text></view>
+        <view wx:if="{{order.deliveryRemark}}" class="kv"><text>自提备注</text><text>{{order.deliveryRemark}}</text></view>
+      </block>
+
+      <block wx:if="{{order.deliveryType === 'shipping'}}">
+        <view class="kv"><text>收货人</text><text>{{order.shippingAddressDisplay.receiverName || '未保存'}}</text></view>
+        <view class="kv"><text>手机号</text><text>{{order.shippingAddressDisplay.receiverPhone || '未保存'}}</text></view>
+        <view class="kv"><text>收货地址</text><text>{{order.shippingAddressDisplay.addressText || '未保存'}}</text></view>
+        <view wx:if="{{order.shippingAddressDisplay.addressTag}}" class="kv"><text>地址标签</text><text>{{order.shippingAddressDisplay.addressTag}}</text></view>
+        <view wx:if="{{order.expressCompany}}" class="kv"><text>快递公司</text><text>{{order.expressCompany}}</text></view>
+        <view wx:if="{{order.expressNo}}" class="kv"><text>快递单号</text><text>{{order.expressNo}}</text></view>
+        <view wx:if="{{order.shippedAtText}}" class="kv"><text>发货时间</text><text>{{order.shippedAtText}}</text></view>
+        <view wx:if="{{order.deliveryRemark}}" class="kv"><text>发货备注</text><text>{{order.deliveryRemark}}</text></view>
+      </block>
+    </view>
+
+    <view class="card section detail-side-card merge-card" wx:if="{{order.showMergedShipment}}">
+      <view class="row between">
+        <view class="subtitle">合并发货</view>
+        <view class="tag">{{order.shipmentStatusText}}</view>
+      </view>
+      <view class="muted merge-desc">该订单已与其他订单合并发货</view>
+      <view class="kv"><text>合并发货单号</text><text>{{order.mergeShipmentNoDisplay}}</text></view>
+      <view wx:if="{{order.shipmentCompanyDisplay}}" class="kv"><text>快递公司</text><text>{{order.shipmentCompanyDisplay}}</text></view>
+      <view wx:if="{{order.trackingNoDisplay}}" class="kv"><text>快递单号</text><text>{{order.trackingNoDisplay}}</text></view>
+      <view wx:if="{{order.shipmentShippedAtText}}" class="kv"><text>发货时间</text><text>{{order.shipmentShippedAtText}}</text></view>
+      <button wx:if="{{order.trackingNoDisplay}}" class="btn btn-secondary action-full" bindtap="copyTrackingNo">复制快递单号</button>
+    </view>
+
+    <view class="card section detail-side-card" wx:if="{{order.status === 'auto_reviewing'}}">
+      <view class="subtitle">审核中</view>
+      <view class="muted">订单正在审核，请稍后刷新查看结果。</view>
+      <button class="btn btn-secondary action-full" bindtap="triggerAutoReview">刷新审核结果</button>
+    </view>
+
+    <view class="card section detail-side-card" wx:if="{{order.status === 'approved_pending_payment'}}">
+      <view class="subtitle">已通过</view>
+      <view class="muted">请选择付款方式并上传付款截图。</view>
+      <button class="btn btn-primary action-full" bindtap="goPayment">去付款</button>
+    </view>
+
+    <view class="card section detail-side-card" wx:if="{{order.status === 'pending_payment_confirm'}}">
+      <view class="subtitle">等待商家确认付款</view>
+      <view class="muted">付款方式：{{order.paymentMethod}}</view>
+      <view wx:if="{{order.hasPaymentBatch}}" class="muted">本次合并支付 {{order.paymentBatchCount}} 笔订单，合计 ￥{{order.paymentBatchAmountText}}</view>
+      <image wx:if="{{order.paymentScreenshotUrl}}" class="screenshot" src="{{order.paymentScreenshotUrl}}" mode="aspectFit" lazy-load="true"></image>
+    </view>
+
+    <view class="card section detail-side-card" wx:if="{{order.showAfterSaleEntry || order.hasAfterSale}}">
+      <view class="subtitle">售后服务</view>
+      <view wx:if="{{order.showAfterSaleProcessing}}" class="notice notice-warning after-sale-notice">该订单已有售后处理中，请勿重复提交。</view>
+      <view wx:elif="{{order.afterSaleStatusText}}" class="muted">售后状态：{{order.afterSaleStatusText}}</view>
+      <view wx:else class="muted">已付款、已发货或已完成的订单可提交售后申请，提交后需等待客服人工审核。</view>
+      <button wx:if="{{order.showAfterSaleEntry}}" class="btn btn-secondary action-full" bindtap="goAfterSaleApply">申请售后</button>
+      <button wx:if="{{order.hasAfterSale}}" class="btn btn-secondary action-full" bindtap="goAfterSaleDetail">查看售后</button>
+    </view>
+
+    <view class="card section detail-side-card" wx:if="{{order.status === 'rejected'}}">
+      <view class="subtitle">已拒绝</view>
+      <view class="muted">订单未通过审核，请联系商家处理。</view>
+    </view>
+
+    <view class="card section detail-side-card" wx:if="{{order.status === 'cancelled'}}">
+      <view class="subtitle">已取消</view>
+      <view class="muted">订单已取消。</view>
+      <view wx:if="{{order.cancelReason}}" class="muted">取消原因：{{order.cancelReason}}</view>
+    </view>
+
+    <view class="card section detail-side-card" wx:if="{{order.showCancelButton}}">
+      <button class="btn btn-cancel action-full" bindtap="cancelOrder" disabled="{{cancelling}}">
+        {{cancelling ? '取消中...' : '取消订单'}}
+      </button>
+    </view>
+    </view>
+  </block>
+</view>
