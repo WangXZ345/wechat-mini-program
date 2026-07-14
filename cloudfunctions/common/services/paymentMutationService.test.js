@@ -107,6 +107,17 @@ test("strict Web decision, version, timestamp, and rejection reason fail closed"
   }
 });
 
+test("strict Web text fields reject non-strings and overlong values without coercion or truncation", () => {
+  const service = bareService();
+  for (const [patch, code] of [
+    [{ paymentId: 123 }, "PAYMENT_ID_INVALID"],
+    [{ paymentId: "p".repeat(129) }, "PAYMENT_ID_INVALID"],
+    [{ reason: "r".repeat(301) }, "REASON_INVALID"]
+  ]) {
+    assert.throws(() => service.normalizeWebInput(webInput(patch)), (error) => error.code === code);
+  }
+});
+
 test("legacy normalization preserves status and amount aliases without leaking them into Web", () => {
   const service = bareService();
   assert.deepEqual(
@@ -239,15 +250,45 @@ function inMemoryIdempotency(options = {}) {
   };
 }
 
+function staleProcessingRecord(actionType, operatorIdentity, idempotencyKey, payload) {
+  return {
+    _id: sharedIdempotency.buildIdempotencyRecordId(actionType, operatorIdentity, idempotencyKey),
+    actionType,
+    operatorIdentity,
+    idempotencyKey,
+    requestHash: sharedIdempotency.hashPayload(payload),
+    status: "processing",
+    lockedAt: new Date("2020-01-01T00:00:00.000Z"),
+    createdAt: new Date("2020-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2020-01-01T00:00:00.000Z")
+  };
+}
+
 function fixture(overrides = {}) {
   const payment = {
     _id: "payment-1",
     orderId: "order-1",
+    orderNo: "SUBMITTED-SO-001",
     status: "pending_confirm",
     paymentStatus: "pending_confirm",
     confirmStatus: "pending",
     version: 2,
     updatedAt: new Date(FIXED_DATE),
+    idempotencyKey: "proof-upload-key",
+    businessKey: "proof-upload-business",
+    remark: "客户提交说明",
+    paidAmount: 123,
+    unpaidAmount: 877,
+    paymentMethod: "offline_qr",
+    paymentMethodId: "method-private-id",
+    paymentMethodType: "offline_qr",
+    paymentMethodName: "线下二维码",
+    paymentBatchId: "proof-batch",
+    paymentBatchOrderIds: ["order-1"],
+    paymentBatchAmount: 1000,
+    paymentBatchCount: 1,
+    wechatPayTransactionId: "transaction-private",
+    wechatPayOutTradeNo: "trade-private",
     paymentScreenshotUrl: "cloud://private-proof",
     screenshotUrls: ["cloud://private-proof"],
     ...overrides.payment
@@ -313,7 +354,47 @@ test("Web confirmation calculates the unpaid cents server-side and closes the or
   assert.equal(state.payment_records.length, 1);
   assert.equal(state.payment_records[0].paymentScreenshotUrl, "cloud://private-proof");
   assert.equal(state.payment_records[0].confirmStatus, "confirmed");
-  assert.equal(state.payment_records[0].paidAmount, 800);
+  assert.deepEqual({
+    idempotencyKey: state.payment_records[0].idempotencyKey,
+    orderNo: state.payment_records[0].orderNo,
+    businessKey: state.payment_records[0].businessKey,
+    remark: state.payment_records[0].remark,
+    paidAmount: state.payment_records[0].paidAmount,
+    unpaidAmount: state.payment_records[0].unpaidAmount,
+    paymentMethod: state.payment_records[0].paymentMethod,
+    paymentMethodId: state.payment_records[0].paymentMethodId,
+    paymentMethodType: state.payment_records[0].paymentMethodType,
+    paymentMethodName: state.payment_records[0].paymentMethodName,
+    paymentBatchId: state.payment_records[0].paymentBatchId,
+    paymentBatchOrderIds: state.payment_records[0].paymentBatchOrderIds,
+    paymentBatchAmount: state.payment_records[0].paymentBatchAmount,
+    paymentBatchCount: state.payment_records[0].paymentBatchCount,
+    wechatPayTransactionId: state.payment_records[0].wechatPayTransactionId,
+    wechatPayOutTradeNo: state.payment_records[0].wechatPayOutTradeNo
+  }, {
+    idempotencyKey: "proof-upload-key",
+    orderNo: "SUBMITTED-SO-001",
+    businessKey: "proof-upload-business",
+    remark: "客户提交说明",
+    paidAmount: 123,
+    unpaidAmount: 877,
+    paymentMethod: "offline_qr",
+    paymentMethodId: "method-private-id",
+    paymentMethodType: "offline_qr",
+    paymentMethodName: "线下二维码",
+    paymentBatchId: "proof-batch",
+    paymentBatchOrderIds: ["order-1"],
+    paymentBatchAmount: 1000,
+    paymentBatchCount: 1,
+    wechatPayTransactionId: "transaction-private",
+    wechatPayOutTradeNo: "trade-private"
+  });
+  assert.equal(state.payment_records[0].reviewPaidAmount, 800);
+  assert.equal(state.payment_records[0].reviewUnpaidAmount, 0);
+  assert.equal(state.payment_records[0].reviewPaymentMethod, "offline_qr");
+  assert.equal(state.payment_records[0].reviewRemark, "已核对到账");
+  assert.equal(state.payment_records[0].reviewIdempotencyKey, "confirm-key-0001");
+  assert.match(state.payment_records[0].reviewBusinessKey, /^payment_mutation:/);
   assert.deepEqual({ paid: state.orders[0].paidAmount, unpaid: state.orders[0].unpaidAmount, status: state.orders[0].status, payment: state.orders[0].paymentStatus, delivery: state.orders[0].deliveryStatus, version: state.orders[0].version }, { paid: 1000, unpaid: 0, status: "paid", payment: "paid", delivery: "waiting_shipping", version: 5 });
   assert.deepEqual({ paid: state.customer_accounts[0].totalPaidAmount, unpaid: state.customer_accounts[0].totalUnpaidAmount }, { paid: 1000, unpaid: 0 });
   assert.equal(state.account_logs.length, 1);
@@ -322,13 +403,43 @@ test("Web confirmation calculates the unpaid cents server-side and closes the or
   assert.equal(state.sync_events.length, 2);
   assert.deepEqual(state.sync_events.map((event) => event.audience).sort(), ["admin", "owner"]);
   for (const event of state.sync_events) {
-    for (const forbidden of ["amount", "paidAmount", "unpaidAmount", "userId", "userOpenid", "openid", "paymentScreenshotUrl", "screenshotUrls"]) assert.equal(Object.hasOwn(event, forbidden), false);
+    for (const forbidden of ["amount", "paidAmount", "unpaidAmount", "userId", "userOpenid", "openid", "paymentScreenshotUrl", "screenshotUrls", "businessKey"]) assert.equal(Object.hasOwn(event, forbidden), false);
   }
   assert.equal(recalculated, 1);
   assert.equal(recalculationContext.userId, "user-1");
   assert.equal(recalculationContext.userOpenid, "openid-private");
   assert.equal(result.accountRecalculationPending, false);
   assert.equal(state.orders[0].accountRecalculationPending, false);
+  assert.deepEqual(state.orders[0].paidMarkedAt, FIXED_DATE);
+});
+
+test("strict Web confirmation rejects a positive stored amount gap instead of silently settling it", async () => {
+  const db = database(fixture({ order: { totalAmount: 1000, paidAmount: 100, unpaidAmount: 800 } }));
+  await assert.rejects(() => confirm(paymentService(db)), (error) => error.code === "ORDER_AMOUNT_INVALID");
+  assert.equal(db.snapshot().payment_records[0].status, "pending_confirm");
+});
+
+test("post-commit reads and marker cleanup failures never turn a committed payment into an API failure", async () => {
+  let failPostCommitRead = false;
+  const readFailureDb = database(fixture(), {
+    failOn(entry) {
+      return failPostCommitRead && entry.collection === "orders" && entry.operation === "get" && entry.id === "order-1";
+    }
+  });
+  await confirm(paymentService(readFailureDb, { idempotency: sharedIdempotency }), {}, "post-read-failure");
+  failPostCommitRead = true;
+  const readFailure = await confirm(paymentService(readFailureDb, { idempotency: sharedIdempotency, async recalculateAccount() { return { ok: true }; } }), {}, "post-read-failure");
+  assert.equal(readFailure.status, "paid");
+  assert.equal(readFailure.reused, true);
+  assert.equal(readFailure.accountRecalculationPending, true);
+
+  const markerFailureDb = database(fixture(), {
+    failOn: (entry) => entry.collection === "orders" && entry.operation === "update" && entry.data && entry.data.accountRecalculationPending === false
+  });
+  const markerFailure = await confirm(paymentService(markerFailureDb, { async recalculateAccount() { return { ok: true }; } }), {}, "marker-failure");
+  assert.equal(markerFailure.status, "paid");
+  assert.equal(markerFailure.accountRecalculationPending, true);
+  assert.equal(markerFailureDb.snapshot().orders[0].status, "paid");
 });
 
 test("transaction fails closed on an existing mutation audit or delivery business key", async () => {
@@ -371,7 +482,8 @@ test("legacy partial and abnormal updates preserve historical amount semantics",
   assert.equal(partialDb.snapshot().orders[0].paidAmount, 500);
   assert.equal(partialDb.snapshot().orders[0].unpaidAmount, 500);
   assert.equal(partialDb.snapshot().account_logs[0].changeAmount, 300);
-  assert.equal(partialDb.snapshot().payment_records[0].paymentMethod, "bank_transfer");
+  assert.equal(partialDb.snapshot().payment_records[0].paymentMethod, "offline_qr");
+  assert.equal(partialDb.snapshot().payment_records[0].reviewPaymentMethod, "bank_transfer");
   assert.equal(partialDb.snapshot().orders[0].paymentMethod, "bank_transfer");
 
   const abnormalDb = database(fixture());
@@ -380,6 +492,70 @@ test("legacy partial and abnormal updates preserve historical amount semantics",
   assert.equal(abnormalDb.snapshot().orders[0].paidAmount, 200);
   assert.equal(abnormalDb.snapshot().orders[0].unpaidAmount, 800);
   assert.equal(abnormalDb.snapshot().account_logs.length, 0);
+});
+
+test("legacy rejection retains the historical payment:confirm permission contract", async () => {
+  const db = database(fixture());
+  const confirmOnly = actor("finance", ["payment:confirm"]);
+  const result = await paymentService(db).updateLegacyPayment({ actor: confirmOnly, input: { orderId: "order-1", paymentStatus: "unpaid", applyBatch: false }, idempotencyKey: "legacy-unpaid-permission", allowMissingIdempotencyKey: true });
+  assert.equal(result.status, "rejected");
+  await assert.rejects(
+    () => paymentService(database(fixture())).reviewWebPayment({ actor: confirmOnly, input: webInput({ decision: "reject", reason: "不通过" }), idempotencyKey: "web-reject-permission" }),
+    (error) => error.code === "FORBIDDEN"
+  );
+});
+
+test("legacy creation retains payment method, batch, proof, transaction snapshots, and paidMarkedAt", async () => {
+  const state = fixture({
+    order: {
+      latestPaymentRecordId: "",
+      paymentMethod: "bank_transfer",
+      paymentMethodId: "method-1",
+      paymentMethodType: "bank",
+      paymentMethodName: "银行转账",
+      paymentBatchId: "batch-snapshot",
+      paymentBatchOrderIds: ["order-1"],
+      paymentBatchAmount: 1000,
+      paymentBatchCount: 1,
+      paymentScreenshotUrl: "cloud://legacy-proof",
+      paymentScreenshotUrls: ["cloud://legacy-proof"],
+      wechatPayTransactionId: "legacy-transaction",
+      wechatPayOutTradeNo: "legacy-trade"
+    },
+    state: { payment_records: [] }
+  });
+  const db = database(state);
+  const result = await paymentService(db).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "paid", applyBatch: false }, allowMissingIdempotencyKey: true });
+  const payment = db.snapshot().payment_records[0];
+  assert.equal(result.status, "paid");
+  assert.deepEqual({
+    paymentMethod: payment.paymentMethod,
+    paymentMethodId: payment.paymentMethodId,
+    paymentMethodType: payment.paymentMethodType,
+    paymentMethodName: payment.paymentMethodName,
+    paymentBatchId: payment.paymentBatchId,
+    paymentBatchOrderIds: payment.paymentBatchOrderIds,
+    paymentBatchAmount: payment.paymentBatchAmount,
+    paymentBatchCount: payment.paymentBatchCount,
+    paymentScreenshotUrl: payment.paymentScreenshotUrl,
+    screenshotUrls: payment.screenshotUrls,
+    wechatPayTransactionId: payment.wechatPayTransactionId,
+    wechatPayOutTradeNo: payment.wechatPayOutTradeNo
+  }, {
+    paymentMethod: "bank_transfer",
+    paymentMethodId: "method-1",
+    paymentMethodType: "bank",
+    paymentMethodName: "银行转账",
+    paymentBatchId: "batch-snapshot",
+    paymentBatchOrderIds: ["order-1"],
+    paymentBatchAmount: 1000,
+    paymentBatchCount: 1,
+    paymentScreenshotUrl: "cloud://legacy-proof",
+    screenshotUrls: ["cloud://legacy-proof"],
+    wechatPayTransactionId: "legacy-transaction",
+    wechatPayOutTradeNo: "legacy-trade"
+  });
+  assert.deepEqual(db.snapshot().orders[0].paidMarkedAt, FIXED_DATE);
 });
 
 test("stored and legacy money validation rejects zero, overpayment, decimals, negatives, and unsafe cents", async () => {
@@ -432,7 +608,7 @@ test("idempotent replay is read-only, changed payload conflicts, and processing 
   const committed = database(fixture({
     payment: { status: "paid", paymentStatus: "paid", confirmStatus: "confirmed", version: 3 },
     order: { status: "paid", paymentStatus: "paid", paidAmount: 1000, unpaidAmount: 0, version: 5 },
-    state: { admin_operation_logs: [{ _id: "audit-1", businessKey: "payment_mutation:recover-key-0001:payment-1:confirm", sourceId: "recover-key-0001", resourceId: "payment-1", decision: "confirm" }] }
+    state: { admin_operation_logs: [{ _id: "audit-1", businessKey: "payment_mutation:recover-key-0001:payment-1:confirm", sourceId: "recover-key-0001", resourceId: "payment-1", orderId: "order-1", decision: "confirm", afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 } }] }
   }));
   const recovered = await confirm(paymentService(committed, { idempotency: inMemoryIdempotency({ processingRecovery: true }) }), {}, "recover-key-0001");
   assert.equal(recovered.reused, true);
@@ -456,6 +632,128 @@ test("canonical service interoperates with the shared idempotency helper without
     () => confirm(service, { reason: "changed" }, "shared-idem-key-1"),
     (error) => error.code === "IDEMPOTENCY_KEY_CONFLICT"
   );
+});
+
+test("real shared idempotency recovery validates Web audit state before returning a committed result", async () => {
+  const key = "real-web-recovery-key";
+  const input = webInput();
+  const committed = fixture({
+    payment: { status: "paid", paymentStatus: "paid", confirmStatus: "confirmed", version: 3 },
+    order: { status: "paid", paymentStatus: "paid", paidAmount: 1000, unpaidAmount: 0, version: 5, accountRecalculationPending: false },
+    state: {
+      admin_operation_logs: [{
+        _id: "audit-web-recovery",
+        businessKey: `payment_mutation:${key}:payment-1:confirm`,
+        sourceId: key,
+        resourceId: "payment-1",
+        orderId: "order-1",
+        decision: "confirm",
+        afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 }
+      }],
+      idempotency_records: [staleProcessingRecord("payment_confirm", "finance-1", key, input)]
+    }
+  });
+  const recoveredDb = database(committed);
+  const recovered = await confirm(paymentService(recoveredDb, { idempotency: sharedIdempotency }), {}, key);
+  assert.equal(recovered.reused, true);
+  assert.equal(recovered.affected, 0);
+  assert.equal(recoveredDb.snapshot().admin_operation_logs.length, 1);
+
+  const invalid = structuredClone(committed);
+  invalid.admin_operation_logs[0].afterData.orderVersion = 4;
+  const invalidDb = database(invalid);
+  await assert.rejects(
+    () => confirm(paymentService(invalidDb, { idempotency: sharedIdempotency }), {}, key),
+    (error) => ["PAYMENT_STATUS_CONFLICT", "BUSINESS_LOG_CONFLICT"].includes(error.code)
+  );
+});
+
+test("real shared idempotency recovers every order in a committed legacy batch", async () => {
+  const key = "real-legacy-batch-recovery";
+  const legacyInput = { orderId: "order-1", paymentStatus: "paid", paidAmountCents: undefined, remark: "", applyBatch: true, paymentMethod: "" };
+  const orders = ["1", "2"].map((suffix) => ({
+    ...fixture().orders[0],
+    _id: `order-${suffix}`,
+    orderNo: `SO-00${suffix}`,
+    latestPaymentRecordId: `payment-${suffix}`,
+    paymentBatchId: "batch-recovery",
+    status: "paid",
+    paymentStatus: "paid",
+    paidAmount: 1000,
+    unpaidAmount: 0,
+    version: 5,
+    accountRecalculationPending: false
+  }));
+  const payments = orders.map((order, index) => ({ ...fixture().payment_records[0], _id: `payment-${index + 1}`, orderId: order._id, status: "paid", paymentStatus: "paid", confirmStatus: "confirmed", version: 3 }));
+  const audits = orders.map((order, index) => ({
+    _id: `audit-${index + 1}`,
+    businessKey: `payment_mutation:${key}:${order._id}:payment-${index + 1}:confirm`,
+    sourceId: `${key}:${order._id}`,
+    resourceId: `payment-${index + 1}`,
+    orderId: order._id,
+    decision: "confirm",
+    afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 }
+  }));
+  const db = database(fixture({ state: {
+    orders,
+    payment_records: payments,
+    admin_operation_logs: audits,
+    idempotency_records: [staleProcessingRecord("payment_legacy_paid", "finance-1", key, legacyInput)]
+  } }));
+  const result = await paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "paid" }, idempotencyKey: key, allowMissingIdempotencyKey: true });
+  assert.equal(result.reused, true);
+  assert.equal(result.updatedCount, 2);
+  assert.equal(db.snapshot().admin_operation_logs.length, 2);
+});
+
+test("real shared idempotency recovers a committed legacy partial payment without applying it twice", async () => {
+  const key = "real-legacy-partial-recovery";
+  const legacyInput = { orderId: "order-1", paymentStatus: "partial_paid", paidAmountCents: 300, remark: "", applyBatch: false, paymentMethod: "" };
+  const payment = { ...fixture().payment_records[0], status: "partial_paid", paymentStatus: "partial_paid", confirmStatus: "confirmed", version: 3 };
+  const order = { ...fixture().orders[0], status: "partial_paid", paymentStatus: "partial_paid", paidAmount: 500, unpaidAmount: 500, version: 5, accountRecalculationPending: false };
+  const audit = {
+    _id: "audit-partial",
+    businessKey: `payment_mutation:${key}:order-1:payment-1:confirm`,
+    sourceId: `${key}:order-1`,
+    resourceId: "payment-1",
+    orderId: "order-1",
+    decision: "confirm",
+    afterData: { status: "partial_paid", paymentStatus: "partial_paid", version: 3, orderStatus: "partial_paid", orderPaymentStatus: "partial_paid", orderVersion: 5 }
+  };
+  const db = database(fixture({ state: {
+    payment_records: [payment],
+    orders: [order],
+    admin_operation_logs: [audit],
+    idempotency_records: [staleProcessingRecord("payment_legacy_partial_paid", "finance-1", key, legacyInput)]
+  } }));
+  const result = await paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "partial", paidAmountCents: 300, applyBatch: false }, idempotencyKey: key, allowMissingIdempotencyKey: true });
+  assert.equal(result.reused, true);
+  assert.equal(result.affected, 0);
+  assert.equal(db.snapshot().orders[0].paidAmount, 500);
+  assert.equal(db.snapshot().admin_operation_logs.length, 1);
+});
+
+test("customer account identity and amount invariants fail closed before receipt writes", async () => {
+  const identityDb = database(fixture({ state: { customer_accounts: [{ ...fixture().customer_accounts[0], userOpenid: "other-openid" }, { ...fixture().customer_accounts[0], _id: "account-2", userId: "other-user", userOpenid: "openid-private" }] } }));
+  await assert.rejects(() => confirm(paymentService(identityDb)), (error) => error.code === "ACCOUNT_IDENTITY_CONFLICT");
+
+  for (const accountPatch of [
+    { totalOrderAmount: 1000, totalPaidAmount: 100, totalUnpaidAmount: 800 },
+    { totalOrderAmount: 1000, totalPaidAmount: 200, totalUnpaidAmount: 100 }
+  ]) {
+    const db = database(fixture({ account: accountPatch }));
+    await assert.rejects(() => confirm(paymentService(db)), (error) => error.code === "ACCOUNT_AMOUNT_INVALID");
+    assert.equal(db.snapshot().account_logs.length, 0);
+  }
+});
+
+test("missing customer account reconstruction includes the order's already-paid balance", async () => {
+  const db = database(fixture({ state: { customer_accounts: [] } }));
+  await confirm(paymentService(db), {}, "account-reconstruct");
+  const account = db.snapshot().customer_accounts[0];
+  assert.deepEqual({ total: account.totalOrderAmount, paid: account.totalPaidAmount, unpaid: account.totalUnpaidAmount }, { total: 1000, paid: 1000, unpaid: 0 });
+  const log = db.snapshot().account_logs[0];
+  assert.deepEqual({ beforePaid: log.beforeTotalPaidAmount, afterPaid: log.afterTotalPaidAmount }, { beforePaid: 200, afterPaid: 1000 });
 });
 
 test("processing recovery fails closed when business logs are duplicated or conflicting", async () => {
@@ -498,6 +796,35 @@ test("failure of any transactional companion write rolls back payment, order, ac
   }
 });
 
+test("customer account creation and the second sync event are both inside the rollback boundary", async () => {
+  const noAccountDb = database(fixture({ state: { customer_accounts: [] } }), {
+    failOn: (entry) => entry.collection === "customer_accounts" && entry.operation === "add"
+  });
+  await assert.rejects(() => confirm(paymentService(noAccountDb), {}, "rollback-account-add"), /forced customer_accounts\.add failure/);
+  assert.equal(noAccountDb.snapshot().payment_records[0].status, "pending_confirm");
+  assert.equal(noAccountDb.snapshot().orders[0].status, "pending_payment_confirm");
+  assert.equal(noAccountDb.snapshot().account_logs.length, 0);
+
+  let syncAdds = 0;
+  const secondSyncDb = database(fixture(), {
+    failOn(entry) {
+      if (entry.collection === "sync_events" && entry.operation === "add") {
+        syncAdds += 1;
+        return syncAdds === 2;
+      }
+      return false;
+    }
+  });
+  await assert.rejects(() => confirm(paymentService(secondSyncDb), {}, "rollback-second-sync"), /forced sync_events\.add failure/);
+  const state = secondSyncDb.snapshot();
+  assert.equal(state.payment_records[0].status, "pending_confirm");
+  assert.equal(state.orders[0].status, "pending_payment_confirm");
+  assert.equal(state.customer_accounts[0].totalPaidAmount, 200);
+  assert.equal(state.account_logs.length, 0);
+  assert.equal(state.admin_operation_logs.length, 0);
+  assert.equal(state.sync_events.length, 0);
+});
+
 test("legacy batch fails closed above 100 orders or across customers and single mode touches only one order", async () => {
   const manyOrders = Array.from({ length: 101 }, (_, index) => ({
     ...fixture().orders[0],
@@ -529,6 +856,34 @@ test("legacy batch fails closed above 100 orders or across customers and single 
   const single = await paymentService(singleDb).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "paid", applyBatch: false }, idempotencyKey: "batch-single-1", allowMissingIdempotencyKey: true });
   assert.equal(single.updatedCount, 1);
   assert.equal(singleDb.snapshot().orders.find((row) => row._id === "order-2").status, "pending_payment_confirm");
+});
+
+test("legacy batch requires stable dual customer identity and accepts exactly 100 orders", async () => {
+  const emptyOrders = ["1", "2"].map((suffix) => ({ ...fixture().orders[0], _id: `order-${suffix}`, latestPaymentRecordId: `payment-${suffix}`, paymentBatchId: "batch-empty", userId: "", userOpenid: "" }));
+  const emptyPayments = emptyOrders.map((order, index) => ({ ...fixture().payment_records[0], _id: `payment-${index + 1}`, orderId: order._id }));
+  const emptyDb = database(fixture({ state: { orders: emptyOrders, payment_records: emptyPayments } }));
+  await assert.rejects(
+    () => paymentService(emptyDb).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "abnormal" }, idempotencyKey: "batch-empty-identity", allowMissingIdempotencyKey: true }),
+    (error) => error.code === "PAYMENT_BATCH_IDENTITY_REQUIRED"
+  );
+
+  const crossedOrders = [
+    { ...fixture().orders[0], _id: "order-1", latestPaymentRecordId: "payment-1", paymentBatchId: "batch-cross-openid" },
+    { ...fixture().orders[0], _id: "order-2", latestPaymentRecordId: "payment-2", paymentBatchId: "batch-cross-openid", userOpenid: "different-openid" }
+  ];
+  const crossedPayments = crossedOrders.map((order, index) => ({ ...fixture().payment_records[0], _id: `payment-${index + 1}`, orderId: order._id }));
+  const crossedDb = database(fixture({ state: { orders: crossedOrders, payment_records: crossedPayments } }));
+  await assert.rejects(
+    () => paymentService(crossedDb).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "abnormal" }, idempotencyKey: "batch-cross-openid", allowMissingIdempotencyKey: true }),
+    (error) => error.code === "PAYMENT_BATCH_CUSTOMER_CONFLICT"
+  );
+
+  const boundaryOrders = Array.from({ length: 100 }, (_, index) => ({ ...fixture().orders[0], _id: `order-${index}`, latestPaymentRecordId: `payment-${index}`, paymentBatchId: "batch-100" }));
+  const boundaryPayments = boundaryOrders.map((order, index) => ({ ...fixture().payment_records[0], _id: `payment-${index}`, orderId: order._id }));
+  const boundaryDb = database(fixture({ state: { orders: boundaryOrders, payment_records: boundaryPayments } }));
+  const result = await paymentService(boundaryDb).updateLegacyPayment({ actor: actor(), input: { orderId: "order-0", paymentStatus: "abnormal" }, idempotencyKey: "batch-boundary-100", allowMissingIdempotencyKey: true });
+  assert.equal(result.updatedCount, 100);
+  assert.equal(boundaryDb.snapshot().orders.filter((order) => order.status === "abnormal").length, 100);
 });
 
 test("post-commit account recalculation failure is safe and retryable while success clears the pending marker", async () => {
