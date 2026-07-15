@@ -9,7 +9,9 @@ const state = {
   nextTicks: [],
   persisted: null,
   responses: {},
-  staged: null
+  staged: null,
+  subscribeCalls: [],
+  unsubscribeCalls: 0
 };
 
 let definition;
@@ -93,7 +95,16 @@ function loadDefinition() {
     if (request.endsWith("utils/orientation")) {
       return { initOrientation() {}, cleanupOrientation() {} };
     }
-    if (request.endsWith("utils/sync")) return { subscribe: () => () => {} };
+    if (request.endsWith("utils/sync")) {
+      return {
+        subscribe(owner, topics, handler) {
+          state.subscribeCalls.push({ owner, topics, handler });
+          return () => {
+            state.unsubscribeCalls += 1;
+          };
+        }
+      };
+    }
     if (request.endsWith("utils/haptics")) return { selection() {} };
     if (request.endsWith("utils/phone")) {
       return {
@@ -125,6 +136,8 @@ function resetState() {
   state.persisted = null;
   state.responses = {};
   state.staged = null;
+  state.subscribeCalls.length = 0;
+  state.unsubscribeCalls = 0;
 }
 
 function createPage() {
@@ -165,6 +178,21 @@ test("staged preview wins over persistent cache and renders before authenticatio
   assert.equal(page.data.initialized, true);
   assert.deepEqual(state.authCalls, []);
   assert.deepEqual(state.calls, []);
+  assert.equal(state.subscribeCalls.length, 0);
+  assert.equal(state.nextTicks.length, 1);
+});
+
+test("missing preview keeps the initial loading state until first paint", () => {
+  const page = createPage();
+
+  page.onLoad({ id: "p1" });
+
+  assert.equal(page.data.product, null);
+  assert.equal(page.data.loading, true);
+  assert.equal(page.data.initialized, false);
+  assert.deepEqual(state.authCalls, []);
+  assert.deepEqual(state.calls, []);
+  assert.equal(state.subscribeCalls.length, 0);
   assert.equal(state.nextTicks.length, 1);
 });
 
@@ -186,8 +214,10 @@ test("network initialization begins after nextTick and preserves exact detail ca
 
   page.onLoad({ id: "p1" });
   assert.deepEqual(state.calls, []);
+  assert.equal(state.subscribeCalls.length, 0);
 
   runNextTicks();
+  assert.equal(state.subscribeCalls.length, 1);
   await flushPromises();
 
   assert.deepEqual(state.authCalls[0], { name: "ensureLogin", options: { showLoading: false } });
@@ -198,6 +228,19 @@ test("network initialization begins after nextTick and preserves exact detail ca
   ["getUserDeliveryPreference", "getSettings", "getDefaultAddress", "getFavoriteStatus"]
     .forEach((name) => assert.equal(state.calls.some((item) => item.name === name), true));
   assert.equal(page.data.product.name, "校准商品");
+});
+
+test("product sync subscribes once and is cancelled on unload", async () => {
+  const page = createPage();
+
+  page.onLoad({ id: "p1" });
+  runNextTicks();
+  await flushPromises();
+  await page.initializeAfterFirstPaint(false);
+
+  assert.equal(state.subscribeCalls.length, 1);
+  page.onUnload();
+  assert.equal(state.unsubscribeCalls, 1);
 });
 
 test("onShow authentication does not start before the first paint", async () => {

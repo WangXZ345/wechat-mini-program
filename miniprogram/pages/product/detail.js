@@ -112,13 +112,6 @@ Page({
     const id = options.id || "";
     this.setData({ id });
     initOrientation(this);
-    this._unsubscribeSync = sync.subscribe(this, ["product", "inventory"], (events) => {
-      const relevant = events.some((event) => !event.entityId || event.entityId === this.data.id);
-      if (!relevant) return;
-      const busy = Boolean(this.productLoading);
-      const request = this.loadProduct({ silent: true });
-      if (busy) Promise.resolve(request).finally(() => this.loadProduct({ silent: true })).catch(() => null);
-    });
     const hasPreview = this.applyProductPreview(id);
     this.afterFirstPaint(() => this.initializeAfterFirstPaint(hasPreview));
   },
@@ -140,6 +133,7 @@ Page({
   },
 
   initializeAfterFirstPaint(hasPreview) {
+    this.subscribeToProductSync();
     return ensureLogin({ showLoading: false })
       .then(() => ensureFrontendAccess())
       .then(() => Promise.all([
@@ -147,6 +141,17 @@ Page({
         this.loadDeliveryOptions()
       ]))
       .catch((err) => toast(err.message));
+  },
+
+  subscribeToProductSync() {
+    if (this._unsubscribeSync) return;
+    this._unsubscribeSync = sync.subscribe(this, ["product", "inventory"], (events) => {
+      const relevant = events.some((event) => !event.entityId || event.entityId === this.data.id);
+      if (!relevant) return;
+      const busy = Boolean(this.productLoading);
+      const request = this.loadProduct({ silent: true });
+      if (busy) Promise.resolve(request).finally(() => this.loadProduct({ silent: true })).catch(() => null);
+    });
   },
 
   shapeProduct(source = {}) {
