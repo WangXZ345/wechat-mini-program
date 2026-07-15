@@ -15,7 +15,8 @@ const {
   readCartCache,
   scopedCacheKey,
   upsertCartCacheItem,
-  writeProductPreview,
+  stageProductPreview,
+  writeProductPreviewAsync,
   writeCache,
   writeCartCache
 } = require("../../utils/performanceCache");
@@ -647,10 +648,16 @@ Page({
 
   goDetail(e) {
     haptics.selection();
-    const product = this.findProductForCart(e.currentTarget.dataset.id);
-    if (product && (product._id || product.productId)) writeProductPreview(product);
+    const productId = String(e.currentTarget.dataset.id || "");
+    const product = this.findProductForCart(productId);
+    const preview = product && (product._id || product.productId)
+      ? stageProductPreview(product)
+      : null;
     wx.navigateTo({
-      url: `/pages/product/detail?id=${e.currentTarget.dataset.id}`
+      url: `/pages/product/detail?id=${productId}`,
+      success: () => {
+        if (preview) writeProductPreviewAsync(preview).catch(() => null);
+      }
     });
   },
 
