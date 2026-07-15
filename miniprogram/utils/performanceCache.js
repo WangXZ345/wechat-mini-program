@@ -5,6 +5,7 @@ const HOME_CACHE_TTL_MS = 60 * 1000;
 const ORDER_CACHE_TTL_MS = 30 * 1000;
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PRODUCT_PREVIEW_TTL_MS = 2 * 60 * 1000;
+const stagedProductPreviews = new Map();
 
 const SENSITIVE_KEYS = [
   "stock",
@@ -352,12 +353,46 @@ function publicProductPreview(product = {}) {
   };
 }
 
+function stageProductPreview(product = {}, options = {}) {
+  const preview = publicProductPreview(product);
+  const key = productPreviewCacheKey(preview.productId, options.openid);
+  if (!key || !preview.productId) return null;
+  const updatedAt = now();
+  const ttlMs = Number(options.ttlMs || PRODUCT_PREVIEW_TTL_MS);
+  stagedProductPreviews.set(key, {
+    data: preview,
+    updatedAt,
+    expiresAt: updatedAt + Math.max(1, ttlMs)
+  });
+  return preview;
+}
+
+function consumeProductPreview(productId, options = {}) {
+  const id = String(productId || "").trim();
+  const key = productPreviewCacheKey(id, options.openid);
+  if (!key) return null;
+  const cached = stagedProductPreviews.get(key);
+  stagedProductPreviews.delete(key);
+  if (!cached || cached.expiresAt < now()) return null;
+  if (!cached.data || String(cached.data.productId || cached.data._id || "") !== id) return null;
+  return { ...cached, expired: false, version: 1 };
+}
+
 function writeProductPreview(product = {}, options = {}) {
   const preview = publicProductPreview(product);
   const key = productPreviewCacheKey(preview.productId, options.openid);
   if (!key || !preview.productId) return null;
   cache.set(key, preview, { ttlMs: PRODUCT_PREVIEW_TTL_MS });
   return preview;
+}
+
+function writeProductPreviewAsync(product = {}, options = {}) {
+  const preview = publicProductPreview(product);
+  const key = productPreviewCacheKey(preview.productId, options.openid);
+  if (!key || !preview.productId) return Promise.resolve(null);
+  return cache.setAsync(key, preview, { ttlMs: PRODUCT_PREVIEW_TTL_MS })
+    .then((written) => written ? preview : null)
+    .catch(() => null);
 }
 
 function readProductPreview(productId, options = {}) {
@@ -372,7 +407,9 @@ function readProductPreview(productId, options = {}) {
 
 function clearProductPreview(productId, options = {}) {
   const key = productPreviewCacheKey(productId, options.openid);
-  if (key) cache.remove(key);
+  if (!key) return;
+  stagedProductPreviews.delete(key);
+  cache.remove(key);
 }
 
 module.exports = {
@@ -403,7 +440,10 @@ module.exports = {
   removeCartCacheItems,
   clearCartCache,
   publicProductPreview,
+  stageProductPreview,
+  consumeProductPreview,
   readProductPreview,
   writeProductPreview,
+  writeProductPreviewAsync,
   clearProductPreview
 };

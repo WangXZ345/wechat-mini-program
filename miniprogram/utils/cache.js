@@ -33,6 +33,22 @@ function rawSet(key, value) {
   }
 }
 
+function rawSetAsync(key, value) {
+  if (typeof wx.setStorage !== "function") return Promise.resolve(rawSet(key, value));
+  return new Promise((resolve) => {
+    try {
+      wx.setStorage({
+        key,
+        data: value,
+        success: () => resolve(true),
+        fail: () => resolve(false)
+      });
+    } catch (err) {
+      resolve(false);
+    }
+  });
+}
+
 function remove(key) {
   try {
     wx.removeStorageSync(key);
@@ -47,26 +63,38 @@ function positiveNumber(value) {
   return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
-function set(key, data, options = {}) {
-  if (!key || data === undefined) return false;
+function cacheEnvelope(data, options = {}) {
+  if (data === undefined) return null;
   let cacheData = data;
   if (typeof options.sanitize === "function") {
     try {
       cacheData = options.sanitize(data);
     } catch (err) {
-      return false;
+      return null;
     }
   }
-  if (cacheData === undefined) return false;
+  if (cacheData === undefined) return null;
 
   const updatedAt = Date.now();
   const ttlMs = positiveNumber(options.ttlMs);
-  return rawSet(key, {
+  return {
     __cacheVersion: positiveNumber(options.version) || CACHE_VERSION,
     data: cacheData,
     updatedAt,
     expiresAt: ttlMs ? updatedAt + ttlMs : 0
-  });
+  };
+}
+
+function set(key, data, options = {}) {
+  if (!key) return false;
+  const envelope = cacheEnvelope(data, options);
+  return envelope ? rawSet(key, envelope) : false;
+}
+
+function setAsync(key, data, options = {}) {
+  if (!key) return Promise.resolve(false);
+  const envelope = cacheEnvelope(data, options);
+  return envelope ? rawSetAsync(key, envelope) : Promise.resolve(false);
 }
 
 function get(key, options = {}) {
@@ -159,6 +187,7 @@ module.exports = {
   CACHE_VERSION,
   get,
   set,
+  setAsync,
   remove,
   purgeSensitivePageCaches
 };
