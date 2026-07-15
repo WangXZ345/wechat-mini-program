@@ -109,10 +109,11 @@ test("strict Web decision, version, timestamp, and rejection reason fail closed"
 
 test("strict Web text fields reject non-strings and overlong values without coercion or truncation", () => {
   const service = bareService();
+  assert.equal(service.normalizeWebInput(webInput({ reason: `  ${"r".repeat(300)}  ` })).reason, "r".repeat(300));
   for (const [patch, code] of [
     [{ paymentId: 123 }, "PAYMENT_ID_INVALID"],
     [{ paymentId: "p".repeat(129) }, "PAYMENT_ID_INVALID"],
-    [{ reason: "r".repeat(301) }, "REASON_INVALID"]
+    [{ reason: `  ${"r".repeat(301)}  ` }, "REASON_INVALID"]
   ]) {
     assert.throws(() => service.normalizeWebInput(webInput(patch)), (error) => error.code === code);
   }
@@ -410,6 +411,16 @@ test("Web confirmation calculates the unpaid cents server-side and closes the or
   assert.equal(recalculationContext.userOpenid, "openid-private");
   assert.equal(result.accountRecalculationPending, false);
   assert.equal(state.orders[0].accountRecalculationPending, false);
+  assert.equal(state.orders[0].accountRecalculationOwner, "confirm-key-0001");
+  assert.equal(state.orders[0].accountRecalculationExpectedVersion, 5);
+  assert.deepEqual({
+    root: state.admin_operation_logs[0].rootOperationId,
+    kind: state.admin_operation_logs[0].operationKind,
+    count: state.admin_operation_logs[0].operationMemberCount,
+    index: state.admin_operation_logs[0].operationMemberIndex,
+    seed: state.admin_operation_logs[0].operationSeedOrderId,
+    requestedStatus: state.admin_operation_logs[0].requestedPaymentStatus
+  }, { root: "confirm-key-0001", kind: "web_payment", count: 1, index: 0, seed: "order-1", requestedStatus: "paid" });
   assert.deepEqual(state.orders[0].paidMarkedAt, FIXED_DATE);
 });
 
@@ -456,6 +467,13 @@ test("transaction fails closed on an existing mutation audit or delivery busines
     (error) => error.code === "DELIVERY_LOG_CONFLICT"
   );
   assert.equal(deliveryDb.snapshot().payment_records[0].status, "pending_confirm");
+
+  const accountLogDb = database(fixture({ state: { account_logs: [{ _id: "account-log-existing", businessKey: "payment_receipt:conflicting-account-key:payment-1" }] } }));
+  await assert.rejects(
+    () => confirm(paymentService(accountLogDb), {}, "conflicting-account-key"),
+    (error) => error.code === "ACCOUNT_LOG_CONFLICT"
+  );
+  assert.equal(accountLogDb.snapshot().payment_records[0].status, "pending_confirm");
 });
 
 test("Web rejection closes the current record without receipt, account, or delivery side effects", async () => {
@@ -689,6 +707,12 @@ test("real shared idempotency recovers every order in a committed legacy batch",
     _id: `audit-${index + 1}`,
     businessKey: `payment_mutation:${key}:${order._id}:payment-${index + 1}:confirm`,
     sourceId: `${key}:${order._id}`,
+    rootOperationId: key,
+    operationKind: "legacy_payment",
+    operationMemberCount: orders.length,
+    operationMemberIndex: index,
+    operationSeedOrderId: "order-1",
+    requestedPaymentStatus: "paid",
     resourceId: `payment-${index + 1}`,
     orderId: order._id,
     decision: "confirm",
@@ -715,6 +739,12 @@ test("real shared idempotency recovers a committed legacy partial payment withou
     _id: "audit-partial",
     businessKey: `payment_mutation:${key}:order-1:payment-1:confirm`,
     sourceId: `${key}:order-1`,
+    rootOperationId: key,
+    operationKind: "legacy_payment",
+    operationMemberCount: 1,
+    operationMemberIndex: 0,
+    operationSeedOrderId: "order-1",
+    requestedPaymentStatus: "partial_paid",
     resourceId: "payment-1",
     orderId: "order-1",
     decision: "confirm",
@@ -723,6 +753,13 @@ test("real shared idempotency recovers a committed legacy partial payment withou
   const db = database(fixture({ state: {
     payment_records: [payment],
     orders: [order],
+    account_logs: [{
+      _id: "account-log-partial",
+      businessKey: `payment_receipt:${key}:order-1:payment-1`,
+      relatedOrderId: "order-1",
+      relatedPaymentRecordId: "payment-1",
+      changeAmount: 300
+    }],
     admin_operation_logs: [audit],
     idempotency_records: [staleProcessingRecord("payment_legacy_partial_paid", "finance-1", key, legacyInput)]
   } }));
@@ -730,7 +767,135 @@ test("real shared idempotency recovers a committed legacy partial payment withou
   assert.equal(result.reused, true);
   assert.equal(result.affected, 0);
   assert.equal(db.snapshot().orders[0].paidAmount, 500);
+  assert.equal(db.snapshot().account_logs.length, 1);
+  assert.equal(db.snapshot().account_logs[0].changeAmount, 300);
   assert.equal(db.snapshot().admin_operation_logs.length, 1);
+});
+
+test("legacy recovery freezes the committed audit membership when current batch membership changes", async () => {
+  async function recoverWithMembershipChange(change) {
+    const key = `frozen-membership-${change}`;
+    const legacyInput = { orderId: "order-1", paymentStatus: "paid", paidAmountCents: undefined, remark: "", applyBatch: true, paymentMethod: "" };
+    const orders = ["1", "2"].map((suffix) => ({
+      ...fixture().orders[0],
+      _id: `order-${suffix}`,
+      orderNo: `SO-00${suffix}`,
+      latestPaymentRecordId: `payment-${suffix}`,
+      paymentBatchId: "batch-frozen",
+      status: "paid",
+      paymentStatus: "paid",
+      paidAmount: 1000,
+      unpaidAmount: 0,
+      version: 5,
+      accountRecalculationPending: false
+    }));
+    const payments = orders.map((order, index) => ({
+      ...fixture().payment_records[0],
+      _id: `payment-${index + 1}`,
+      orderId: order._id,
+      status: "paid",
+      paymentStatus: "paid",
+      confirmStatus: "confirmed",
+      version: 3
+    }));
+    const audits = orders.map((order, index) => ({
+      _id: `audit-${index + 1}`,
+      businessKey: `payment_mutation:${key}:${order._id}:payment-${index + 1}:confirm`,
+      sourceId: `${key}:${order._id}`,
+      rootOperationId: key,
+      operationKind: "legacy_payment",
+      operationMemberCount: 2,
+      operationMemberIndex: index,
+      operationSeedOrderId: "order-1",
+      requestedPaymentStatus: "paid",
+      resourceId: `payment-${index + 1}`,
+      orderId: order._id,
+      decision: "confirm",
+      afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 }
+    }));
+    if (change === "added") {
+      orders.push({ ...fixture().orders[0], _id: "order-3", orderNo: "SO-003", latestPaymentRecordId: "payment-3", paymentBatchId: "batch-frozen" });
+      payments.push({ ...fixture().payment_records[0], _id: "payment-3", orderId: "order-3" });
+    } else {
+      orders[1].paymentBatchId = "batch-moved-after-commit";
+    }
+    const db = database(fixture({ state: {
+      orders,
+      payment_records: payments,
+      admin_operation_logs: audits,
+      idempotency_records: [staleProcessingRecord("payment_legacy_paid", "finance-1", key, legacyInput)]
+    } }));
+    const result = await paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({
+      actor: actor(),
+      input: { orderId: "order-1", paymentStatus: "paid" },
+      idempotencyKey: key,
+      allowMissingIdempotencyKey: true
+    });
+    return { result, state: db.snapshot() };
+  }
+
+  const added = await recoverWithMembershipChange("added");
+  assert.equal(added.result.reused, true);
+  assert.equal(added.result.updatedCount, 2);
+  assert.equal(added.state.orders.find((row) => row._id === "order-3").status, "pending_payment_confirm");
+
+  const removed = await recoverWithMembershipChange("removed");
+  assert.equal(removed.result.reused, true);
+  assert.equal(removed.result.updatedCount, 2);
+});
+
+test("legacy recovery fails closed for partial, duplicate, or conflicting child audit sets", async () => {
+  const key = "frozen-membership-conflict";
+  const legacyInput = { orderId: "order-1", paymentStatus: "paid", paidAmountCents: undefined, remark: "", applyBatch: true, paymentMethod: "" };
+  const orders = ["1", "2"].map((suffix) => ({
+    ...fixture().orders[0],
+    _id: `order-${suffix}`,
+    latestPaymentRecordId: `payment-${suffix}`,
+    paymentBatchId: "batch-conflict",
+    status: "paid",
+    paymentStatus: "paid",
+    paidAmount: 1000,
+    unpaidAmount: 0,
+    version: 5
+  }));
+  const payments = orders.map((order, index) => ({ ...fixture().payment_records[0], _id: `payment-${index + 1}`, orderId: order._id, status: "paid", paymentStatus: "paid", confirmStatus: "confirmed", version: 3 }));
+  const baseAudit = (index) => ({
+    _id: `audit-${index}`,
+    businessKey: `payment_mutation:${key}:order-${index + 1}:payment-${index + 1}:confirm`,
+    sourceId: `${key}:order-${index + 1}`,
+    rootOperationId: key,
+    operationKind: "legacy_payment",
+    operationMemberCount: 2,
+    operationMemberIndex: index,
+    operationSeedOrderId: "order-1",
+    requestedPaymentStatus: "paid",
+    resourceId: `payment-${index + 1}`,
+    orderId: `order-${index + 1}`,
+    decision: "confirm",
+    afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 }
+  });
+  for (const audits of [
+    [baseAudit(0)],
+    [baseAudit(0), { ...baseAudit(1), operationMemberIndex: 0 }],
+    [baseAudit(0), { ...baseAudit(1), requestedPaymentStatus: "abnormal" }],
+    Array.from({ length: 101 }, (_, index) => ({
+      ...baseAudit(index % 2),
+      _id: `audit-over-limit-${index}`,
+      operationMemberCount: 101,
+      operationMemberIndex: index
+    }))
+  ]) {
+    const db = database(fixture({ state: {
+      orders,
+      payment_records: payments,
+      admin_operation_logs: audits,
+      idempotency_records: [staleProcessingRecord("payment_legacy_paid", "finance-1", key, legacyInput)]
+    } }));
+    await assert.rejects(
+      () => paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "paid" }, idempotencyKey: key, allowMissingIdempotencyKey: true }),
+      (error) => ["BUSINESS_LOG_DUPLICATE", "BUSINESS_LOG_CONFLICT"].includes(error.code)
+    );
+  }
 });
 
 test("customer account identity and amount invariants fail closed before receipt writes", async () => {
@@ -884,6 +1049,16 @@ test("legacy batch requires stable dual customer identity and accepts exactly 10
   const result = await paymentService(boundaryDb).updateLegacyPayment({ actor: actor(), input: { orderId: "order-0", paymentStatus: "abnormal" }, idempotencyKey: "batch-boundary-100", allowMissingIdempotencyKey: true });
   assert.equal(result.updatedCount, 100);
   assert.equal(boundaryDb.snapshot().orders.filter((order) => order.status === "abnormal").length, 100);
+  const audits = boundaryDb.snapshot().admin_operation_logs;
+  assert.equal(audits.length, 100);
+  assert.deepEqual(new Set(audits.map((log) => log.operationMemberIndex)), new Set(Array.from({ length: 100 }, (_, index) => index)));
+  for (const audit of audits) {
+    assert.equal(audit.rootOperationId, "batch-boundary-100");
+    assert.equal(audit.operationKind, "legacy_payment");
+    assert.equal(audit.operationMemberCount, 100);
+    assert.equal(audit.operationSeedOrderId, "order-0");
+    assert.equal(audit.requestedPaymentStatus, "abnormal");
+  }
 });
 
 test("post-commit account recalculation failure is safe and retryable while success clears the pending marker", async () => {
@@ -897,4 +1072,117 @@ test("post-commit account recalculation failure is safe and retryable while succ
   const ok = await confirm(paymentService(okDb, { async recalculateAccount() { return { result: { ok: true } }; } }), {}, "recalc-ok-1");
   assert.equal(ok.accountRecalculationPending, false);
   assert.equal(okDb.snapshot().orders[0].accountRecalculationPending, false);
+});
+
+test("distinct legacy operations can record equal partial receipts without losing the first amount log", async () => {
+  const db = database(fixture());
+  const service = paymentService(db);
+  const updatePartial = (key) => service.updateLegacyPayment({
+    actor: actor(),
+    input: { orderId: "order-1", paymentStatus: "partial_paid", paidAmountCents: 100, applyBatch: false },
+    idempotencyKey: key,
+    allowMissingIdempotencyKey: true
+  });
+  await updatePartial("equal-partial-A");
+  await updatePartial("equal-partial-B");
+  const state = db.snapshot();
+  assert.equal(state.account_logs.length, 2);
+  assert.equal(new Set(state.account_logs.map((log) => log.businessKey)).size, 2);
+  assert.deepEqual(state.account_logs.map((log) => ({ change: log.changeAmount, before: log.beforeTotalPaidAmount, after: log.afterTotalPaidAmount })), [
+    { change: 100, before: 200, after: 300 },
+    { change: 100, before: 300, after: 400 }
+  ]);
+  assert.deepEqual({ paid: state.orders[0].paidAmount, unpaid: state.orders[0].unpaidAmount }, { paid: 400, unpaid: 600 });
+});
+
+test("account recalculation marker ownership prevents an older A completion from clearing newer B", async () => {
+  const db = database(fixture());
+  const pendingRecalculations = [];
+  const service = paymentService(db, {
+    recalculateAccount() {
+      return new Promise((resolve) => pendingRecalculations.push(resolve));
+    }
+  });
+  const updatePartial = (key, paidAmountCents) => service.updateLegacyPayment({
+    actor: actor(),
+    input: { orderId: "order-1", paymentStatus: "partial_paid", paidAmountCents, applyBatch: false },
+    idempotencyKey: key,
+    allowMissingIdempotencyKey: true
+  });
+  async function waitForRecalculationCount(expected) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (pendingRecalculations.length >= expected) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    throw new Error(`recalculation ${expected} did not start`);
+  }
+
+  const operationA = updatePartial("recalc-owner-A", 100);
+  await waitForRecalculationCount(1);
+  const afterA = db.snapshot().orders[0];
+  assert.deepEqual({ pending: afterA.accountRecalculationPending, owner: afterA.accountRecalculationOwner, expectedVersion: afterA.accountRecalculationExpectedVersion }, { pending: true, owner: "recalc-owner-A", expectedVersion: 5 });
+
+  const operationB = updatePartial("recalc-owner-B", 100);
+  await waitForRecalculationCount(2);
+  const afterB = db.snapshot().orders[0];
+  assert.deepEqual({ pending: afterB.accountRecalculationPending, owner: afterB.accountRecalculationOwner, expectedVersion: afterB.accountRecalculationExpectedVersion }, { pending: true, owner: "recalc-owner-B", expectedVersion: 6 });
+
+  pendingRecalculations[0]({ ok: true });
+  const resultA = await operationA;
+  assert.equal(resultA.accountRecalculationPending, true);
+  assert.deepEqual({ pending: db.snapshot().orders[0].accountRecalculationPending, owner: db.snapshot().orders[0].accountRecalculationOwner }, { pending: true, owner: "recalc-owner-B" });
+
+  pendingRecalculations[1]({ ok: true });
+  const resultB = await operationB;
+  assert.equal(resultB.accountRecalculationPending, false);
+  assert.deepEqual({ pending: db.snapshot().orders[0].accountRecalculationPending, owner: db.snapshot().orders[0].accountRecalculationOwner, expectedVersion: db.snapshot().orders[0].accountRecalculationExpectedVersion }, { pending: false, owner: "recalc-owner-B", expectedVersion: 6 });
+});
+
+test("completed idempotent replay preserves success or pending without recalculating again", async () => {
+  for (const [key, recalculationResult, expectedPending] of [
+    ["stable-replay-success", { ok: true }, false],
+    ["stable-replay-pending", { ok: false }, true]
+  ]) {
+    let calls = 0;
+    const db = database(fixture());
+    const service = paymentService(db, {
+      idempotency: sharedIdempotency,
+      async recalculateAccount() {
+        calls += 1;
+        return recalculationResult;
+      }
+    });
+    const first = await confirm(service, {}, key);
+    const replay = await confirm(service, {}, key);
+    assert.equal(first.accountRecalculationPending, expectedPending);
+    assert.equal(replay.accountRecalculationPending, expectedPending);
+    assert.equal(replay.reused, true);
+    assert.equal(calls, 1);
+  }
+});
+
+test("a completed success replay remains successful after a newer payment owns the current marker", async () => {
+  let calls = 0;
+  const db = database(fixture());
+  const service = paymentService(db, {
+    idempotency: sharedIdempotency,
+    async recalculateAccount() {
+      calls += 1;
+      return calls === 1 ? { ok: true } : { ok: false };
+    }
+  });
+  const updatePartial = (key) => service.updateLegacyPayment({
+    actor: actor(),
+    input: { orderId: "order-1", paymentStatus: "partial_paid", paidAmountCents: 100, applyBatch: false },
+    idempotencyKey: key,
+    allowMissingIdempotencyKey: true
+  });
+  const first = await updatePartial("stable-old-success");
+  const newer = await updatePartial("stable-new-pending");
+  const replay = await updatePartial("stable-old-success");
+  assert.equal(first.accountRecalculationPending, false);
+  assert.equal(newer.accountRecalculationPending, true);
+  assert.equal(replay.accountRecalculationPending, false);
+  assert.equal(replay.reused, true);
+  assert.equal(calls, 2);
 });
