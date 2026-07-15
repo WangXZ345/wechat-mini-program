@@ -177,21 +177,19 @@ function mutationResult(payment, order, decision, options = {}) {
   };
 }
 
-function recalculationMarker(item = {}) {
-  if (item.recalculationOwned === false) return null;
-  const order = item && item.order || item;
-  const orderId = cleanText(order._id, 128);
-  const owner = cleanText(order.accountRecalculationOwner, 180);
-  const expectedVersion = order.accountRecalculationExpectedVersion;
-  const auditId = cleanText(item && item.recalculationAuditId, 128);
+function recalculationMarker(log = {}) {
+  if (!["pending", "success"].includes(cleanText(log.accountRecalculationStatus, 20))) return null;
+  const after = log.afterData || {};
+  const orderId = cleanText(log.orderId, 128);
+  const owner = cleanText(after.accountRecalculationOwner, 180);
+  const expectedVersion = after.accountRecalculationExpectedVersion;
+  const auditId = cleanText(log._id, 128);
   if (!orderId || !owner || !auditId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) return null;
   return { orderId, owner, expectedVersion, auditId };
 }
 
-function recalculationMarkers(items = []) {
-  return items
-    .map((item) => recalculationMarker(item))
-    .filter(Boolean);
+function recalculationMarkers(logs = []) {
+  return logs.map(recalculationMarker).filter(Boolean);
 }
 
 function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerPepper = "", recalculateAccount, now = () => new Date(), randomId = () => crypto.randomUUID() } = {}) {
@@ -379,20 +377,19 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     if (!payment) return null;
     const order = payment.orderId ? (await db.collection("orders").doc(payment.orderId).get()).data : null;
     if (!order) return null;
-    validateRecoveryLog(logs[0], payment, order, decision);
-    return {
-      ...mutationResult(payment, order, decision, { affected: 0, reused: true, updatedCount: 1, accountRecalculationPending: order.accountRecalculationPending === true }),
-      _internal: {
-        orderIds: [order._id],
-        recalculationMarkers: recalculationMarkers([{
-          order,
-          recalculationAuditId: logs[0]._id,
-          recalculationOwned: logs[0].accountRecalculationStatus === "pending" || logs[0].accountRecalculationStatus === "success"
-        }]),
-        userId: cleanText(order.userId, 128),
-        userOpenid: cleanText(order.userOpenid || order.openid, 128)
-      }
-    };
+    const requestedStatus = decision === "reject" ? "unpaid" : "paid";
+    const invalidMetadata = [
+      cleanText(logs[0].sourceId, 180) !== operationId,
+      cleanText(logs[0].rootOperationId, 180) !== operationId,
+      cleanText(logs[0].operationKind, 40) !== "web_payment",
+      logs[0].operationMemberCount !== 1,
+      logs[0].operationMemberIndex !== 0,
+      cleanText(logs[0].operationSeedOrderId, 128) !== cleanText(order._id, 128),
+      cleanText(logs[0].requestedPaymentStatus, 40) !== requestedStatus
+    ];
+    if (invalidMetadata.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志元数据冲突", 409);
+    await validateRecoveryEvidence(logs[0], payment, order, decision, requestedStatus);
+    return mutationResult(payment, order, decision, { affected: 0, reused: true, updatedCount: 1, accountRecalculationPending: order.accountRecalculationPending === true });
   }
 
   function expectedRecoveryState(decision, requestedStatus, payment) {
@@ -412,6 +409,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     const conflict = [
       cleanText(log && log.resourceId, 128) !== cleanText(payment._id, 128),
       cleanText(log && log.orderId, 128) !== cleanText(order._id, 128),
+      cleanText(payment && payment.orderId, 128) !== cleanText(order._id, 128),
       cleanText(log && log.decision, 20) !== decision,
       cleanText(payment.status || payment.paymentStatus, 60) !== expected.recordStatus,
       cleanText(payment.paymentStatus, 60) !== expected.paymentStatus,
@@ -426,6 +424,122 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       after.orderVersion !== versionOf(order, "订单")
     ];
     if (conflict.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志与当前状态不一致", 409);
+  }
+
+  function recoveryCents(value) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款恢复金额证据无效", 409);
+    }
+    return value;
+  }
+
+  async function uniqueRecoveryRow(collectionName, where, missingMessage, duplicateMessage) {
+    const response = await db.collection(collectionName).where(where).limit(2).get();
+    const rows = Array.isArray(response.data) ? response.data : [];
+    if (rows.length > 1) throw new PaymentMutationError("BUSINESS_LOG_DUPLICATE", duplicateMessage, 409);
+    if (!rows[0]) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", missingMessage, 409);
+    return rows[0];
+  }
+
+  async function validateReceiptAndAccountEvidence(log, payment, order, requestedStatus) {
+    const receiptBusinessKey = `payment_receipt:${cleanText(log.sourceId, 320)}:${cleanText(payment._id, 128)}`;
+    const receipt = await uniqueRecoveryRow("account_logs", { businessKey: receiptBusinessKey }, "付款账款流水证据缺失", "付款账款流水证据重复");
+    const beforeOrder = recoveryCents(receipt.beforeTotalOrderAmount);
+    const afterOrder = recoveryCents(receipt.afterTotalOrderAmount);
+    const beforePaid = recoveryCents(receipt.beforeTotalPaidAmount);
+    const afterPaid = recoveryCents(receipt.afterTotalPaidAmount);
+    const beforeUnpaid = recoveryCents(receipt.beforeTotalUnpaidAmount);
+    const afterUnpaid = recoveryCents(receipt.afterTotalUnpaidAmount);
+    const changeAmount = recoveryCents(receipt.changeAmount);
+    const expectedChangeType = requestedStatus === "partial_paid" && cleanText(log.afterData && log.afterData.orderPaymentStatus, 60) !== "paid"
+      ? "partial_payment_confirmed"
+      : "payment_confirmed";
+    const invalidReceipt = [
+      receiptBusinessKey !== cleanText(receipt.businessKey, 512),
+      cleanText(receipt.sourceType, 40) !== "payment",
+      cleanText(receipt.sourceId, 128) !== cleanText(payment._id, 128),
+      cleanText(receipt.relatedPaymentRecordId, 128) !== cleanText(payment._id, 128),
+      cleanText(receipt.relatedOrderId, 128) !== cleanText(order._id, 128),
+      cleanText(order.userId, 128) && cleanText(receipt.userId, 128) !== cleanText(order.userId, 128),
+      cleanText(order.userOpenid || order.openid, 128) && cleanText(receipt.userOpenid, 128) !== cleanText(order.userOpenid || order.openid, 128),
+      cleanText(receipt.changeType, 80) !== expectedChangeType,
+      beforeOrder !== afterOrder,
+      beforePaid + beforeUnpaid !== beforeOrder,
+      afterPaid + afterUnpaid !== afterOrder,
+      changeAmount <= 0,
+      beforePaid + changeAmount !== afterPaid,
+      beforeUnpaid - changeAmount !== afterUnpaid,
+      recoveryCents(payment.reviewPaidAmount) !== changeAmount,
+      cleanText(payment.reviewBusinessKey, 512) !== cleanText(log.businessKey, 512)
+    ];
+    if (invalidReceipt.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款账款流水证据冲突", 409);
+
+    const account = await findAccount(db, order);
+    if (!account) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "客户账款证据缺失", 409);
+    const orderUserId = cleanText(order.userId, 128);
+    const orderOpenid = cleanText(order.userOpenid || order.openid, 128);
+    if ((orderUserId && cleanText(account.userId, 128) !== orderUserId) || (orderOpenid && cleanText(account.userOpenid, 128) !== orderOpenid)) {
+      throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "客户账款双身份证据冲突", 409);
+    }
+    const currentOrder = recoveryCents(account.totalOrderAmount !== undefined ? account.totalOrderAmount : account.totalReceivableAmount);
+    const currentPaid = recoveryCents(account.totalPaidAmount !== undefined ? account.totalPaidAmount : account.paidAmount);
+    const currentUnpaid = recoveryCents(account.totalUnpaidAmount !== undefined ? account.totalUnpaidAmount : account.unpaidAmount);
+    if (currentPaid + currentUnpaid !== currentOrder || currentOrder < afterOrder || currentPaid < afterPaid) {
+      throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "客户账款当前证据未包含付款流水", 409);
+    }
+  }
+
+  async function validateDeliveryEvidence(log, payment, order) {
+    const afterPaymentStatus = cleanText(log.afterData && log.afterData.orderPaymentStatus, 60);
+    const expectedAfterStatus = afterPaymentStatus !== "paid"
+      ? ""
+      : order.deliveryType === "self_pickup"
+        ? "waiting_pickup"
+        : order.deliveryType === "shipping"
+          ? "waiting_shipping"
+          : "";
+    if (!expectedAfterStatus) return;
+    const businessKey = `payment_delivery:${cleanText(payment._id, 128)}:${expectedAfterStatus}`;
+    const delivery = await uniqueRecoveryRow("delivery_logs", { businessKey }, "付款配送流水证据缺失", "付款配送流水证据重复");
+    const invalid = [
+      cleanText(delivery.businessKey, 512) !== businessKey,
+      cleanText(delivery.orderId, 128) !== cleanText(order._id, 128),
+      cleanText(delivery.afterStatus, 60) !== expectedAfterStatus,
+      cleanText(delivery.beforeStatus, 60) === expectedAfterStatus,
+      cleanText(delivery.action, 80) !== "payment_confirmed"
+    ];
+    if (invalid.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款配送流水证据冲突", 409);
+  }
+
+  async function validateSyncEvidence(log, payment, order, decision) {
+    const changedFields = ["status", "paymentStatus", "confirmStatus", "version", "updatedAt"];
+    for (const audience of ["owner", "admin"]) {
+      const prefix = audience === "owner" ? "payment_event_owner" : "payment_event_admin";
+      const eventId = deterministicId(prefix, log.businessKey);
+      const event = await uniqueRecoveryRow("sync_events", { eventId }, "付款同步事件证据缺失", "付款同步事件证据重复");
+      const invalid = [
+        cleanText(event.eventId, 128) !== eventId,
+        cleanText(event.audience, 20) !== audience,
+        cleanText(event.eventType, 80) !== "payment.status_changed",
+        cleanText(event.entityType, 40) !== "payment",
+        cleanText(event.entityId, 128) !== cleanText(payment._id, 128),
+        cleanText(event.action, 20) !== decision,
+        event.version !== versionOf(payment),
+        JSON.stringify(event.changedFields) !== JSON.stringify(changedFields),
+        audience === "owner" && cleanText(event.ownerKey, 128) !== ownerKey(order)
+      ];
+      if (invalid.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款同步事件证据冲突", 409);
+    }
+  }
+
+  async function validateRecoveryEvidence(log, payment, order, decision, requestedStatus) {
+    validateRecoveryLog(log, payment, order, decision, requestedStatus);
+    const hasReceipt = decision === "confirm" && ["paid", "partial_paid"].includes(requestedStatus || "paid");
+    if (hasReceipt) {
+      await validateReceiptAndAccountEvidence(log, payment, order, requestedStatus || "paid");
+      await validateDeliveryEvidence(log, payment, order);
+    }
+    await validateSyncEvidence(log, payment, order, decision);
   }
 
   async function legacyRootAudits(source, operationId) {
@@ -475,7 +589,6 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     for (let index = 0; index < memberCount; index += 1) {
       if (!indexes.has(index)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志成员不完整", 409);
     }
-    if (!orderIds.has(input.orderId)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志缺少入口订单", 409);
     return logs.slice().sort((left, right) => left.operationMemberIndex - right.operationMemberIndex);
   }
 
@@ -490,26 +603,49 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       if (!order || !payment || cleanText(order.latestPaymentRecordId, 128) !== cleanText(payment._id, 128)) {
         throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志关联结果缺失", 409);
       }
-      validateRecoveryLog(log, payment, order, decision, input.paymentStatus);
-      recovered.push({
-        payment,
-        order,
-        recalculationAuditId: log._id,
-        recalculationOwned: log.accountRecalculationStatus === "pending" || log.accountRecalculationStatus === "success"
-      });
+      await validateRecoveryEvidence(log, payment, order, decision, input.paymentStatus);
+      recovered.push({ payment, order });
     }
-    const seed = recovered.find((item) => item.order._id === input.orderId).order;
-    if (recovered.length > 1) validateBatchIdentity(seed, recovered.map((item) => item.order));
+    const seed = (await db.collection("orders").doc(input.orderId).get()).data;
+    if (!seed) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核入口订单证据缺失", 409);
+    validateBatchIdentity(seed, recovered.map((item) => item.order));
     const first = recovered[0];
+    return mutationResult(first.payment, first.order, decision, { affected: 0, reused: true, updatedCount: recovered.length, accountRecalculationPending: recovered.some((item) => item.order.accountRecalculationPending === true) });
+  }
+
+  async function contextFromAuditLogs(logs, seedOrderId) {
+    const markers = recalculationMarkers(logs);
+    if (!markers.length) return null;
+    const seed = (await db.collection("orders").doc(seedOrderId).get()).data;
+    if (!seed) return null;
     return {
-      ...mutationResult(first.payment, first.order, decision, { affected: 0, reused: true, updatedCount: recovered.length, accountRecalculationPending: recovered.some((item) => item.order.accountRecalculationPending === true) }),
-      _internal: {
-        orderIds: recovered.map((item) => item.order._id),
-        recalculationMarkers: recalculationMarkers(recovered),
-        userId: cleanText(seed.userId, 128),
-        userOpenid: cleanText(seed.userOpenid || seed.openid, 128)
-      }
+      markers,
+      userId: cleanText(seed.userId, 128),
+      userOpenid: cleanText(seed.userOpenid || seed.openid, 128)
     };
+  }
+
+  async function loadWebRecalculationContext({ operationId, paymentId, decision }) {
+    const businessKey = `payment_mutation:${operationId}:${paymentId}:${decision}`;
+    const response = await db.collection("admin_operation_logs").where({ businessKey }).limit(2).get();
+    const logs = Array.isArray(response.data) ? response.data : [];
+    if (logs.length !== 1) return null;
+    return contextFromAuditLogs(logs, cleanText(logs[0].orderId, 128));
+  }
+
+  async function loadLegacyRecalculationContext({ operationId, input }) {
+    const decision = input.paymentStatus === "unpaid" ? "reject" : input.paymentStatus === "abnormal" ? "abnormal" : "confirm";
+    const logs = validateLegacyRecoveryAudits(await legacyRootAudits(db, operationId), operationId, input, decision);
+    if (!logs.length) return null;
+    return contextFromAuditLogs(logs, input.orderId);
+  }
+
+  async function bestEffortRecalculationContext(loader) {
+    try {
+      return await loader();
+    } catch (_) {
+      return null;
+    }
   }
 
   async function targetOrders(tx, seedOrder, input) {
@@ -751,15 +887,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
         operationSeedOrderId: order._id,
         requestedPaymentStatus
       });
-      return {
-        ...mutationResult(updated.payment, updated.order, input.decision, { affected: 1, reused: false, updatedCount: 1, accountRecalculationPending: next.changeAmount > 0 }),
-        _internal: {
-          orderIds: [order._id],
-          recalculationMarkers: recalculationMarkers([updated]),
-          userId: cleanText(order.userId, 128),
-          userOpenid: cleanText(order.userOpenid || order.openid, 128)
-        }
-      };
+      return mutationResult(updated.payment, updated.order, input.decision, { affected: 1, reused: false, updatedCount: 1, accountRecalculationPending: next.changeAmount > 0 });
     });
   }
 
@@ -805,15 +933,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       }
       const first = updated[0];
       const decision = input.paymentStatus === "unpaid" ? "reject" : input.paymentStatus === "abnormal" ? "abnormal" : "confirm";
-      return {
-        ...mutationResult(first.payment, first.order, decision, { affected: updated.filter((item) => !item.reused).length, reused: updated.every((item) => item.reused), updatedCount: updated.length, accountRecalculationPending: updated.some((item) => item.order.accountRecalculationPending === true) }),
-        _internal: {
-          orderIds: updated.map((item) => item.order._id),
-          recalculationMarkers: recalculationMarkers(updated),
-          userId: cleanText(seed.userId, 128),
-          userOpenid: cleanText(seed.userOpenid || seed.openid, 128)
-        }
-      };
+      return mutationResult(first.payment, first.order, decision, { affected: updated.filter((item) => !item.reused).length, reused: updated.every((item) => item.reused), updatedCount: updated.length, accountRecalculationPending: updated.some((item) => item.order.accountRecalculationPending === true) });
     });
   }
 
@@ -832,9 +952,8 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     );
   }
 
-  function internalRecalculationMarkers(result) {
-    const internal = result && result._internal || {};
-    const source = Array.isArray(internal.recalculationMarkers) ? internal.recalculationMarkers : [];
+  function contextRecalculationMarkers(context) {
+    const source = Array.isArray(context && context.markers) ? context.markers : [];
     const markers = [];
     const seen = new Set();
     for (const value of source) {
@@ -867,10 +986,10 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       && after.orderVersion === marker.expectedVersion;
   }
 
-  async function replayRecalculationState(result) {
+  async function replayRecalculationState(result, context) {
     const publicResult = safePublicResult(result);
     if (!publicResult.accountRecalculationPending) return publicResult;
-    const markers = internalRecalculationMarkers(result);
+    const markers = contextRecalculationMarkers(context);
     if (!markers.length) return publicResult;
     try {
       for (const marker of markers) {
@@ -916,21 +1035,15 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     });
   }
 
-  async function postCommitRecalculation(result) {
+  async function postCommitRecalculation(result, context) {
     const publicResult = safePublicResult(result);
     if (!publicResult.accountRecalculationPending || typeof recalculateAccount !== "function") return publicResult;
     try {
-      const internal = result && result._internal || {};
-      const markers = internalRecalculationMarkers(result);
+      const markers = contextRecalculationMarkers(context);
       const orderIds = markers.map((marker) => marker.orderId);
-      let userId = cleanText(internal.userId, 128);
-      let userOpenid = cleanText(internal.userOpenid, 128);
+      const userId = cleanText(context && context.userId, 128);
+      const userOpenid = cleanText(context && context.userOpenid, 128);
       if ((!userId && !userOpenid) || !orderIds.length) return publicResult;
-      if (userId.includes("***") || userOpenid.includes("***")) {
-        const seedOrder = (await db.collection("orders").doc(orderIds[0]).get()).data;
-        userId = cleanText(seedOrder && seedOrder.userId, 128);
-        userOpenid = cleanText(seedOrder && (seedOrder.userOpenid || seedOrder.openid), 128);
-      }
       const recalculated = await recalculateAccount({
         userId,
         userOpenid,
@@ -967,7 +1080,10 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     if (!outcome || outcome.ok !== true) throwIdempotencyOutcome(outcome);
     const replay = outcome.data && outcome.data.duplicate === true;
     const result = replay ? { ...outcome.data, affected: 0, reused: true } : outcome.data;
-    return replay ? replayRecalculationState(result) : postCommitRecalculation(result);
+    const context = result.accountRecalculationPending === true
+      ? await bestEffortRecalculationContext(() => loadWebRecalculationContext({ operationId: key, paymentId: input.paymentId, decision: input.decision }))
+      : null;
+    return replay ? replayRecalculationState(result, context) : postCommitRecalculation(result, context);
   }
 
   async function updateLegacyPayment(command = {}) {
@@ -997,7 +1113,10 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     if (!outcome || outcome.ok !== true) throwIdempotencyOutcome(outcome);
     const replay = outcome.data && outcome.data.duplicate === true;
     const result = replay ? { ...outcome.data, affected: 0, reused: true } : outcome.data;
-    return replay ? replayRecalculationState(result) : postCommitRecalculation(result);
+    const context = result.accountRecalculationPending === true
+      ? await bestEffortRecalculationContext(() => loadLegacyRecalculationContext({ operationId, input }))
+      : null;
+    return replay ? replayRecalculationState(result, context) : postCommitRecalculation(result, context);
   }
 
   return {

@@ -623,15 +623,11 @@ test("idempotent replay is read-only, changed payload conflicts, and processing 
   assert.equal(db.snapshot().account_logs.length, 1);
   await assert.rejects(() => confirm(service, { reason: "different" }, "same-key-0001"), (error) => error.code === "IDEMPOTENCY_KEY_CONFLICT");
 
-  const committed = database(fixture({
-    payment: { status: "paid", paymentStatus: "paid", confirmStatus: "confirmed", version: 3 },
-    order: { status: "paid", paymentStatus: "paid", paidAmount: 1000, unpaidAmount: 0, version: 5 },
-    state: { admin_operation_logs: [{ _id: "audit-1", businessKey: "payment_mutation:recover-key-0001:payment-1:confirm", sourceId: "recover-key-0001", resourceId: "payment-1", orderId: "order-1", decision: "confirm", afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 } }] }
-  }));
+  const committed = database(await committedWebRecoveryState("recover-key-0001"));
   const recovered = await confirm(paymentService(committed, { idempotency: inMemoryIdempotency({ processingRecovery: true }) }), {}, "recover-key-0001");
   assert.equal(recovered.reused, true);
   assert.equal(recovered.affected, 0);
-  assert.equal(committed.snapshot().account_logs.length, 0);
+  assert.equal(committed.snapshot().account_logs.length, 1);
 });
 
 test("canonical service interoperates with the shared idempotency helper without exposing helper metadata", async () => {
@@ -652,25 +648,34 @@ test("canonical service interoperates with the shared idempotency helper without
   );
 });
 
+test("shared idempotency records persist only the public payment result", async () => {
+  const db = database(fixture());
+  await confirm(paymentService(db, { idempotency: sharedIdempotency }), {}, "public-idempotency-result");
+  const resultData = db.snapshot().idempotency_records[0].resultDataMasked;
+  const forbiddenKeys = new Set(["_internal", "userId", "userOpenid", "openid", "orderIds", "orderId", "auditId", "recalculationMarkers"]);
+  function assertPublicOnly(value) {
+    if (Array.isArray(value)) return value.forEach(assertPublicOnly);
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value)) {
+      assert.equal(forbiddenKeys.has(key), false, `unexpected persisted key: ${key}`);
+      assertPublicOnly(item);
+    }
+  }
+  assertPublicOnly(resultData);
+  assert.deepEqual(Object.keys(resultData).sort(), ["accountRecalculationPending", "affected", "decision", "duplicate", "idempotencyStatus", "orderNo", "paymentId", "reused", "status", "updatedAt", "updatedCount", "version"].sort());
+});
+
+async function committedWebRecoveryState(key) {
+  const db = database(fixture());
+  await confirm(paymentService(db), {}, key);
+  const state = db.snapshot();
+  state.idempotency_records = [staleProcessingRecord("payment_confirm", "finance-1", key, webInput())];
+  return state;
+}
+
 test("real shared idempotency recovery validates Web audit state before returning a committed result", async () => {
   const key = "real-web-recovery-key";
-  const input = webInput();
-  const committed = fixture({
-    payment: { status: "paid", paymentStatus: "paid", confirmStatus: "confirmed", version: 3 },
-    order: { status: "paid", paymentStatus: "paid", paidAmount: 1000, unpaidAmount: 0, version: 5, accountRecalculationPending: false },
-    state: {
-      admin_operation_logs: [{
-        _id: "audit-web-recovery",
-        businessKey: `payment_mutation:${key}:payment-1:confirm`,
-        sourceId: key,
-        resourceId: "payment-1",
-        orderId: "order-1",
-        decision: "confirm",
-        afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 }
-      }],
-      idempotency_records: [staleProcessingRecord("payment_confirm", "finance-1", key, input)]
-    }
-  });
+  const committed = await committedWebRecoveryState(key);
   const recoveredDb = database(committed);
   const recovered = await confirm(paymentService(recoveredDb, { idempotency: sharedIdempotency }), {}, key);
   assert.equal(recovered.reused, true);
@@ -686,44 +691,118 @@ test("real shared idempotency recovery validates Web audit state before returnin
   );
 });
 
-test("real shared idempotency recovers every order in a committed legacy batch", async () => {
-  const key = "real-legacy-batch-recovery";
+test("processing recovery fails closed when account, receipt, delivery, or either sync proof is missing", async () => {
+  const cases = [
+    ["account", (state) => { state.customer_accounts = []; }],
+    ["receipt", (state) => { state.account_logs = []; }],
+    ["delivery", (state) => { state.delivery_logs = []; }],
+    ["owner-sync", (state) => { state.sync_events = state.sync_events.filter((event) => event.audience !== "owner"); }],
+    ["admin-sync", (state) => { state.sync_events = state.sync_events.filter((event) => event.audience !== "admin"); }]
+  ];
+  for (const [name, removeEvidence] of cases) {
+    const key = `missing-recovery-${name}`;
+    const state = await committedWebRecoveryState(key);
+    removeEvidence(state);
+    const db = database(state);
+    await assert.rejects(
+      () => confirm(paymentService(db, { idempotency: sharedIdempotency }), {}, key),
+      (error) => ["BUSINESS_LOG_CONFLICT", "PAYMENT_STATUS_CONFLICT"].includes(error.code)
+    );
+  }
+});
+
+test("processing recovery fails closed on duplicate or conflicting companion evidence but permits later valid account growth", async () => {
+  const duplicateCases = [
+    ["account", (state) => { state.customer_accounts.push({ ...state.customer_accounts[0], _id: "account-duplicate" }); }],
+    ["account-identity", (state) => { state.customer_accounts[0].userOpenid = ""; }],
+    ["receipt", (state) => { state.account_logs.push({ ...state.account_logs[0], _id: "receipt-duplicate" }); }],
+    ["delivery", (state) => { state.delivery_logs.push({ ...state.delivery_logs[0], _id: "delivery-duplicate" }); }],
+    ["sync", (state) => { state.sync_events.push({ ...state.sync_events[0], _id: "sync-duplicate" }); }]
+  ];
+  for (const [name, duplicateEvidence] of duplicateCases) {
+    const key = `duplicate-recovery-${name}`;
+    const state = await committedWebRecoveryState(key);
+    duplicateEvidence(state);
+    await assert.rejects(
+      () => confirm(paymentService(database(state), { idempotency: sharedIdempotency }), {}, key),
+      (error) => ["BUSINESS_LOG_DUPLICATE", "BUSINESS_LOG_CONFLICT", "PAYMENT_STATUS_CONFLICT", "ACCOUNT_DUPLICATE"].includes(error.code)
+    );
+  }
+
+  const growthKey = "recovery-later-account-growth";
+  const growthState = await committedWebRecoveryState(growthKey);
+  Object.assign(growthState.customer_accounts[0], {
+    totalOrderAmount: 1500,
+    totalReceivableAmount: 1500,
+    totalPaidAmount: 1200,
+    paidAmount: 1200,
+    totalUnpaidAmount: 300,
+    unpaidAmount: 300
+  });
+  const recovered = await confirm(paymentService(database(growthState), { idempotency: sharedIdempotency }), {}, growthKey);
+  assert.equal(recovered.reused, true);
+});
+
+test("reject and abnormal processing recovery require sync proof but no receipt or delivery proof", async () => {
+  const rejectKey = "recovery-web-reject";
+  const rejectInput = webInput({ decision: "reject", reason: "凭证不清晰" });
+  const rejectSource = database(fixture());
+  await paymentService(rejectSource).reviewWebPayment({ actor: actor(), input: rejectInput, idempotencyKey: rejectKey });
+  const rejectState = rejectSource.snapshot();
+  assert.equal(rejectState.account_logs.length, 0);
+  assert.equal(rejectState.delivery_logs.length, 0);
+  rejectState.idempotency_records = [staleProcessingRecord("payment_reject", "finance-1", rejectKey, rejectInput)];
+  const rejected = await paymentService(database(rejectState), { idempotency: sharedIdempotency }).reviewWebPayment({ actor: actor(), input: rejectInput, idempotencyKey: rejectKey });
+  assert.equal(rejected.reused, true);
+
+  const abnormalKey = "recovery-legacy-abnormal";
+  const abnormalInput = { orderId: "order-1", paymentStatus: "abnormal", applyBatch: false };
+  const abnormalNormalized = { orderId: "order-1", paymentStatus: "abnormal", paidAmountCents: undefined, remark: "", applyBatch: false, paymentMethod: "" };
+  const abnormalSource = database(fixture());
+  await paymentService(abnormalSource).updateLegacyPayment({ actor: actor(), input: abnormalInput, idempotencyKey: abnormalKey, allowMissingIdempotencyKey: true });
+  const abnormalState = abnormalSource.snapshot();
+  assert.equal(abnormalState.account_logs.length, 0);
+  assert.equal(abnormalState.delivery_logs.length, 0);
+  abnormalState.idempotency_records = [staleProcessingRecord("payment_legacy_abnormal", "finance-1", abnormalKey, abnormalNormalized)];
+  const abnormal = await paymentService(database(abnormalState), { idempotency: sharedIdempotency }).updateLegacyPayment({ actor: actor(), input: abnormalInput, idempotencyKey: abnormalKey, allowMissingIdempotencyKey: true });
+  assert.equal(abnormal.reused, true);
+});
+
+async function committedLegacyBatchRecoveryState(key) {
   const legacyInput = { orderId: "order-1", paymentStatus: "paid", paidAmountCents: undefined, remark: "", applyBatch: true, paymentMethod: "" };
   const orders = ["1", "2"].map((suffix) => ({
     ...fixture().orders[0],
     _id: `order-${suffix}`,
     orderNo: `SO-00${suffix}`,
     latestPaymentRecordId: `payment-${suffix}`,
-    paymentBatchId: "batch-recovery",
-    status: "paid",
-    paymentStatus: "paid",
-    paidAmount: 1000,
-    unpaidAmount: 0,
-    version: 5,
-    accountRecalculationPending: false
+    paymentBatchId: "batch-recovery"
   }));
-  const payments = orders.map((order, index) => ({ ...fixture().payment_records[0], _id: `payment-${index + 1}`, orderId: order._id, status: "paid", paymentStatus: "paid", confirmStatus: "confirmed", version: 3 }));
-  const audits = orders.map((order, index) => ({
-    _id: `audit-${index + 1}`,
-    businessKey: `payment_mutation:${key}:${order._id}:payment-${index + 1}:confirm`,
-    sourceId: `${key}:${order._id}`,
-    rootOperationId: key,
-    operationKind: "legacy_payment",
-    operationMemberCount: orders.length,
-    operationMemberIndex: index,
-    operationSeedOrderId: "order-1",
-    requestedPaymentStatus: "paid",
-    resourceId: `payment-${index + 1}`,
-    orderId: order._id,
-    decision: "confirm",
-    afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 }
-  }));
-  const db = database(fixture({ state: {
+  const payments = orders.map((order, index) => ({ ...fixture().payment_records[0], _id: `payment-${index + 1}`, orderId: order._id, orderNo: order.orderNo }));
+  const baseAccount = fixture().customer_accounts[0];
+  const source = database(fixture({ state: {
     orders,
     payment_records: payments,
-    admin_operation_logs: audits,
-    idempotency_records: [staleProcessingRecord("payment_legacy_paid", "finance-1", key, legacyInput)]
+    customer_accounts: [{ ...baseAccount, totalOrderAmount: 2000, totalReceivableAmount: 2000, totalPaidAmount: 400, paidAmount: 400, totalUnpaidAmount: 1600, unpaidAmount: 1600 }]
   } }));
+  await paymentService(source).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "paid" }, idempotencyKey: key, allowMissingIdempotencyKey: true });
+  const state = source.snapshot();
+  state.idempotency_records = [staleProcessingRecord("payment_legacy_paid", "finance-1", key, legacyInput)];
+  return state;
+}
+
+async function committedLegacyPartialRecoveryState(key) {
+  const input = { orderId: "order-1", paymentStatus: "partial_paid", paidAmountCents: 300, applyBatch: false };
+  const normalized = { ...input, remark: "", paymentMethod: "" };
+  const source = database(fixture());
+  await paymentService(source).updateLegacyPayment({ actor: actor(), input, idempotencyKey: key, allowMissingIdempotencyKey: true });
+  const state = source.snapshot();
+  state.idempotency_records = [staleProcessingRecord("payment_legacy_partial_paid", "finance-1", key, normalized)];
+  return state;
+}
+
+test("real shared idempotency recovers every order in a committed legacy batch", async () => {
+  const key = "real-legacy-batch-recovery";
+  const db = database(await committedLegacyBatchRecoveryState(key));
   const result = await paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "paid" }, idempotencyKey: key, allowMissingIdempotencyKey: true });
   assert.equal(result.reused, true);
   assert.equal(result.updatedCount, 2);
@@ -732,37 +811,7 @@ test("real shared idempotency recovers every order in a committed legacy batch",
 
 test("real shared idempotency recovers a committed legacy partial payment without applying it twice", async () => {
   const key = "real-legacy-partial-recovery";
-  const legacyInput = { orderId: "order-1", paymentStatus: "partial_paid", paidAmountCents: 300, remark: "", applyBatch: false, paymentMethod: "" };
-  const payment = { ...fixture().payment_records[0], status: "partial_paid", paymentStatus: "partial_paid", confirmStatus: "confirmed", version: 3 };
-  const order = { ...fixture().orders[0], status: "partial_paid", paymentStatus: "partial_paid", paidAmount: 500, unpaidAmount: 500, version: 5, accountRecalculationPending: false };
-  const audit = {
-    _id: "audit-partial",
-    businessKey: `payment_mutation:${key}:order-1:payment-1:confirm`,
-    sourceId: `${key}:order-1`,
-    rootOperationId: key,
-    operationKind: "legacy_payment",
-    operationMemberCount: 1,
-    operationMemberIndex: 0,
-    operationSeedOrderId: "order-1",
-    requestedPaymentStatus: "partial_paid",
-    resourceId: "payment-1",
-    orderId: "order-1",
-    decision: "confirm",
-    afterData: { status: "partial_paid", paymentStatus: "partial_paid", version: 3, orderStatus: "partial_paid", orderPaymentStatus: "partial_paid", orderVersion: 5 }
-  };
-  const db = database(fixture({ state: {
-    payment_records: [payment],
-    orders: [order],
-    account_logs: [{
-      _id: "account-log-partial",
-      businessKey: `payment_receipt:${key}:order-1:payment-1`,
-      relatedOrderId: "order-1",
-      relatedPaymentRecordId: "payment-1",
-      changeAmount: 300
-    }],
-    admin_operation_logs: [audit],
-    idempotency_records: [staleProcessingRecord("payment_legacy_partial_paid", "finance-1", key, legacyInput)]
-  } }));
+  const db = database(await committedLegacyPartialRecoveryState(key));
   const result = await paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "partial", paidAmountCents: 300, applyBatch: false }, idempotencyKey: key, allowMissingIdempotencyKey: true });
   assert.equal(result.reused, true);
   assert.equal(result.affected, 0);
@@ -772,59 +821,83 @@ test("real shared idempotency recovers a committed legacy partial payment withou
   assert.equal(db.snapshot().admin_operation_logs.length, 1);
 });
 
+test("legacy processing recovery rejects a payment whose orderId disagrees with the audit order", async () => {
+  const key = "legacy-payment-order-relation";
+  const input = { orderId: "order-1", paymentStatus: "partial_paid", paidAmountCents: 300, applyBatch: false };
+  const normalized = { ...input, remark: "", paymentMethod: "" };
+  const source = database(fixture());
+  await paymentService(source).updateLegacyPayment({ actor: actor(), input, idempotencyKey: key, allowMissingIdempotencyKey: true });
+  const state = source.snapshot();
+  state.payment_records[0].orderId = "order-other";
+  state.idempotency_records = [staleProcessingRecord("payment_legacy_partial_paid", "finance-1", key, normalized)];
+  const db = database(state);
+  await assert.rejects(
+    () => paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({ actor: actor(), input, idempotencyKey: key, allowMissingIdempotencyKey: true }),
+    (error) => ["BUSINESS_LOG_CONFLICT", "PAYMENT_STATUS_CONFLICT"].includes(error.code)
+  );
+});
+
+test("legacy recovery accepts a frozen child set that excludes an already-paid seed order", async () => {
+  const key = "mixed-batch-seed-paid";
+  const base = fixture();
+  const seedOrder = {
+    ...base.orders[0],
+    _id: "order-1",
+    latestPaymentRecordId: "payment-1",
+    paymentBatchId: "batch-mixed-seed",
+    status: "paid",
+    paymentStatus: "paid",
+    paidAmount: 1000,
+    unpaidAmount: 0,
+    version: 5
+  };
+  const siblingOrder = {
+    ...base.orders[0],
+    _id: "order-2",
+    orderNo: "SO-002",
+    latestPaymentRecordId: "payment-2",
+    paymentBatchId: "batch-mixed-seed"
+  };
+  const seedPayment = {
+    ...base.payment_records[0],
+    _id: "payment-1",
+    orderId: "order-1",
+    status: "paid",
+    paymentStatus: "paid",
+    confirmStatus: "confirmed",
+    version: 3
+  };
+  const siblingPayment = { ...base.payment_records[0], _id: "payment-2", orderId: "order-2", orderNo: "SO-002" };
+  const source = database(fixture({ state: {
+    orders: [seedOrder, siblingOrder],
+    payment_records: [seedPayment, siblingPayment],
+    customer_accounts: [{ ...base.customer_accounts[0], totalOrderAmount: 2000, totalReceivableAmount: 2000, totalPaidAmount: 1200, paidAmount: 1200, totalUnpaidAmount: 800, unpaidAmount: 800 }]
+  } }));
+  await paymentService(source).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "paid" }, idempotencyKey: key, allowMissingIdempotencyKey: true });
+  const state = source.snapshot();
+  assert.equal(state.admin_operation_logs.length, 1);
+  assert.equal(state.admin_operation_logs[0].orderId, "order-2");
+  assert.equal(state.admin_operation_logs[0].operationSeedOrderId, "order-1");
+  const normalized = { orderId: "order-1", paymentStatus: "paid", paidAmountCents: undefined, remark: "", applyBatch: true, paymentMethod: "" };
+  state.idempotency_records = [staleProcessingRecord("payment_legacy_paid", "finance-1", key, normalized)];
+  const db = database(state);
+  const recovered = await paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "paid" }, idempotencyKey: key, allowMissingIdempotencyKey: true });
+  assert.equal(recovered.reused, true);
+  assert.equal(recovered.updatedCount, 1);
+  assert.equal(db.snapshot().account_logs.length, 1);
+});
+
 test("legacy recovery freezes the committed audit membership when current batch membership changes", async () => {
   async function recoverWithMembershipChange(change) {
     const key = `frozen-membership-${change}`;
-    const legacyInput = { orderId: "order-1", paymentStatus: "paid", paidAmountCents: undefined, remark: "", applyBatch: true, paymentMethod: "" };
-    const orders = ["1", "2"].map((suffix) => ({
-      ...fixture().orders[0],
-      _id: `order-${suffix}`,
-      orderNo: `SO-00${suffix}`,
-      latestPaymentRecordId: `payment-${suffix}`,
-      paymentBatchId: "batch-frozen",
-      status: "paid",
-      paymentStatus: "paid",
-      paidAmount: 1000,
-      unpaidAmount: 0,
-      version: 5,
-      accountRecalculationPending: false
-    }));
-    const payments = orders.map((order, index) => ({
-      ...fixture().payment_records[0],
-      _id: `payment-${index + 1}`,
-      orderId: order._id,
-      status: "paid",
-      paymentStatus: "paid",
-      confirmStatus: "confirmed",
-      version: 3
-    }));
-    const audits = orders.map((order, index) => ({
-      _id: `audit-${index + 1}`,
-      businessKey: `payment_mutation:${key}:${order._id}:payment-${index + 1}:confirm`,
-      sourceId: `${key}:${order._id}`,
-      rootOperationId: key,
-      operationKind: "legacy_payment",
-      operationMemberCount: 2,
-      operationMemberIndex: index,
-      operationSeedOrderId: "order-1",
-      requestedPaymentStatus: "paid",
-      resourceId: `payment-${index + 1}`,
-      orderId: order._id,
-      decision: "confirm",
-      afterData: { status: "paid", paymentStatus: "paid", version: 3, orderStatus: "paid", orderPaymentStatus: "paid", orderVersion: 5 }
-    }));
+    const state = await committedLegacyBatchRecoveryState(key);
     if (change === "added") {
-      orders.push({ ...fixture().orders[0], _id: "order-3", orderNo: "SO-003", latestPaymentRecordId: "payment-3", paymentBatchId: "batch-frozen" });
-      payments.push({ ...fixture().payment_records[0], _id: "payment-3", orderId: "order-3" });
+      state.orders.push({ ...fixture().orders[0], _id: "order-3", orderNo: "SO-003", latestPaymentRecordId: "payment-3", paymentBatchId: "batch-recovery" });
+      state.payment_records.push({ ...fixture().payment_records[0], _id: "payment-3", orderId: "order-3" });
     } else {
-      orders[1].paymentBatchId = "batch-moved-after-commit";
+      state.orders.find((order) => order._id === "order-2").paymentBatchId = "batch-moved-after-commit";
     }
-    const db = database(fixture({ state: {
-      orders,
-      payment_records: payments,
-      admin_operation_logs: audits,
-      idempotency_records: [staleProcessingRecord("payment_legacy_paid", "finance-1", key, legacyInput)]
-    } }));
+    const db = database(state);
     const result = await paymentService(db, { idempotency: sharedIdempotency }).updateLegacyPayment({
       actor: actor(),
       input: { orderId: "order-1", paymentStatus: "paid" },
