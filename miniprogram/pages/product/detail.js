@@ -5,6 +5,7 @@ const { createSubmitKey, clearSubmitKey, generateIdempotencyKey } = require("../
 const {
   cartItemFromAddResult,
   clearProductPreview,
+  consumeProductPreview,
   markDirty,
   readProductPreview,
   upsertCartCacheItem,
@@ -119,19 +120,33 @@ Page({
       if (busy) Promise.resolve(request).finally(() => this.loadProduct({ silent: true })).catch(() => null);
     });
     const hasPreview = this.applyProductPreview(id);
-    ensureLogin()
+    this.afterFirstPaint(() => this.initializeAfterFirstPaint(hasPreview));
+  },
+
+  onShow() {
+    this.afterFirstPaint(() => {
+      ensureFrontendAccess()
+        .then(() => this.applySelectedAddressFromStorage())
+        .catch(() => null);
+    });
+  },
+
+  afterFirstPaint(callback) {
+    if (typeof wx.nextTick === "function") {
+      wx.nextTick(callback);
+      return;
+    }
+    setTimeout(callback, 0);
+  },
+
+  initializeAfterFirstPaint(hasPreview) {
+    return ensureLogin({ showLoading: false })
       .then(() => ensureFrontendAccess())
       .then(() => Promise.all([
         this.loadProduct({ silent: hasPreview }),
         this.loadDeliveryOptions()
       ]))
       .catch((err) => toast(err.message));
-  },
-
-  onShow() {
-    ensureFrontendAccess()
-      .then(() => this.applySelectedAddressFromStorage())
-      .catch(() => null);
   },
 
   shapeProduct(source = {}) {
@@ -148,7 +163,7 @@ Page({
   },
 
   applyProductPreview(productId = this.data.id) {
-    const cached = readProductPreview(productId);
+    const cached = consumeProductPreview(productId) || readProductPreview(productId);
     if (!cached || !cached.data) return false;
     const product = this.shapeProduct(cached.data);
     this.setData({ product, loading: false, initialized: true }, () => this.updateTotal());
