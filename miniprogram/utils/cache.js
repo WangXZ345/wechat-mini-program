@@ -47,32 +47,26 @@ function positiveNumber(value) {
   return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
-function cacheEnvelope(data, options = {}) {
-  if (data === undefined) return null;
+function set(key, data, options = {}) {
+  if (!key || data === undefined) return false;
   let cacheData = data;
   if (typeof options.sanitize === "function") {
     try {
       cacheData = options.sanitize(data);
     } catch (err) {
-      return null;
+      return false;
     }
   }
-  if (cacheData === undefined) return null;
+  if (cacheData === undefined) return false;
 
   const updatedAt = Date.now();
   const ttlMs = positiveNumber(options.ttlMs);
-  return {
+  return rawSet(key, {
     __cacheVersion: positiveNumber(options.version) || CACHE_VERSION,
     data: cacheData,
     updatedAt,
     expiresAt: ttlMs ? updatedAt + ttlMs : 0
-  };
-}
-
-function set(key, data, options = {}) {
-  if (!key) return false;
-  const envelope = cacheEnvelope(data, options);
-  return envelope ? rawSet(key, envelope) : false;
+  });
 }
 
 function get(key, options = {}) {

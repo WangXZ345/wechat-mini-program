@@ -242,8 +242,8 @@ test("persistent preview remains the fallback", () => {
 });
 
 test("network initialization begins after nextTick and preserves exact detail calls", async () => {
-  state.staged = { data: { _id: "p1", productId: "p1", name: "内存商品", price: 100 } };
-  state.responses.getProducts = { products: [{ _id: "p1", name: "校准商品", price: 200 }] };
+  state.staged = { data: { _id: "p1", productId: "p1", name: "内存商品", price: 100, specification: "首页旧规格" } };
+  state.responses.getProducts = { products: [{ _id: "p1", name: "校准商品", price: 200, specification: "最新规格" }] };
   state.responses.getUserDeliveryPreference = {};
   state.responses.getSettings = {};
   state.responses.getDefaultAddress = {};
@@ -265,6 +265,10 @@ test("network initialization begins after nextTick and preserves exact detail ca
   ["getUserDeliveryPreference", "getSettings", "getDefaultAddress", "getFavoriteStatus"]
     .forEach((name) => assert.equal(state.calls.some((item) => item.name === name), true));
   assert.equal(page.data.product.name, "校准商品");
+  assert.equal(state.persistedWrites.length, 1);
+  assert.equal(state.persistedWrites[0]._id, "p1");
+  assert.equal(state.persistedWrites[0].name, "校准商品");
+  assert.equal(state.persistedWrites[0].specification, "最新规格");
 });
 
 test("product sync subscribes once and is cancelled on unload", async () => {
@@ -342,6 +346,7 @@ test("in-flight product, favorite and delivery results do not update or toast af
   assert.deepEqual(state.feedbackErrors, []);
   assert.deepEqual(state.feedbackWarnings, []);
   assert.equal(page.productLoading, null);
+  assert.deepEqual(state.persistedWrites, []);
 });
 
 test("rejected product, delivery and authentication requests after unload are safely consumed", async () => {

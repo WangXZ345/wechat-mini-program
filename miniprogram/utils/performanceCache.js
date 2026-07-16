@@ -358,6 +358,9 @@ function stageProductPreview(product = {}, options = {}) {
   const key = productPreviewCacheKey(preview.productId, options.openid);
   if (!key || !preview.productId) return null;
   const updatedAt = now();
+  stagedProductPreviews.forEach((cached, cachedKey) => {
+    if (cached.expiresAt < updatedAt) stagedProductPreviews.delete(cachedKey);
+  });
   const requestedTtlMs = Number(options.ttlMs);
   const ttlMs = Number.isFinite(requestedTtlMs) && requestedTtlMs > 0
     ? requestedTtlMs

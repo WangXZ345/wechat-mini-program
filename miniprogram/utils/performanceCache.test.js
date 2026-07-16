@@ -65,6 +65,16 @@ test("expired staged preview is rejected", () => {
   assert.equal(cache.consumeProductPreview("p1"), null);
 });
 
+test("staging a new preview physically removes expired staged previews", () => {
+  cache.stageProductPreview(product(), { ttlMs: 50 });
+  now += 51;
+  cache.stageProductPreview(product({ _id: "p2", name: "第二件商品" }));
+
+  now = 1_000;
+  assert.equal(cache.consumeProductPreview("p1"), null);
+  assert.equal(cache.consumeProductPreview("p2").data.name, "第二件商品");
+});
+
 test("invalid staged preview TTL falls back to the default TTL", () => {
   cache.stageProductPreview(product({ _id: "ttl-negative" }), { ttlMs: -10 });
   now += 2;
