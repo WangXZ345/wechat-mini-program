@@ -1016,7 +1016,11 @@ describe("HttpBffTransport payment review mutation", () => {
     const transport = new HttpBffTransport(client);
     await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
 
-    const response = await transport.mutate("payments", "confirm", paymentInput, {
+    const response = await transport.mutate("payments", "confirm", {
+      ...paymentInput,
+      id: "  pay-001  ",
+      reason: "  已核对到账  "
+    }, {
       idempotencyKey: "payments:confirm:test",
       expectedVersion: 2
     });

@@ -9,13 +9,16 @@ const dateValue = z.string().refine((value) => {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
 }, "timestamp must be canonical UTC ISO");
 const shortText = (max: number) => z.string().min(1).max(max);
+const trimString = (value: unknown) => typeof value === "string" ? value.trim() : value;
+const inputId = z.preprocess(trimString, z.string().min(1).max(128));
+const inputReason = z.preprocess(trimString, z.string().max(300).default(""));
 
 const paymentMutationInputSchema = z.object({
-  id: shortText(128),
+  id: inputId,
   expectedStatus: z.literal("pending_confirm"),
   expectedVersion: safeInteger,
   expectedUpdatedAt: dateValue,
-  reason: z.string().max(300).default("")
+  reason: inputReason
 }).strict();
 
 const paymentMutationRequestSchema = z.object({
@@ -67,9 +70,8 @@ export function normalizePaymentMutationInput(action: PaymentMutationAction, val
   if (!PAYMENT_MUTATION_ACTIONS.includes(action)) inputError();
   const parsed = paymentMutationInputSchema.safeParse(value);
   if (!parsed.success) inputError();
-  const normalized = { ...parsed.data, reason: parsed.data.reason.trim() };
-  if (action === "reject" && !normalized.reason) inputError("请填写驳回原因");
-  return normalized;
+  if (action === "reject" && !parsed.data.reason) inputError("请填写驳回原因");
+  return parsed.data;
 }
 
 export function toPaymentMutationRequest(input: PaymentMutationInput): PaymentMutationRequest {

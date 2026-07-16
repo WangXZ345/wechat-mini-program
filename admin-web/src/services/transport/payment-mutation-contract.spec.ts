@@ -31,14 +31,22 @@ const result = {
 
 describe("payment mutation contract", () => {
   it("normalizes the exact UI input and maps id to the exact BFF body", () => {
-    const normalized = normalizePaymentMutationInput("confirm", input);
-    expect(normalized).toEqual({ ...input, reason: "已核对到账" });
+    const normalized = normalizePaymentMutationInput("confirm", {
+      ...input,
+      id: "  pay-001  ",
+      reason: ` ${"x".repeat(300)} `
+    });
+    expect(normalized).toEqual({
+      ...input,
+      id: "pay-001",
+      reason: "x".repeat(300)
+    });
     expect(toPaymentMutationRequest(normalized)).toEqual({
       paymentId: "pay-001",
       expectedStatus: "pending_confirm",
       expectedVersion: 2,
       expectedUpdatedAt: "2026-07-13T08:05:00.000Z",
-      reason: "已核对到账"
+      reason: "x".repeat(300)
     });
   });
 
@@ -59,6 +67,14 @@ describe("payment mutation contract", () => {
     expect(() => normalizePaymentMutationInput("reject", { ...input, reason: "   " })).toThrow("驳回原因");
     expect(() => normalizePaymentMutationInput("reject", { ...input, reason: "x".repeat(301) })).toThrow("付款审核请求");
     expect(normalizePaymentMutationInput("confirm", { ...input, reason: "   " }).reason).toBe("");
+  });
+
+  it.each([
+    ["empty trimmed id", { id: "   " }],
+    ["overlong trimmed id", { id: ` ${"x".repeat(129)} ` }],
+    ["overlong trimmed reason", { reason: ` ${"x".repeat(301)} ` }]
+  ])("rejects %s", (_label, patch) => {
+    expect(() => normalizePaymentMutationInput("confirm", { ...input, ...patch })).toThrow("付款审核请求");
   });
 
   it.each([

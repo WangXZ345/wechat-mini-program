@@ -1002,7 +1002,11 @@ describe("MockTransport inventory adjustment", () => {
       reason: "已核对到账"
     };
     const options = { idempotencyKey: `payment-confirm:${role}`, expectedVersion: Number(row.version) };
-    const first = await transport.mutate("payments", "confirm", payload, options);
+    const first = await transport.mutate("payments", "confirm", {
+      ...payload,
+      id: `  ${String(row.id)}  `,
+      reason: "  已核对到账  "
+    }, options);
     const replay = await transport.mutate("payments", "confirm", payload, options);
     const updated = await transport.get("payments", String(row.id));
 
