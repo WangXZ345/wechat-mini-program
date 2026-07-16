@@ -143,6 +143,22 @@ test("late async preview completion reconciles a clear tombstone", async () => {
   assert.equal(Array.from(storage.keys()).some((key) => key.includes("product_preview_v1_user-1_p1")), false);
 });
 
+test("expired exact preview becomes a tombstone and cannot be revived by an old async completion", async () => {
+  deferAsyncWrites = true;
+  const oldWrite = cache.writeProductPreviewAsync(product({ name: "old" }));
+  assert.equal(pendingAsyncWrites.length, 1);
+
+  cache.writeProductPreview(product({ name: "exact" }), { ttlMs: 50 });
+  now += 51;
+  assert.equal(cache.readProductPreview("p1"), null);
+
+  pendingAsyncWrites[0].complete();
+  await oldWrite;
+
+  assert.equal(cache.readProductPreview("p1"), null);
+  assert.equal(Array.from(storage.keys()).some((key) => key.includes("product_preview_v1_user-1_p1")), false);
+});
+
 test("expired persistent preview is rejected and removed", () => {
   cache.writeProductPreview(product());
   const key = Array.from(storage.keys()).find((item) => item.includes("product_preview_v1_user-1_p1"));

@@ -386,12 +386,17 @@ function writeProductPreview(product = {}, options = {}) {
   const preview = publicProductPreview(product);
   const key = productPreviewCacheKey(preview.productId, options.openid);
   if (!key || !preview.productId) return null;
+  const requestedTtlMs = Number(options.ttlMs);
+  const ttlMs = Number.isFinite(requestedTtlMs) && requestedTtlMs > 0
+    ? requestedTtlMs
+    : PRODUCT_PREVIEW_TTL_MS;
+  const expiresAt = now() + ttlMs;
   const pendingState = pendingProductPreviewWrites.get(key);
   if (pendingState) {
     pendingState.generation += 1;
-    pendingState.authoritative = { type: "preview", preview };
+    pendingState.authoritative = { type: "preview", preview, expiresAt };
   }
-  cache.set(key, preview, { ttlMs: PRODUCT_PREVIEW_TTL_MS });
+  cache.set(key, preview, { ttlMs });
   return preview;
 }
 
@@ -415,7 +420,14 @@ function writeProductPreviewAsync(product = {}, options = {}) {
     if (currentState) {
       if (generation !== currentState.generation && currentState.authoritative) {
         if (currentState.authoritative.type === "tombstone") cache.remove(key);
-        else cache.set(key, currentState.authoritative.preview, { ttlMs: PRODUCT_PREVIEW_TTL_MS });
+        else {
+          const remainingTtlMs = currentState.authoritative.expiresAt - now();
+          if (remainingTtlMs > 0) {
+            cache.set(key, currentState.authoritative.preview, { ttlMs: remainingTtlMs });
+          } else {
+            cache.remove(key);
+          }
+        }
       }
       currentState.pendingCount -= 1;
       if (currentState.pendingCount <= 0) pendingProductPreviewWrites.delete(key);
@@ -430,11 +442,19 @@ function readProductPreview(productId, options = {}) {
   const id = String(productId || "").trim();
   const key = productPreviewCacheKey(id, options.openid);
   if (!key) return null;
-  return cache.get(key, {
+  const cached = cache.get(key, {
     ttlMs: PRODUCT_PREVIEW_TTL_MS,
-    allowExpired: false,
+    allowExpired: true,
     validate: (data) => Boolean(data && typeof data === "object" && String(data.productId || data._id || "") === id)
   });
+  if (!cached || !cached.expired) return cached;
+  const pendingState = pendingProductPreviewWrites.get(key);
+  if (pendingState) {
+    pendingState.generation += 1;
+    pendingState.authoritative = { type: "tombstone" };
+  }
+  cache.remove(key);
+  return null;
 }
 
 function clearProductPreview(productId, options = {}) {

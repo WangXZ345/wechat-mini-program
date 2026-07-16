@@ -344,6 +344,39 @@ test("in-flight product, favorite and delivery results do not update or toast af
   assert.equal(page.productLoading, null);
 });
 
+test("rejected product, delivery and authentication requests after unload are safely consumed", async () => {
+  const productResponse = deferred();
+  const preferenceResponse = deferred();
+  const settingsResponse = deferred();
+  const addressResponse = deferred();
+  state.authDeferred = deferred();
+  state.deferredResponses = {
+    getProducts: productResponse,
+    getUserDeliveryPreference: preferenceResponse,
+    getSettings: settingsResponse,
+    getDefaultAddress: addressResponse
+  };
+  const page = createPage();
+  page.data.id = "p1";
+
+  const authRequest = page.initializeAfterFirstPaint(false);
+  const productRequest = page.loadProduct({ silent: true });
+  const deliveryRequest = page.loadDeliveryOptions();
+  unloadPage(page);
+  state.authDeferred.reject(new Error("late auth failure"));
+  productResponse.reject(new Error("late product failure"));
+  preferenceResponse.reject(new Error("late delivery failure"));
+  settingsResponse.resolve({});
+  addressResponse.resolve({});
+  await Promise.all([authRequest, productRequest, deliveryRequest]);
+  await flushPromises();
+
+  assert.equal(page._testSetDataAfterUnload || 0, 0);
+  assert.deepEqual(state.feedbackErrors, []);
+  assert.deepEqual(state.feedbackWarnings, []);
+  assert.equal(page.productLoading, null);
+});
+
 test("onShow authentication does not start before the first paint", async () => {
   const page = createPage();
 
