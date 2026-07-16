@@ -241,6 +241,14 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     return key;
   }
 
+  function businessTimestamp() {
+    const value = now();
+    if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+      throw new PaymentMutationError("CLOCK_INVALID", "付款审核时间源无效，暂不能继续", 503);
+    }
+    return value;
+  }
+
   async function findAccount(tx, order) {
     const userId = cleanText(order.userId, 128);
     const userOpenid = cleanText(order.userOpenid || order.openid, 128);
@@ -422,7 +430,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       actorRole: actor.role,
       sourceClient: actor.sourceClient,
       createdAt: timestamp,
-      expiresAt: new Date(now().getTime() + 7 * 24 * 60 * 60 * 1000)
+      expiresAt: new Date(timestamp.getTime() + 7 * 24 * 60 * 60 * 1000)
     };
     const ownerExistingResponse = await tx.collection("sync_events").where({ eventId: eventIds.ownerEventId }).limit(2).get();
     const adminExistingResponse = await tx.collection("sync_events").where({ eventId: eventIds.adminEventId }).limit(2).get();
@@ -871,13 +879,21 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     operationSeedOrderId,
     requestedPaymentStatus
   }) {
-    const timestamp = db.serverDate ? db.serverDate() : now();
+    const timestamp = businessTimestamp();
     const businessPaymentId = payment && payment._id || cleanText(order.latestPaymentRecordId, 128) || deterministicId("legacy_payment", `${operationId}:${order._id}`);
     const businessKey = `payment_mutation:${operationId}:${businessPaymentId}:${decision}`;
     const priorAuditResponse = await tx.collection("admin_operation_logs").where({ businessKey }).limit(2).get();
     const priorAudits = Array.isArray(priorAuditResponse.data) ? priorAuditResponse.data : [];
     if (priorAudits.length > 1) throw new PaymentMutationError("BUSINESS_LOG_DUPLICATE", "付款审核业务日志重复", 409);
     if (priorAudits[0]) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志已存在但付款状态不一致", 409);
+    const deliveryStatus = nextDeliveryStatus(next, order);
+    const deliveryBeforeStatus = cleanText(order.deliveryStatus, 60) || "pending";
+    const deliveryChanged = deliveryBeforeStatus !== deliveryStatus;
+    const deliveryBusinessKey = `payment_delivery:${operationId}:${businessPaymentId}`;
+    const priorDeliveryResponse = await tx.collection("delivery_logs").where({ businessKey: deliveryBusinessKey }).limit(2).get();
+    const priorDeliveries = Array.isArray(priorDeliveryResponse.data) ? priorDeliveryResponse.data : [];
+    if (priorDeliveries.length > 1) throw new PaymentMutationError("DELIVERY_LOG_DUPLICATE", "付款配送流水重复，暂不能继续", 409);
+    if (priorDeliveries[0]) throw new PaymentMutationError("DELIVERY_LOG_CONFLICT", "付款配送流水已存在但订单状态不一致", 409);
     const paymentVersion = versionOf(payment || {});
     const recordStatus = decision === "reject" || next.confirmStatus === "rejected" ? "rejected" : next.paymentStatus;
     const reviewData = {
@@ -935,10 +951,6 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     }
 
     const receiptEvidence = await writeAccountReceipt(tx, { order, paymentId, next, actor, timestamp, reason, receiptOperationId: operationId });
-    const deliveryStatus = nextDeliveryStatus(next, order);
-    const deliveryBeforeStatus = cleanText(order.deliveryStatus, 60) || "pending";
-    const deliveryChanged = deliveryBeforeStatus !== deliveryStatus;
-    const deliveryBusinessKey = `payment_delivery:${operationId}:${paymentId}`;
     const nextOrderVersion = versionOf(order, "订单") + 1;
     const ownsRecalculation = next.changeAmount > 0;
     const nextOrder = {
@@ -983,10 +995,6 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       updatedAt: nextOrder.updatedAt
     } });
     if (deliveryChanged) {
-      const priorDeliveryResponse = await tx.collection("delivery_logs").where({ businessKey: deliveryBusinessKey }).limit(2).get();
-      const priorDeliveries = Array.isArray(priorDeliveryResponse.data) ? priorDeliveryResponse.data : [];
-      if (priorDeliveries.length > 1) throw new PaymentMutationError("DELIVERY_LOG_DUPLICATE", "付款配送流水重复，暂不能继续", 409);
-      if (priorDeliveries[0]) throw new PaymentMutationError("DELIVERY_LOG_CONFLICT", "付款配送流水已存在但订单状态不一致", 409);
       await tx.collection("delivery_logs").add({ data: {
         businessKey: deliveryBusinessKey,
         orderId: order._id,

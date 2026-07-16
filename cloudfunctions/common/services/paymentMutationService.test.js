@@ -222,7 +222,7 @@ function database(initial = {}, options = {}) {
   }
 
   const db = {
-    serverDate: () => new Date(FIXED_DATE),
+    serverDate: options.serverDate || (() => new Date(FIXED_DATE)),
     collection(name) { return collection(state, name); },
     async createCollection(name) { if (!state[name]) state[name] = []; },
     async runTransaction(executor) {
@@ -349,7 +349,7 @@ function paymentService(db, options = {}) {
     ownerKeyFor: (subject, pepper) => subject && pepper ? `owner:${subject.length}:${pepper.length}` : "",
     syncOwnerPepper: "s".repeat(32),
     recalculateAccount: options.recalculateAccount,
-    now: () => new Date(FIXED_DATE),
+    now: options.now || (() => new Date(FIXED_DATE)),
     randomId: () => "random-id"
   });
 }
@@ -439,6 +439,65 @@ test("Web confirmation calculates the unpaid cents server-side and closes the or
   assert.deepEqual(state.orders[0].paidMarkedAt, FIXED_DATE);
 });
 
+test("public mutation timestamps stay real Dates when CloudBase serverDate is a write command", async () => {
+  const serverDateCommand = { $cloudbase: "ServerDate", offset: 0 };
+  const businessNow = new Date("2026-07-14T06:07:08.009Z");
+  let nowCalls = 0;
+  const db = database(fixture(), { serverDate: () => serverDateCommand });
+  const service = paymentService(db, {
+    idempotency: sharedIdempotency,
+    now() {
+      nowCalls += 1;
+      return businessNow;
+    }
+  });
+
+  const first = await confirm(service, {}, "server-date-shape");
+  const replay = await confirm(service, {}, "server-date-shape");
+  const state = db.snapshot();
+  const audit = state.admin_operation_logs.find((log) => log.operationKind === "web_payment");
+  const persistedResult = state.idempotency_records[0].resultDataMasked;
+  const businessTimestamps = [
+    first.updatedAt,
+    replay.updatedAt,
+    persistedResult.updatedAt,
+    state.payment_records[0].updatedAt,
+    state.orders[0].updatedAt,
+    state.customer_accounts[0].updatedAt,
+    audit.createdAt,
+    audit.journal.committedAt,
+    audit.journal.result.updatedAt,
+    ...state.sync_events.map((event) => event.createdAt)
+  ];
+
+  assert.equal(nowCalls, 1);
+  for (const timestamp of businessTimestamps) {
+    assert.equal(timestamp instanceof Date, true);
+    assert.equal(timestamp.toISOString(), businessNow.toISOString());
+  }
+  assert.equal(JSON.stringify(persistedResult).includes("ServerDate"), false);
+  assert.equal(JSON.stringify(persistedResult).includes('"offset":0'), false);
+});
+
+test("mutation rejects a non-Date trusted clock before business writes", async () => {
+  const operations = [];
+  const db = database(fixture(), {
+    observe: (entry) => operations.push(entry),
+    serverDate: () => ({ $cloudbase: "ServerDate", offset: 0 })
+  });
+
+  await assert.rejects(
+    () => confirm(paymentService(db, { now: () => ({ offset: 0 }) }), {}, "invalid-business-clock"),
+    (error) => error.code === "CLOCK_INVALID"
+  );
+
+  const protectedWrites = operations.filter((entry) =>
+    ["payment_records", "customer_accounts", "account_logs", "orders", "admin_operation_logs", "delivery_logs", "sync_events"].includes(entry.collection)
+    && ["add", "update"].includes(entry.operation)
+  );
+  assert.deepEqual(protectedWrites, []);
+});
+
 test("strict Web confirmation rejects a positive stored amount gap instead of silently settling it", async () => {
   const db = database(fixture({ order: { totalAmount: 1000, paidAmount: 100, unpaidAmount: 800 } }));
   await assert.rejects(() => confirm(paymentService(db)), (error) => error.code === "ORDER_AMOUNT_INVALID");
@@ -476,12 +535,24 @@ test("transaction fails closed on an existing mutation audit or delivery busines
   );
   assert.equal(auditDb.snapshot().payment_records[0].status, "pending_confirm");
 
-  const deliveryDb = database(fixture({ state: { delivery_logs: [{ _id: "delivery-existing", businessKey: "payment_delivery:conflicting-delivery-key:payment-1" }] } }));
+  const deliveryOperations = [];
+  const deliveryDb = database(
+    fixture({ state: { delivery_logs: [{ _id: "delivery-existing", businessKey: "payment_delivery:conflicting-delivery-key:payment-1" }] } }),
+    { observe: (entry) => deliveryOperations.push(entry) }
+  );
   await assert.rejects(
     () => confirm(paymentService(deliveryDb), {}, "conflicting-delivery-key"),
     (error) => error.code === "DELIVERY_LOG_CONFLICT"
   );
   assert.equal(deliveryDb.snapshot().payment_records[0].status, "pending_confirm");
+  const deliveryPreflightIndex = deliveryOperations.findIndex((entry) => entry.collection === "delivery_logs" && entry.operation === "get");
+  const firstBusinessWriteIndex = deliveryOperations.findIndex((entry) =>
+    ["payment_records", "customer_accounts", "account_logs", "orders", "delivery_logs", "sync_events"].includes(entry.collection)
+    && ["add", "update"].includes(entry.operation)
+  );
+  assert.notEqual(deliveryPreflightIndex, -1);
+  assert.equal(deliveryOperations[deliveryPreflightIndex].limit, 2);
+  assert.equal(firstBusinessWriteIndex, -1);
 
   const accountLogDb = database(fixture({ state: { account_logs: [{ _id: "account-log-existing", businessKey: "payment_receipt:conflicting-account-key:payment-1" }] } }));
   await assert.rejects(
@@ -489,6 +560,57 @@ test("transaction fails closed on an existing mutation audit or delivery busines
     (error) => error.code === "ACCOUNT_LOG_CONFLICT"
   );
   assert.equal(accountLogDb.snapshot().payment_records[0].status, "pending_confirm");
+});
+
+test("unchanged delivery status preflights its business key before writes and remains recoverable", async () => {
+  const key = "delivery-unchanged-preflight";
+  const businessKey = `payment_delivery:${key}:payment-1`;
+  const protectedCollections = ["payment_records", "customer_accounts", "account_logs", "orders", "delivery_logs", "sync_events"];
+
+  const conflictingOperations = [];
+  const conflictingDb = database(fixture({
+    order: { deliveryStatus: "waiting_shipping" },
+    state: { delivery_logs: [{ _id: "delivery-existing", businessKey }] }
+  }), { observe: (entry) => conflictingOperations.push(entry) });
+  await assert.rejects(
+    () => confirm(paymentService(conflictingDb), {}, key),
+    (error) => error.code === "DELIVERY_LOG_CONFLICT"
+  );
+  const conflictPreflight = conflictingOperations.findIndex((entry) =>
+    entry.collection === "delivery_logs" && entry.operation === "get" && entry.where.businessKey === businessKey
+  );
+  const conflictWrite = conflictingOperations.findIndex((entry) =>
+    protectedCollections.includes(entry.collection) && ["add", "update"].includes(entry.operation)
+  );
+  assert.notEqual(conflictPreflight, -1);
+  assert.equal(conflictingOperations[conflictPreflight].limit, 2);
+  assert.equal(conflictWrite, -1);
+  assert.equal(conflictingDb.snapshot().payment_records[0].status, "pending_confirm");
+
+  const commitOperations = [];
+  const source = database(fixture({ order: { deliveryStatus: "waiting_shipping" } }), {
+    observe: (entry) => commitOperations.push(entry)
+  });
+  await confirm(paymentService(source), {}, key);
+  const commitPreflight = commitOperations.findIndex((entry) =>
+    entry.collection === "delivery_logs" && entry.operation === "get" && entry.where.businessKey === businessKey
+  );
+  const commitWrite = commitOperations.findIndex((entry) =>
+    protectedCollections.includes(entry.collection) && ["add", "update"].includes(entry.operation)
+  );
+  assert.notEqual(commitPreflight, -1);
+  assert.equal(commitOperations[commitPreflight].limit, 2);
+  assert.notEqual(commitWrite, -1);
+  assert.equal(commitPreflight < commitWrite, true);
+  const committed = source.snapshot();
+  assert.equal(committed.delivery_logs.length, 0);
+
+  committed.idempotency_records = [staleProcessingRecord("payment_confirm", "finance-1", key, webInput())];
+  const recoveredDb = database(committed);
+  const recovered = await confirm(paymentService(recoveredDb, { idempotency: sharedIdempotency }), {}, key);
+  assert.equal(recovered.reused, true);
+  assert.equal(recovered.status, "paid");
+  assert.equal(recoveredDb.snapshot().delivery_logs.length, 0);
 });
 
 test("Web rejection closes the current record without receipt, account, or delivery side effects", async () => {
