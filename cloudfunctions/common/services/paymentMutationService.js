@@ -219,6 +219,7 @@ function recalculationMarkers(logs = []) {
 }
 
 function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerPepper = "", recalculateAccount, now = () => new Date(), randomId = () => crypto.randomUUID() } = {}) {
+  const PAYMENT_PREFLIGHT_TOKEN = Symbol("paymentMutationPreflight");
   function assertDependencies() {
     if (!db || typeof db.runTransaction !== "function") throw new Error("payment mutation service requires db");
     if (!idempotency || typeof idempotency.assertIdempotencyKey !== "function" || typeof idempotency.runIdempotentAction !== "function") {
@@ -863,6 +864,62 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     }
   }
 
+  function mutationPreflightFields({ order, payment, next, decision, operationId, requestedPaymentStatus }) {
+    const paymentId = payment && payment._id || cleanText(order.latestPaymentRecordId, 128) || deterministicId("legacy_payment", `${operationId}:${order._id}`);
+    const businessKey = `payment_mutation:${operationId}:${paymentId}:${decision}`;
+    const deliveryStatus = nextDeliveryStatus(next, order);
+    const deliveryBeforeStatus = cleanText(order.deliveryStatus, 60) || "pending";
+    return {
+      operationId,
+      orderId: order._id,
+      paymentId,
+      decision,
+      requestedPaymentStatus,
+      nextPaymentStatus: next.paymentStatus,
+      recordStatus: decision === "reject" || next.confirmStatus === "rejected" ? "rejected" : next.paymentStatus,
+      businessKey,
+      deliveryStatus,
+      deliveryBeforeStatus,
+      deliveryChanged: deliveryBeforeStatus !== deliveryStatus,
+      deliveryBusinessKey: `payment_delivery:${operationId}:${paymentId}`
+    };
+  }
+
+  async function preflightMutation(tx, mutation) {
+    const fields = mutationPreflightFields(mutation);
+    const priorAuditResponse = await tx.collection("admin_operation_logs").where({ businessKey: fields.businessKey }).limit(2).get();
+    const priorAudits = Array.isArray(priorAuditResponse.data) ? priorAuditResponse.data : [];
+    if (priorAudits.length > 1) throw new PaymentMutationError("BUSINESS_LOG_DUPLICATE", "付款审核业务日志重复", 409);
+    if (priorAudits[0]) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志已存在但付款状态不一致", 409);
+    const priorDeliveryResponse = await tx.collection("delivery_logs").where({ businessKey: fields.deliveryBusinessKey }).limit(2).get();
+    const priorDeliveries = Array.isArray(priorDeliveryResponse.data) ? priorDeliveryResponse.data : [];
+    if (priorDeliveries.length > 1) throw new PaymentMutationError("DELIVERY_LOG_DUPLICATE", "付款配送流水重复，暂不能继续", 409);
+    if (priorDeliveries[0]) throw new PaymentMutationError("DELIVERY_LOG_CONFLICT", "付款配送流水已存在但订单状态不一致", 409);
+    return Object.freeze({ ...fields, [PAYMENT_PREFLIGHT_TOKEN]: true });
+  }
+
+  function assertMutationPreflight(preflight, mutation) {
+    const expected = mutationPreflightFields(mutation);
+    const fields = [
+      "operationId",
+      "orderId",
+      "paymentId",
+      "decision",
+      "requestedPaymentStatus",
+      "nextPaymentStatus",
+      "recordStatus",
+      "businessKey",
+      "deliveryStatus",
+      "deliveryBeforeStatus",
+      "deliveryChanged",
+      "deliveryBusinessKey"
+    ];
+    if (!preflight || preflight[PAYMENT_PREFLIGHT_TOKEN] !== true || fields.some((field) => preflight[field] !== expected[field])) {
+      throw new PaymentMutationError("PAYMENT_PREFLIGHT_INVALID", "付款审核预检结果与当前操作不匹配", 409);
+    }
+    return preflight;
+  }
+
   async function mutateOne(tx, {
     order,
     payment,
@@ -877,25 +934,26 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     operationMemberCount,
     operationMemberIndex,
     operationSeedOrderId,
-    requestedPaymentStatus
+    requestedPaymentStatus,
+    timestamp,
+    preflight
   }) {
-    const timestamp = businessTimestamp();
-    const businessPaymentId = payment && payment._id || cleanText(order.latestPaymentRecordId, 128) || deterministicId("legacy_payment", `${operationId}:${order._id}`);
-    const businessKey = `payment_mutation:${operationId}:${businessPaymentId}:${decision}`;
-    const priorAuditResponse = await tx.collection("admin_operation_logs").where({ businessKey }).limit(2).get();
-    const priorAudits = Array.isArray(priorAuditResponse.data) ? priorAuditResponse.data : [];
-    if (priorAudits.length > 1) throw new PaymentMutationError("BUSINESS_LOG_DUPLICATE", "付款审核业务日志重复", 409);
-    if (priorAudits[0]) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志已存在但付款状态不一致", 409);
-    const deliveryStatus = nextDeliveryStatus(next, order);
-    const deliveryBeforeStatus = cleanText(order.deliveryStatus, 60) || "pending";
-    const deliveryChanged = deliveryBeforeStatus !== deliveryStatus;
-    const deliveryBusinessKey = `payment_delivery:${operationId}:${businessPaymentId}`;
-    const priorDeliveryResponse = await tx.collection("delivery_logs").where({ businessKey: deliveryBusinessKey }).limit(2).get();
-    const priorDeliveries = Array.isArray(priorDeliveryResponse.data) ? priorDeliveryResponse.data : [];
-    if (priorDeliveries.length > 1) throw new PaymentMutationError("DELIVERY_LOG_DUPLICATE", "付款配送流水重复，暂不能继续", 409);
-    if (priorDeliveries[0]) throw new PaymentMutationError("DELIVERY_LOG_CONFLICT", "付款配送流水已存在但订单状态不一致", 409);
+    const verified = assertMutationPreflight(preflight, {
+      order,
+      payment,
+      next,
+      decision,
+      operationId,
+      requestedPaymentStatus
+    });
+    const businessPaymentId = verified.paymentId;
+    const businessKey = verified.businessKey;
+    const deliveryStatus = verified.deliveryStatus;
+    const deliveryBeforeStatus = verified.deliveryBeforeStatus;
+    const deliveryChanged = verified.deliveryChanged;
+    const deliveryBusinessKey = verified.deliveryBusinessKey;
     const paymentVersion = versionOf(payment || {});
-    const recordStatus = decision === "reject" || next.confirmStatus === "rejected" ? "rejected" : next.paymentStatus;
+    const recordStatus = verified.recordStatus;
     const reviewData = {
       status: recordStatus,
       paymentStatus: next.paymentStatus,
@@ -1086,6 +1144,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
 
   async function executeWeb({ actor, input, idempotencyKey, operationId }) {
     return db.runTransaction(async (tx) => {
+      const timestamp = businessTimestamp();
       const payment = (await tx.collection("payment_records").doc(input.paymentId).get()).data;
       if (!payment) throw new PaymentMutationError("PAYMENT_NOT_FOUND", "付款记录不存在", 404);
       if ((payment.status || payment.paymentStatus) !== "pending_confirm") throw new PaymentMutationError("PAYMENT_STATUS_CONFLICT", "付款记录状态已变化，请刷新后重试", 409);
@@ -1097,7 +1156,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       const legacyStatus = input.decision === "reject" ? "unpaid" : "paid";
       const next = { ...buildNext(order, legacyStatus, undefined, { requireExactBalance: true }), paymentMethod: cleanText(order.paymentMethod || payment.paymentMethod, 80) };
       const requestedPaymentStatus = input.decision === "reject" ? "unpaid" : "paid";
-      const updated = await mutateOne(tx, {
+      const mutation = {
         order,
         payment,
         next,
@@ -1111,51 +1170,67 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
         operationMemberCount: 1,
         operationMemberIndex: 0,
         operationSeedOrderId: order._id,
-        requestedPaymentStatus
-      });
+        requestedPaymentStatus,
+        timestamp
+      };
+      const preflight = await preflightMutation(tx, mutation);
+      const updated = await mutateOne(tx, { ...mutation, preflight });
       return mutationResult(updated.payment, updated.order, input.decision, { affected: 1, reused: false, updatedCount: 1, accountRecalculationPending: next.changeAmount > 0 });
     });
   }
 
   async function executeLegacy({ actor, input, idempotencyKey, operationId }) {
     return db.runTransaction(async (tx) => {
+      const timestamp = businessTimestamp();
       const priorRootAudits = await legacyRootAudits(tx, operationId);
       if (priorRootAudits.length) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核操作已有不完整或冲突日志", 409);
       const seed = (await tx.collection("orders").doc(input.orderId).get()).data;
       if (!seed) throw new PaymentMutationError("ORDER_NOT_FOUND", "订单不存在", 404);
       const orders = await targetOrders(tx, seed, input);
-      const updated = [];
+      const prepared = [];
       for (let index = 0; index < orders.length; index += 1) {
         const order = orders[index];
         let payment = null;
         if (order.latestPaymentRecordId) payment = (await tx.collection("payment_records").doc(order.latestPaymentRecordId).get()).data;
         if (input.paymentStatus === "paid" && (order.paymentStatus === "paid" || order.status === "paid")) {
           if (!payment) throw new PaymentMutationError("PAYMENT_NOT_FOUND", "付款记录不存在", 404);
-          updated.push({ payment, order, reused: true });
+          prepared.push({ payment, order, reused: true });
           continue;
         }
         if (input.paymentStatus === "unpaid" && order.paymentStatus === "unpaid" && order.status === "approved_pending_payment") {
           if (!payment) throw new PaymentMutationError("PAYMENT_NOT_FOUND", "付款记录不存在", 404);
-          updated.push({ payment, order, reused: true });
+          prepared.push({ payment, order, reused: true });
           continue;
         }
         const next = { ...buildNext(order, input.paymentStatus, input.paidAmountCents), paymentMethod: input.paymentMethod || cleanText(order.paymentMethod, 80) };
-        updated.push(await mutateOne(tx, {
-          order,
-          payment,
-          next,
-          actor,
-          decision: input.paymentStatus === "unpaid" ? "reject" : input.paymentStatus === "abnormal" ? "abnormal" : "confirm",
-          reason: input.remark,
-          idempotencyKey,
-          operationId: `${operationId}:${order._id}`,
-          rootOperationId: operationId,
-          operationKind: "legacy_payment",
-          operationMemberCount: orders.length,
-          operationMemberIndex: index,
-          operationSeedOrderId: input.orderId,
-          requestedPaymentStatus: input.paymentStatus
-        }));
+        prepared.push({
+          reused: false,
+          mutation: {
+            order,
+            payment,
+            next,
+            actor,
+            decision: input.paymentStatus === "unpaid" ? "reject" : input.paymentStatus === "abnormal" ? "abnormal" : "confirm",
+            reason: input.remark,
+            idempotencyKey,
+            operationId: `${operationId}:${order._id}`,
+            rootOperationId: operationId,
+            operationKind: "legacy_payment",
+            operationMemberCount: orders.length,
+            operationMemberIndex: index,
+            operationSeedOrderId: input.orderId,
+            requestedPaymentStatus: input.paymentStatus,
+            timestamp
+          }
+        });
+      }
+      for (const member of prepared) {
+        if (!member.reused) member.preflight = await preflightMutation(tx, member.mutation);
+      }
+      const updated = [];
+      for (const member of prepared) {
+        if (member.reused) updated.push(member);
+        else updated.push(await mutateOne(tx, { ...member.mutation, preflight: member.preflight }));
       }
       const first = updated[0];
       const decision = input.paymentStatus === "unpaid" ? "reject" : input.paymentStatus === "abnormal" ? "abnormal" : "confirm";

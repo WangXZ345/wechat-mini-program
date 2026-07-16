@@ -479,6 +479,81 @@ test("public mutation timestamps stay real Dates when CloudBase serverDate is a 
   assert.equal(JSON.stringify(persistedResult).includes('"offset":0'), false);
 });
 
+test("legacy batch samples the trusted clock once and shares one business timestamp across every child", async () => {
+  const batchId = "trusted-clock-batch";
+  const firstFixture = fixture({ order: { paymentBatchId: batchId } });
+  const firstOrder = firstFixture.orders[0];
+  const secondOrder = {
+    ...firstOrder,
+    _id: "order-2",
+    orderNo: "SO-002",
+    latestPaymentRecordId: "payment-2"
+  };
+  const firstPayment = firstFixture.payment_records[0];
+  const secondPayment = {
+    ...firstPayment,
+    _id: "payment-2",
+    orderId: "order-2",
+    orderNo: "SO-002"
+  };
+  const instants = [
+    new Date("2026-07-14T06:07:08.009Z"),
+    new Date("2026-07-14T06:07:09.009Z"),
+    new Date("2026-07-14T06:07:10.009Z")
+  ];
+  let nowCalls = 0;
+  const db = database(fixture({
+    account: {
+      totalOrderAmount: 2000,
+      totalReceivableAmount: 2000,
+      totalPaidAmount: 400,
+      paidAmount: 400,
+      totalUnpaidAmount: 1600,
+      unpaidAmount: 1600,
+      partialPaidOrderCount: 2,
+      unpaidOrderCount: 2
+    },
+    state: {
+      orders: [firstOrder, secondOrder],
+      payment_records: [firstPayment, secondPayment]
+    }
+  }), { serverDate: () => ({ $cloudbase: "ServerDate", offset: 0 }) });
+
+  const result = await paymentService(db, {
+    now() {
+      const value = instants[nowCalls] || instants[instants.length - 1];
+      nowCalls += 1;
+      return value;
+    }
+  }).updateLegacyPayment({
+    actor: actor(),
+    input: { orderId: "order-1", paymentStatus: "paid" },
+    idempotencyKey: "trusted-clock-batch-key",
+    allowMissingIdempotencyKey: true
+  });
+
+  const state = db.snapshot();
+  const expected = instants[0].toISOString();
+  const businessTimestamps = [
+    result.updatedAt,
+    state.customer_accounts[0].updatedAt,
+    ...state.payment_records.flatMap((payment) => [payment.confirmedAt, payment.updatedAt]),
+    ...state.orders.flatMap((order) => [order.paymentConfirmedAt, order.paidMarkedAt, order.updatedAt]),
+    ...state.account_logs.map((log) => log.createdAt),
+    ...state.delivery_logs.map((log) => log.createdAt),
+    ...state.admin_operation_logs.flatMap((log) => [log.createdAt, log.journal.committedAt, log.journal.result.updatedAt]),
+    ...state.sync_events.map((event) => event.createdAt)
+  ];
+
+  assert.equal(result.updatedCount, 2);
+  assert.equal(nowCalls, 1);
+  assert.equal(businessTimestamps.length > 0, true);
+  for (const timestamp of businessTimestamps) {
+    assert.equal(timestamp instanceof Date, true);
+    assert.equal(timestamp.toISOString(), expected);
+  }
+});
+
 test("mutation rejects a non-Date trusted clock before business writes", async () => {
   const operations = [];
   const db = database(fixture(), {
@@ -611,6 +686,78 @@ test("unchanged delivery status preflights its business key before writes and re
   assert.equal(recovered.reused, true);
   assert.equal(recovered.status, "paid");
   assert.equal(recoveredDb.snapshot().delivery_logs.length, 0);
+});
+
+test("legacy batch preflights every child delivery key before any business write", async () => {
+  for (const deliveryChanged of [true, false]) {
+    const key = `batch-delivery-preflight-${deliveryChanged ? "changed" : "unchanged"}`;
+    const batchId = `batch-${deliveryChanged ? "changed" : "unchanged"}`;
+    const deliveryStatus = deliveryChanged ? "pending" : "waiting_shipping";
+    const firstFixture = fixture({ order: { paymentBatchId: batchId, deliveryStatus } });
+    const firstOrder = firstFixture.orders[0];
+    const secondOrder = {
+      ...firstOrder,
+      _id: "order-2",
+      orderNo: "SO-002",
+      latestPaymentRecordId: "payment-2"
+    };
+    const firstPayment = firstFixture.payment_records[0];
+    const secondPayment = {
+      ...firstPayment,
+      _id: "payment-2",
+      orderId: "order-2",
+      orderNo: "SO-002"
+    };
+    const firstBusinessKey = `payment_delivery:${key}:order-1:payment-1`;
+    const secondBusinessKey = `payment_delivery:${key}:order-2:payment-2`;
+    const operations = [];
+    const db = database(fixture({
+      state: {
+        orders: [firstOrder, secondOrder],
+        payment_records: [firstPayment, secondPayment],
+        delivery_logs: [{ _id: "delivery-conflict", businessKey: secondBusinessKey }]
+      }
+    }), { observe: (entry) => operations.push(entry) });
+
+    await assert.rejects(
+      () => paymentService(db).updateLegacyPayment({
+        actor: actor(),
+        input: { orderId: "order-1", paymentStatus: "paid" },
+        idempotencyKey: key,
+        allowMissingIdempotencyKey: true
+      }),
+      (error) => error.code === "DELIVERY_LOG_CONFLICT"
+    );
+
+    for (const businessKey of [firstBusinessKey, secondBusinessKey]) {
+      const preflight = operations.find((entry) =>
+        entry.collection === "delivery_logs"
+        && entry.operation === "get"
+        && entry.where.businessKey === businessKey
+      );
+      assert.ok(preflight);
+      assert.equal(preflight.limit, 2);
+    }
+    const conflictQueryIndex = operations.findIndex((entry) =>
+      entry.collection === "delivery_logs"
+      && entry.operation === "get"
+      && entry.where.businessKey === secondBusinessKey
+    );
+    const protectedCollections = new Set([
+      "payment_records",
+      "customer_accounts",
+      "account_logs",
+      "orders",
+      "admin_operation_logs",
+      "delivery_logs",
+      "sync_events"
+    ]);
+    const writeBeforeConflict = operations.slice(0, conflictQueryIndex).find((entry) =>
+      protectedCollections.has(entry.collection) && ["add", "update"].includes(entry.operation)
+    );
+    assert.equal(conflictQueryIndex >= 0, true);
+    assert.equal(writeBeforeConflict, undefined);
+  }
 });
 
 test("Web rejection closes the current record without receipt, account, or delivery side effects", async () => {
