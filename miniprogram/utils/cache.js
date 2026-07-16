@@ -33,22 +33,6 @@ function rawSet(key, value) {
   }
 }
 
-function rawSetAsync(key, value) {
-  if (typeof wx.setStorage !== "function") return Promise.resolve(rawSet(key, value));
-  return new Promise((resolve) => {
-    try {
-      wx.setStorage({
-        key,
-        data: value,
-        success: () => resolve(true),
-        fail: () => resolve(false)
-      });
-    } catch (err) {
-      resolve(false);
-    }
-  });
-}
-
 function remove(key) {
   try {
     wx.removeStorageSync(key);
@@ -89,12 +73,6 @@ function set(key, data, options = {}) {
   if (!key) return false;
   const envelope = cacheEnvelope(data, options);
   return envelope ? rawSet(key, envelope) : false;
-}
-
-function setAsync(key, data, options = {}) {
-  if (!key) return Promise.resolve(false);
-  const envelope = cacheEnvelope(data, options);
-  return envelope ? rawSetAsync(key, envelope) : Promise.resolve(false);
 }
 
 function get(key, options = {}) {
@@ -187,7 +165,6 @@ module.exports = {
   CACHE_VERSION,
   get,
   set,
-  setAsync,
   remove,
   purgeSensitivePageCaches
 };

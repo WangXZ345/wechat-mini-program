@@ -2,9 +2,6 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const storage = new Map();
-const asyncWrites = [];
-const pendingAsyncWrites = [];
-let deferAsyncWrites = false;
 let now = 1_000;
 let currentUser = { userId: "user-1" };
 
@@ -14,24 +11,7 @@ global.getApp = () => ({ globalData: { user: currentUser } });
 global.wx = {
   getStorageSync(key) { return storage.get(key); },
   setStorageSync(key, value) { storage.set(key, value); },
-  removeStorageSync(key) { storage.delete(key); },
-  setStorage({ key, data, success, fail }) {
-    asyncWrites.push({ key, data });
-    if (deferAsyncWrites) {
-      pendingAsyncWrites.push({
-        complete() {
-          storage.set(key, data);
-          success();
-        },
-        fail() {
-          if (fail) fail();
-        }
-      });
-      return;
-    }
-    storage.set(key, data);
-    success();
-  }
+  removeStorageSync(key) { storage.delete(key); }
 };
 
 const realNow = Date.now;
@@ -62,9 +42,6 @@ function product(overrides = {}) {
 
 test.beforeEach(() => {
   storage.clear();
-  asyncWrites.length = 0;
-  pendingAsyncWrites.length = 0;
-  deferAsyncWrites = false;
   now = 1_000;
   currentUser = { userId: "user-1" };
 });
@@ -109,54 +86,10 @@ test("staged previews are explicitly isolated across openid and userId scopes", 
   assert.equal(cache.consumeProductPreview("p1").data.name, "公开商品");
 });
 
-test("async persistence uses wx.setStorage and keeps the cache envelope", async () => {
-  asyncWrites.length = 0;
-  const preview = await cache.writeProductPreviewAsync(product());
+test("synchronous exact preview is persisted and readable", () => {
+  const preview = cache.writeProductPreview(product());
   assert.equal(preview.productId, "p1");
-  assert.equal(asyncWrites.length, 1);
-  assert.match(asyncWrites[0].key, /^product_preview_v1_user-1_/);
-  assert.equal(asyncWrites[0].data.data.productId, "p1");
-});
-
-test("late async preview completion reconciles the exact preview", async () => {
-  deferAsyncWrites = true;
-  const oldWrite = cache.writeProductPreviewAsync(product({ name: "old" }));
-  assert.equal(pendingAsyncWrites.length, 1);
-
-  cache.writeProductPreview(product({ name: "exact" }));
-  pendingAsyncWrites[0].complete();
-  assert.equal((await oldWrite).name, "old");
-
-  assert.equal(cache.readProductPreview("p1").data.name, "exact");
-});
-
-test("late async preview completion reconciles a clear tombstone", async () => {
-  deferAsyncWrites = true;
-  const oldWrite = cache.writeProductPreviewAsync(product({ name: "old" }));
-  assert.equal(pendingAsyncWrites.length, 1);
-
-  cache.clearProductPreview("p1");
-  pendingAsyncWrites[0].complete();
-  await oldWrite;
-
-  assert.equal(cache.readProductPreview("p1"), null);
-  assert.equal(Array.from(storage.keys()).some((key) => key.includes("product_preview_v1_user-1_p1")), false);
-});
-
-test("expired exact preview becomes a tombstone and cannot be revived by an old async completion", async () => {
-  deferAsyncWrites = true;
-  const oldWrite = cache.writeProductPreviewAsync(product({ name: "old" }));
-  assert.equal(pendingAsyncWrites.length, 1);
-
-  cache.writeProductPreview(product({ name: "exact" }), { ttlMs: 50 });
-  now += 51;
-  assert.equal(cache.readProductPreview("p1"), null);
-
-  pendingAsyncWrites[0].complete();
-  await oldWrite;
-
-  assert.equal(cache.readProductPreview("p1"), null);
-  assert.equal(Array.from(storage.keys()).some((key) => key.includes("product_preview_v1_user-1_p1")), false);
+  assert.equal(cache.readProductPreview("p1").data.name, "公开商品");
 });
 
 test("expired persistent preview is rejected and removed", () => {

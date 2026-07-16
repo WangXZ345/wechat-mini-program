@@ -4,12 +4,11 @@ const Module = require("node:module");
 
 const events = [];
 let definition;
-let persistResolve;
 const originalWx = global.wx;
 const wxMock = {
   navigateTo(options) {
     events.push("navigate");
-    options.success({});
+    if (typeof options.success === "function") options.success({});
   }
 };
 
@@ -21,10 +20,6 @@ function loadPageDefinition() {
   Module._load = function patchedLoad(request, parent, isMain) {
     if (request.endsWith("utils/performanceCache")) return {
       stageProductPreview(product) { events.push(`stage:${product._id}`); return { productId: product._id }; },
-      writeProductPreviewAsync() {
-        events.push("persist-start");
-        return new Promise((resolve) => { persistResolve = resolve; });
-      },
       readCache() { return null; }, readCartCache() { return null; }, scopedCacheKey() { return "k"; },
       clearDirty() {}, isDirty() { return false; }, writeCache() {}, writeCartCache() {},
       cartItemFromAddResult() {}, cartCountFromPayload() { return 0; }, upsertCartCacheItem() {}
@@ -54,21 +49,18 @@ function pageWith(products, visibleRecommendSections = []) {
   return { ...definition, data: { ...definition.data, products, visibleRecommendSections } };
 }
 
-test("home list stages preview, starts navigation, then persists asynchronously", async () => {
+test("home list stages preview and navigates without persistence", () => {
   events.length = 0;
   const page = pageWith([{ _id: "p1", name: "商品" }]);
   page.goDetail({ currentTarget: { dataset: { id: "p1" } } });
-  assert.deepEqual(events, ["stage:p1", "navigate", "persist-start"]);
-  persistResolve(null);
-  await Promise.resolve();
+  assert.deepEqual(events, ["stage:p1", "navigate"]);
 });
 
-test("visible recommendation uses the same non-blocking path", () => {
+test("visible recommendation stages preview and navigates without persistence", () => {
   events.length = 0;
   const page = pageWith([], [{ products: [{ _id: "p2", name: "推荐商品" }] }]);
   page.goDetail({ currentTarget: { dataset: { id: "p2" } } });
-  assert.deepEqual(events.slice(0, 3), ["stage:p2", "navigate", "persist-start"]);
-  persistResolve(null);
+  assert.deepEqual(events, ["stage:p2", "navigate"]);
 });
 
 test("missing product still navigates without attempting persistence", () => {

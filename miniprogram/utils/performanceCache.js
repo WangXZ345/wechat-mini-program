@@ -6,7 +6,6 @@ const ORDER_CACHE_TTL_MS = 30 * 1000;
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PRODUCT_PREVIEW_TTL_MS = 2 * 60 * 1000;
 const stagedProductPreviews = new Map();
-const pendingProductPreviewWrites = new Map();
 
 const SENSITIVE_KEYS = [
   "stock",
@@ -390,52 +389,8 @@ function writeProductPreview(product = {}, options = {}) {
   const ttlMs = Number.isFinite(requestedTtlMs) && requestedTtlMs > 0
     ? requestedTtlMs
     : PRODUCT_PREVIEW_TTL_MS;
-  const expiresAt = now() + ttlMs;
-  const pendingState = pendingProductPreviewWrites.get(key);
-  if (pendingState) {
-    pendingState.generation += 1;
-    pendingState.authoritative = { type: "preview", preview, expiresAt };
-  }
   cache.set(key, preview, { ttlMs });
   return preview;
-}
-
-function writeProductPreviewAsync(product = {}, options = {}) {
-  const preview = publicProductPreview(product);
-  const key = productPreviewCacheKey(preview.productId, options.openid);
-  if (!key || !preview.productId) return Promise.resolve(null);
-  const pendingState = pendingProductPreviewWrites.get(key) || {
-    generation: 0,
-    pendingCount: 0,
-    authoritative: null
-  };
-  pendingState.generation += 1;
-  pendingState.pendingCount += 1;
-  pendingState.authoritative = { type: "preview", preview };
-  const generation = pendingState.generation;
-  pendingProductPreviewWrites.set(key, pendingState);
-
-  const finish = (written) => {
-    const currentState = pendingProductPreviewWrites.get(key);
-    if (currentState) {
-      if (generation !== currentState.generation && currentState.authoritative) {
-        if (currentState.authoritative.type === "tombstone") cache.remove(key);
-        else {
-          const remainingTtlMs = currentState.authoritative.expiresAt - now();
-          if (remainingTtlMs > 0) {
-            cache.set(key, currentState.authoritative.preview, { ttlMs: remainingTtlMs });
-          } else {
-            cache.remove(key);
-          }
-        }
-      }
-      currentState.pendingCount -= 1;
-      if (currentState.pendingCount <= 0) pendingProductPreviewWrites.delete(key);
-    }
-    return written ? preview : null;
-  };
-  return cache.setAsync(key, preview, { ttlMs: PRODUCT_PREVIEW_TTL_MS })
-    .then(finish, () => finish(false));
 }
 
 function readProductPreview(productId, options = {}) {
@@ -444,27 +399,15 @@ function readProductPreview(productId, options = {}) {
   if (!key) return null;
   const cached = cache.get(key, {
     ttlMs: PRODUCT_PREVIEW_TTL_MS,
-    allowExpired: true,
+    allowExpired: false,
     validate: (data) => Boolean(data && typeof data === "object" && String(data.productId || data._id || "") === id)
   });
-  if (!cached || !cached.expired) return cached;
-  const pendingState = pendingProductPreviewWrites.get(key);
-  if (pendingState) {
-    pendingState.generation += 1;
-    pendingState.authoritative = { type: "tombstone" };
-  }
-  cache.remove(key);
-  return null;
+  return cached;
 }
 
 function clearProductPreview(productId, options = {}) {
   const key = productPreviewCacheKey(productId, options.openid);
   if (!key) return;
-  const pendingState = pendingProductPreviewWrites.get(key);
-  if (pendingState) {
-    pendingState.generation += 1;
-    pendingState.authoritative = { type: "tombstone" };
-  }
   stagedProductPreviews.delete(key);
   cache.remove(key);
 }
@@ -501,6 +444,5 @@ module.exports = {
   consumeProductPreview,
   readProductPreview,
   writeProductPreview,
-  writeProductPreviewAsync,
   clearProductPreview
 };
