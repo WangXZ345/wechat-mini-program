@@ -175,7 +175,12 @@ function database(initial = {}, options = {}) {
       },
       async add({ data }) {
         if (options.failOn && options.failOn({ operation: "add", collection: name, data })) throw new Error(`forced ${name}.add failure`);
-        const row = { ...structuredClone(data), _id: data._id || `${name}-${nextId++}` };
+        let generatedId = data._id;
+        while (!generatedId) {
+          const candidate = `${name}-${nextId++}`;
+          if (!target[name].some((item) => item._id === candidate)) generatedId = candidate;
+        }
+        const row = { ...structuredClone(data), _id: generatedId };
         if (target[name].some((item) => item._id === row._id)) throw new Error("duplicate key");
         target[name].push(row);
         return { _id: row._id };
@@ -400,7 +405,8 @@ test("Web confirmation calculates the unpaid cents server-side and closes the or
   assert.deepEqual({ paid: state.customer_accounts[0].totalPaidAmount, unpaid: state.customer_accounts[0].totalUnpaidAmount }, { paid: 1000, unpaid: 0 });
   assert.equal(state.account_logs.length, 1);
   assert.equal(state.delivery_logs.length, 1);
-  assert.equal(state.admin_operation_logs.length, 1);
+  assert.equal(state.admin_operation_logs.filter((log) => log.operationKind === "web_payment").length, 1);
+  assert.equal(state.admin_operation_logs.filter((log) => log.operationKind === "payment_recalculation_completion").length, 1);
   assert.equal(state.sync_events.length, 2);
   assert.deepEqual(state.sync_events.map((event) => event.audience).sort(), ["admin", "owner"]);
   for (const event of state.sync_events) {
@@ -461,7 +467,7 @@ test("transaction fails closed on an existing mutation audit or delivery busines
   );
   assert.equal(auditDb.snapshot().payment_records[0].status, "pending_confirm");
 
-  const deliveryDb = database(fixture({ state: { delivery_logs: [{ _id: "delivery-existing", businessKey: "payment_delivery:payment-1:waiting_shipping" }] } }));
+  const deliveryDb = database(fixture({ state: { delivery_logs: [{ _id: "delivery-existing", businessKey: "payment_delivery:conflicting-delivery-key:payment-1" }] } }));
   await assert.rejects(
     () => confirm(paymentService(deliveryDb), {}, "conflicting-delivery-key"),
     (error) => error.code === "DELIVERY_LOG_CONFLICT"
@@ -683,7 +689,7 @@ test("real shared idempotency recovery validates Web audit state before returnin
   assert.equal(recoveredDb.snapshot().admin_operation_logs.length, 1);
 
   const invalid = structuredClone(committed);
-  invalid.admin_operation_logs[0].afterData.orderVersion = 4;
+  invalid.admin_operation_logs[0].journal.order.committedVersion = 6;
   const invalidDb = database(invalid);
   await assert.rejects(
     () => confirm(paymentService(invalidDb, { idempotency: sharedIdempotency }), {}, key),
@@ -1258,4 +1264,239 @@ test("a completed success replay remains successful after a newer payment owns t
   assert.equal(replay.accountRecalculationPending, false);
   assert.equal(replay.reused, true);
   assert.equal(calls, 2);
+});
+
+test("processing recovery returns A frozen partial result after B advances the same payment and order", async () => {
+  const keyA = "journal-partial-A";
+  const keyB = "journal-partial-B";
+  const inputA = { orderId: "order-1", paymentStatus: "partial_paid", paidAmountCents: 100, applyBatch: false };
+  const source = database(fixture());
+  await paymentService(source).updateLegacyPayment({ actor: actor(), input: inputA, idempotencyKey: keyA, allowMissingIdempotencyKey: true });
+  const afterA = source.snapshot();
+  const auditA = afterA.admin_operation_logs.find((log) => log.rootOperationId === keyA);
+  assert.ok(auditA);
+  afterA.idempotency_records = [staleProcessingRecord(
+    "payment_legacy_partial_paid",
+    "finance-1",
+    keyA,
+    { ...inputA, remark: "", paymentMethod: "" }
+  )];
+
+  const evolving = database(afterA);
+  await paymentService(evolving).updateLegacyPayment({
+    actor: actor(),
+    input: { ...inputA, paidAmountCents: 100 },
+    idempotencyKey: keyB,
+    allowMissingIdempotencyKey: true
+  });
+  const beforeRecovery = evolving.snapshot();
+  assert.equal(beforeRecovery.payment_records[0].version, 4);
+  assert.equal(beforeRecovery.orders[0].version, 6);
+  assert.equal(beforeRecovery.account_logs.length, 2);
+
+  const recovered = await paymentService(evolving, { idempotency: sharedIdempotency }).updateLegacyPayment({
+    actor: actor(),
+    input: inputA,
+    idempotencyKey: keyA,
+    allowMissingIdempotencyKey: true
+  });
+  assert.deepEqual({ status: recovered.status, version: recovered.version, affected: recovered.affected, reused: recovered.reused }, {
+    status: "partial_paid",
+    version: 3,
+    affected: 0,
+    reused: true
+  });
+  assert.equal(evolving.snapshot().account_logs.length, 2);
+  assert.equal(evolving.snapshot().payment_records[0].version, 4);
+});
+
+test("processing recovery returns the frozen Web result after a later shipment advances the order", async () => {
+  const key = "journal-web-later-shipment";
+  const state = await committedWebRecoveryState(key);
+  Object.assign(state.orders[0], {
+    status: "shipped",
+    deliveryStatus: "shipped",
+    version: state.orders[0].version + 1,
+    updatedAt: new Date("2026-07-14T01:00:00.000Z")
+  });
+  const db = database(state);
+  const recovered = await confirm(paymentService(db, { idempotency: sharedIdempotency }), {}, key);
+  assert.deepEqual({ status: recovered.status, version: recovered.version, affected: recovered.affected, reused: recovered.reused }, {
+    status: "paid",
+    version: 3,
+    affected: 0,
+    reused: true
+  });
+  assert.equal(db.snapshot().orders[0].status, "shipped");
+});
+
+test("processing recovery detects a missing A account mutation even after later aggregate growth", async () => {
+  const key = "journal-missing-account-sequence";
+  const state = await committedWebRecoveryState(key);
+  Object.assign(state.customer_accounts[0], {
+    totalOrderAmount: 1500,
+    totalReceivableAmount: 1500,
+    totalPaidAmount: 1200,
+    paidAmount: 1200,
+    totalUnpaidAmount: 300,
+    unpaidAmount: 300,
+    paymentMutationVersion: 1
+  });
+  state.account_logs.push({
+    _id: "unrelated-receipt-after-A",
+    businessKey: "payment_receipt:later-unrelated:payment-other",
+    sourceType: "payment",
+    sourceId: "payment-other",
+    relatedPaymentRecordId: "payment-other",
+    relatedOrderId: "order-other",
+    accountId: "account-1",
+    beforePaymentMutationVersion: 0,
+    afterPaymentMutationVersion: 1,
+    beforeTotalOrderAmount: 1500,
+    afterTotalOrderAmount: 1500,
+    beforeTotalPaidAmount: 1000,
+    afterTotalPaidAmount: 1200,
+    beforeTotalUnpaidAmount: 500,
+    afterTotalUnpaidAmount: 300,
+    changeAmount: 200,
+    changeType: "payment_confirmed"
+  });
+  await assert.rejects(
+    () => confirm(paymentService(database(state), { idempotency: inMemoryIdempotency({ processingRecovery: true }) }), {}, key),
+    (error) => ["BUSINESS_LOG_DUPLICATE", "BUSINESS_LOG_CONFLICT"].includes(error.code)
+  );
+});
+
+test("processing recovery accepts an unchanged delivery operation with no delivery log", async () => {
+  const key = "journal-delivery-unchanged";
+  const source = database(fixture({ order: { deliveryStatus: "waiting_shipping" } }));
+  await confirm(paymentService(source), {}, key);
+  const state = source.snapshot();
+  assert.equal(state.delivery_logs.length, 0);
+  state.idempotency_records = [staleProcessingRecord("payment_confirm", "finance-1", key, webInput())];
+  const db = database(state);
+  const recovered = await confirm(paymentService(db, { idempotency: sharedIdempotency }), {}, key);
+  assert.equal(recovered.reused, true);
+  assert.equal(recovered.status, "paid");
+  assert.equal(db.snapshot().delivery_logs.length, 0);
+});
+
+test("reject and abnormal recovery bind the review key at the committed version but allow a later version", async () => {
+  const scenarios = [
+    {
+      name: "reject",
+      key: "journal-review-key-reject",
+      actionType: "payment_reject",
+      normalized: webInput({ decision: "reject", reason: "凭证不清晰" }),
+      execute(service, key) {
+        return service.reviewWebPayment({ actor: actor(), input: this.normalized, idempotencyKey: key });
+      }
+    },
+    {
+      name: "abnormal",
+      key: "journal-review-key-abnormal",
+      actionType: "payment_legacy_abnormal",
+      normalized: { orderId: "order-1", paymentStatus: "abnormal", paidAmountCents: undefined, remark: "", applyBatch: false, paymentMethod: "" },
+      execute(service, key) {
+        return service.updateLegacyPayment({ actor: actor(), input: { orderId: "order-1", paymentStatus: "abnormal", applyBatch: false }, idempotencyKey: key, allowMissingIdempotencyKey: true });
+      }
+    }
+  ];
+  for (const scenario of scenarios) {
+    const source = database(fixture());
+    await scenario.execute(paymentService(source), scenario.key);
+    const committed = source.snapshot();
+    committed.idempotency_records = [staleProcessingRecord(scenario.actionType, "finance-1", scenario.key, scenario.normalized)];
+
+    const forged = structuredClone(committed);
+    forged.payment_records[0].reviewBusinessKey = "forged-review-business-key";
+    await assert.rejects(
+      () => scenario.execute(paymentService(database(forged), { idempotency: inMemoryIdempotency({ processingRecovery: true }) }), scenario.key),
+      (error) => error.code === "BUSINESS_LOG_CONFLICT",
+      `${scenario.name} must bind the committed review key`
+    );
+
+    const later = structuredClone(committed);
+    later.payment_records[0].version += 1;
+    later.payment_records[0].reviewBusinessKey = "legitimate-later-operation";
+    const recovered = await scenario.execute(paymentService(database(later), { idempotency: inMemoryIdempotency({ processingRecovery: true }) }), scenario.key);
+    assert.equal(recovered.reused, true, `${scenario.name} later version should remain recoverable`);
+  }
+});
+
+test("the immutable operation journal freezes public result and recovery evidence without sensitive values", async () => {
+  const key = "journal-schema-fields";
+  const db = database(fixture());
+  const result = await confirm(paymentService(db, { async recalculateAccount() { return { ok: true }; } }), {}, key);
+  assert.equal(result.accountRecalculationPending, false);
+  const state = db.snapshot();
+  const audit = state.admin_operation_logs.find((log) => log.operationKind === "web_payment");
+  assert.ok(audit && audit.journal);
+  assert.equal(Object.hasOwn(audit, "accountRecalculationStatus"), false);
+  assert.equal(audit.journal.schemaVersion, 1);
+  assert.deepEqual(audit.journal.result, {
+    paymentId: "payment-1",
+    orderNo: "SO-001",
+    status: "paid",
+    version: 3,
+    updatedAt: FIXED_DATE,
+    affected: 1,
+    reused: false,
+    decision: "confirm",
+    accountRecalculationPending: true,
+    updatedCount: 1
+  });
+  assert.deepEqual(audit.journal.payment, {
+    id: "payment-1",
+    orderId: "order-1",
+    committedVersion: 3,
+    status: "paid",
+    paymentStatus: "paid",
+    confirmStatus: "confirmed",
+    reviewBusinessKey: audit.businessKey
+  });
+  assert.deepEqual(audit.journal.order, {
+    id: "order-1",
+    committedVersion: 5,
+    status: "paid",
+    paymentStatus: "paid",
+    latestPaymentRecordId: "payment-1"
+  });
+  assert.deepEqual(audit.journal.receipt, {
+    required: true,
+    businessKey: `payment_receipt:${key}:payment-1`,
+    accountId: "account-1",
+    beforePaymentMutationVersion: 0,
+    afterPaymentMutationVersion: 1
+  });
+  assert.deepEqual(audit.journal.delivery, {
+    changed: true,
+    businessKey: `payment_delivery:${key}:payment-1`,
+    beforeStatus: "pending",
+    afterStatus: "waiting_shipping"
+  });
+  assert.match(audit.journal.sync.ownerEventId, /^payment_event_owner:/);
+  assert.match(audit.journal.sync.adminEventId, /^payment_event_admin:/);
+  assert.deepEqual(audit.journal.recalculation, {
+    required: true,
+    owner: key,
+    expectedOrderVersion: 5,
+    completionBusinessKey: `payment_recalculation:${key}:order-1`
+  });
+  assert.equal(state.customer_accounts[0].paymentMutationVersion, 1);
+  assert.deepEqual({
+    accountId: state.account_logs[0].accountId,
+    before: state.account_logs[0].beforePaymentMutationVersion,
+    after: state.account_logs[0].afterPaymentMutationVersion
+  }, { accountId: "account-1", before: 0, after: 1 });
+  const journalText = JSON.stringify(audit.journal);
+  for (const sensitive of ["cloud://private-proof", "transaction-private", "trade-private", "openid-private", "user-1"]) {
+    assert.equal(journalText.includes(sensitive), false);
+  }
+  for (const keyName of Object.keys(audit.journal).flatMap((section) => Object.keys(audit.journal[section] && typeof audit.journal[section] === "object" ? audit.journal[section] : {}))) {
+    assert.equal(/(?:^|_)(?:amount|paidAmount|unpaidAmount|proof|screenshot|transaction)/i.test(keyName), false, `sensitive journal field: ${keyName}`);
+  }
+  const completion = state.admin_operation_logs.find((log) => log.operationKind === "payment_recalculation_completion");
+  assert.ok(completion);
+  assert.equal(completion.sourceBusinessKey, audit.businessKey);
 });

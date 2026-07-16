@@ -144,6 +144,16 @@ function versionOf(row = {}, entity = "付款记录") {
   return value;
 }
 
+function paymentMutationVersionOf(row = {}) {
+  const value = row.paymentMutationVersion === undefined || row.paymentMutationVersion === null || row.paymentMutationVersion === ""
+    ? 0
+    : row.paymentMutationVersion;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new PaymentMutationError("ACCOUNT_MUTATION_VERSION_INVALID", "客户账款付款序列异常，暂不能确认付款", 409);
+  }
+  return value;
+}
+
 function storedCents(value, field) {
   const normalized = value === undefined || value === null || value === "" ? 0 : value;
   if (typeof normalized !== "number" || !Number.isSafeInteger(normalized) || normalized < 0) {
@@ -178,14 +188,16 @@ function mutationResult(payment, order, decision, options = {}) {
 }
 
 function recalculationMarker(log = {}) {
-  if (!["pending", "success"].includes(cleanText(log.accountRecalculationStatus, 20))) return null;
-  const after = log.afterData || {};
+  const recalculation = log.journal && log.journal.recalculation || {};
+  if (recalculation.required !== true) return null;
   const orderId = cleanText(log.orderId, 128);
-  const owner = cleanText(after.accountRecalculationOwner, 180);
-  const expectedVersion = after.accountRecalculationExpectedVersion;
-  const auditId = cleanText(log._id, 128);
-  if (!orderId || !owner || !auditId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) return null;
-  return { orderId, owner, expectedVersion, auditId };
+  const owner = cleanText(recalculation.owner, 180);
+  const expectedVersion = recalculation.expectedOrderVersion;
+  const journalId = cleanText(log._id, 128);
+  const journalBusinessKey = cleanText(log.businessKey, 512);
+  const completionBusinessKey = cleanText(recalculation.completionBusinessKey, 512);
+  if (!orderId || !owner || !journalId || !journalBusinessKey || !completionBusinessKey || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) return null;
+  return { orderId, owner, expectedVersion, journalId, journalBusinessKey, completionBusinessKey };
 }
 
 function recalculationMarkers(logs = []) {
@@ -271,7 +283,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
   }
 
   async function writeAccountReceipt(tx, { order, paymentId, next, actor, timestamp, reason, receiptOperationId }) {
-    if (next.changeAmount <= 0) return;
+    if (next.changeAmount <= 0) return null;
     const logKey = `payment_receipt:${receiptOperationId}:${paymentId}`;
     const priorResponse = await tx.collection("account_logs").where({ businessKey: logKey }).limit(2).get();
     const prior = Array.isArray(priorResponse.data) ? priorResponse.data : [];
@@ -295,6 +307,14 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     const afterUnpaid = Math.max(beforeUnpaid - next.changeAmount, 0);
     if (!Number.isSafeInteger(afterPaid) || afterPaid > beforeOrder || afterPaid + afterUnpaid !== beforeOrder) throw new PaymentMutationError("ACCOUNT_AMOUNT_INVALID", "客户账款金额异常", 409);
 
+    const beforePaymentMutationVersion = paymentMutationVersionOf(account || {});
+    const afterPaymentMutationVersion = beforePaymentMutationVersion + 1;
+    if (!Number.isSafeInteger(afterPaymentMutationVersion)) {
+      throw new PaymentMutationError("ACCOUNT_MUTATION_VERSION_INVALID", "客户账款付款序列异常，暂不能确认付款", 409);
+    }
+
+    let accountId = account && cleanText(account._id, 128);
+
     if (account) {
       await tx.collection("customer_accounts").doc(account._id).update({ data: {
         totalPaidAmount: afterPaid,
@@ -303,10 +323,11 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
         unpaidAmount: afterUnpaid,
         lastPaymentAt: timestamp,
         isSettled: afterUnpaid === 0,
+        paymentMutationVersion: afterPaymentMutationVersion,
         updatedAt: timestamp
       } });
     } else {
-      await tx.collection("customer_accounts").add({ data: {
+      const created = await tx.collection("customer_accounts").add({ data: {
         userId: cleanText(order.userId, 128),
         userOpenid: cleanText(order.userOpenid || order.openid, 128),
         totalOrderAmount: beforeOrder,
@@ -317,12 +338,18 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
         unpaidAmount: afterUnpaid,
         lastPaymentAt: timestamp,
         isSettled: next.unpaidAmount === 0,
+        paymentMutationVersion: afterPaymentMutationVersion,
         createdAt: timestamp,
         updatedAt: timestamp
       } });
+      accountId = cleanText(created && created._id, 128);
     }
+    if (!accountId) throw new PaymentMutationError("ACCOUNT_ID_REQUIRED", "客户账款标识缺失，暂不能确认付款", 409);
     await tx.collection("account_logs").add({ data: {
       businessKey: logKey,
+      accountId,
+      beforePaymentMutationVersion,
+      afterPaymentMutationVersion,
       sourceType: "payment",
       sourceId: paymentId,
       relatedOrderId: order._id,
@@ -343,9 +370,23 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       remark: reason,
       createdAt: timestamp
     } });
+    return {
+      required: true,
+      businessKey: logKey,
+      accountId,
+      beforePaymentMutationVersion,
+      afterPaymentMutationVersion
+    };
   }
 
-  async function writeSyncEvents(tx, { order, payment, actor, businessKey, decision, timestamp }) {
+  function syncEventIds(businessKey) {
+    return {
+      ownerEventId: deterministicId("payment_event_owner", businessKey),
+      adminEventId: deterministicId("payment_event_admin", businessKey)
+    };
+  }
+
+  async function writeSyncEvents(tx, { order, payment, actor, businessKey, decision, timestamp, eventIds = syncEventIds(businessKey) }) {
     const changedFields = ["status", "paymentStatus", "confirmStatus", "version", "updatedAt"];
     const common = {
       eventType: "payment.status_changed",
@@ -360,8 +401,9 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       createdAt: timestamp,
       expiresAt: new Date(now().getTime() + 7 * 24 * 60 * 60 * 1000)
     };
-    await tx.collection("sync_events").add({ data: { ...common, eventId: deterministicId("payment_event_owner", businessKey), audience: "owner", ownerKey: ownerKey(order) } });
-    await tx.collection("sync_events").add({ data: { ...common, eventId: deterministicId("payment_event_admin", businessKey), audience: "admin" } });
+    await tx.collection("sync_events").add({ data: { ...common, eventId: eventIds.ownerEventId, audience: "owner", ownerKey: ownerKey(order) } });
+    await tx.collection("sync_events").add({ data: { ...common, eventId: eventIds.adminEventId, audience: "admin" } });
+    return eventIds;
   }
 
   async function recoverCommitted({ operationId, paymentId, decision }) {
@@ -373,9 +415,10 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     if (cleanText(logs[0].resourceId, 128) !== paymentId || cleanText(logs[0].decision, 20) !== decision) {
       throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志冲突", 409);
     }
+    const journal = validateJournal(logs[0], decision);
     const payment = (await db.collection("payment_records").doc(paymentId).get()).data;
     if (!payment) return null;
-    const order = payment.orderId ? (await db.collection("orders").doc(payment.orderId).get()).data : null;
+    const order = journal.order.id ? (await db.collection("orders").doc(journal.order.id).get()).data : null;
     if (!order) return null;
     const requestedStatus = decision === "reject" ? "unpaid" : "paid";
     const invalidMetadata = [
@@ -389,41 +432,131 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     ];
     if (invalidMetadata.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志元数据冲突", 409);
     await validateRecoveryEvidence(logs[0], payment, order, decision, requestedStatus);
-    return mutationResult(payment, order, decision, { affected: 0, reused: true, updatedCount: 1, accountRecalculationPending: order.accountRecalculationPending === true });
+    return replayJournalResult(logs[0], 1);
   }
 
-  function expectedRecoveryState(decision, requestedStatus, payment) {
-    if (decision === "reject") return { recordStatus: "rejected", paymentStatus: "unpaid", confirmStatus: "rejected", orderStatus: "approved_pending_payment", orderPaymentStatus: "unpaid" };
-    if (decision === "abnormal") return { recordStatus: "abnormal", paymentStatus: "abnormal", confirmStatus: "abnormal", orderStatus: "abnormal", orderPaymentStatus: "abnormal" };
-    if (requestedStatus === "partial_paid") {
-      const current = cleanText(payment && payment.paymentStatus, 60);
-      if (!["partial_paid", "paid"].includes(current)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "部分付款恢复状态无效", 409);
-      return { recordStatus: current, paymentStatus: current, confirmStatus: "confirmed", orderStatus: current, orderPaymentStatus: current };
+  function sameStoredValue(left, right) {
+    if (left === right) return true;
+    if (sameInstant(left, right)) return true;
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch (_) {
+      return false;
     }
-    return { recordStatus: "paid", paymentStatus: "paid", confirmStatus: "confirmed", orderStatus: "paid", orderPaymentStatus: "paid" };
   }
 
-  function validateRecoveryLog(log, payment, order, decision, requestedStatus) {
-    const expected = expectedRecoveryState(decision, requestedStatus, payment);
-    const after = log && log.afterData || {};
-    const conflict = [
-      cleanText(log && log.resourceId, 128) !== cleanText(payment._id, 128),
-      cleanText(log && log.orderId, 128) !== cleanText(order._id, 128),
-      cleanText(payment && payment.orderId, 128) !== cleanText(order._id, 128),
-      cleanText(log && log.decision, 20) !== decision,
-      cleanText(payment.status || payment.paymentStatus, 60) !== expected.recordStatus,
-      cleanText(payment.paymentStatus, 60) !== expected.paymentStatus,
-      cleanText(payment.confirmStatus, 60) !== expected.confirmStatus,
-      cleanText(order.status, 60) !== expected.orderStatus,
-      cleanText(order.paymentStatus, 60) !== expected.orderPaymentStatus,
-      cleanText(after.status, 60) !== cleanText(payment.status || payment.paymentStatus, 60),
-      cleanText(after.paymentStatus, 60) !== cleanText(payment.paymentStatus, 60),
-      after.version !== versionOf(payment),
-      cleanText(after.orderStatus, 60) !== cleanText(order.status, 60),
-      cleanText(after.orderPaymentStatus, 60) !== cleanText(order.paymentStatus, 60),
-      after.orderVersion !== versionOf(order, "订单")
+  function validateJournal(log, decision) {
+    const journal = log && log.journal || {};
+    const result = journal.result || {};
+    const payment = journal.payment || {};
+    const order = journal.order || {};
+    const receipt = journal.receipt || {};
+    const delivery = journal.delivery || {};
+    const sync = journal.sync || {};
+    const recalculation = journal.recalculation || {};
+    const resultKeys = Object.keys(result).sort();
+    const publicKeys = ["accountRecalculationPending", "affected", "decision", "orderNo", "paymentId", "reused", "status", "updatedAt", "updatedCount", "version"].sort();
+    const invalid = [
+      journal.schemaVersion !== 1,
+      journal.committedAt === undefined || journal.committedAt === null,
+      JSON.stringify(resultKeys) !== JSON.stringify(publicKeys),
+      !cleanText(result.paymentId, 128),
+      !cleanText(result.status, 60),
+      !Number.isSafeInteger(result.version) || result.version < 0,
+      !Number.isSafeInteger(result.affected) || result.affected < 1,
+      result.reused !== false,
+      cleanText(result.decision, 20) !== decision,
+      typeof result.accountRecalculationPending !== "boolean",
+      !Number.isSafeInteger(result.updatedCount) || result.updatedCount < 1,
+      !sameStoredValue(journal.committedAt, result.updatedAt),
+      cleanText(payment.id, 128) !== cleanText(log.resourceId, 128),
+      cleanText(payment.orderId, 128) !== cleanText(log.orderId, 128),
+      !Number.isSafeInteger(payment.committedVersion) || payment.committedVersion < 0,
+      !cleanText(payment.status, 60),
+      !cleanText(payment.paymentStatus, 60),
+      !cleanText(payment.confirmStatus, 60),
+      cleanText(payment.reviewBusinessKey, 512) !== cleanText(log.businessKey, 512),
+      cleanText(order.id, 128) !== cleanText(log.orderId, 128),
+      !Number.isSafeInteger(order.committedVersion) || order.committedVersion < 0,
+      !cleanText(order.status, 60),
+      !cleanText(order.paymentStatus, 60),
+      cleanText(order.latestPaymentRecordId, 128) !== cleanText(payment.id, 128),
+      cleanText(result.paymentId, 128) !== cleanText(payment.id, 128),
+      result.version !== payment.committedVersion,
+      cleanText(result.status, 60) !== cleanText(payment.status, 60),
+      typeof receipt.required !== "boolean",
+      typeof delivery.changed !== "boolean",
+      !cleanText(delivery.businessKey, 512),
+      !cleanText(delivery.beforeStatus, 60),
+      !cleanText(delivery.afterStatus, 60),
+      !cleanText(sync.ownerEventId, 128),
+      !cleanText(sync.adminEventId, 128),
+      typeof recalculation.required !== "boolean"
     ];
-    if (conflict.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志与当前状态不一致", 409);
+    if (receipt.required === true) {
+      invalid.push(
+        !cleanText(receipt.businessKey, 512),
+        !cleanText(receipt.accountId, 128),
+        !Number.isSafeInteger(receipt.beforePaymentMutationVersion) || receipt.beforePaymentMutationVersion < 0,
+        receipt.afterPaymentMutationVersion !== receipt.beforePaymentMutationVersion + 1
+      );
+    }
+    if (recalculation.required === true) {
+      invalid.push(
+        !cleanText(recalculation.owner, 180),
+        !Number.isSafeInteger(recalculation.expectedOrderVersion) || recalculation.expectedOrderVersion < 0,
+        !cleanText(recalculation.completionBusinessKey, 512)
+      );
+    }
+    if (invalid.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核操作日志快照无效", 409);
+    return journal;
+  }
+
+  function replayJournalResult(log, updatedCount) {
+    const journal = validateJournal(log, cleanText(log.decision, 20));
+    const result = safePublicResult(journal.result);
+    return {
+      ...result,
+      affected: 0,
+      reused: true,
+      updatedCount: Number.isSafeInteger(updatedCount) && updatedCount > 0 ? updatedCount : result.updatedCount
+    };
+  }
+
+  function validateCurrentMonotonicity(log, payment, order, decision) {
+    const journal = validateJournal(log, decision);
+    const paymentVersion = versionOf(payment);
+    const orderVersion = versionOf(order, "订单");
+    const identityConflict = [
+      cleanText(payment._id, 128) !== cleanText(journal.payment.id, 128),
+      cleanText(payment.orderId, 128) !== cleanText(journal.payment.orderId, 128),
+      cleanText(order._id, 128) !== cleanText(journal.order.id, 128),
+      cleanText(log.resourceId, 128) !== cleanText(journal.payment.id, 128),
+      cleanText(log.orderId, 128) !== cleanText(journal.order.id, 128),
+      paymentVersion < journal.payment.committedVersion,
+      orderVersion < journal.order.committedVersion
+    ];
+    if (identityConflict.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核当前实体与操作日志冲突", 409);
+
+    if (paymentVersion === journal.payment.committedVersion) {
+      const paymentConflict = [
+        cleanText(payment.status || payment.paymentStatus, 60) !== cleanText(journal.payment.status, 60),
+        cleanText(payment.paymentStatus, 60) !== cleanText(journal.payment.paymentStatus, 60),
+        cleanText(payment.confirmStatus, 60) !== cleanText(journal.payment.confirmStatus, 60),
+        cleanText(payment.reviewBusinessKey, 512) !== cleanText(journal.payment.reviewBusinessKey, 512)
+      ];
+      if (paymentConflict.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款记录与提交快照冲突", 409);
+    }
+
+    if (orderVersion === journal.order.committedVersion) {
+      const orderConflict = [
+        cleanText(order.status, 60) !== cleanText(journal.order.status, 60),
+        cleanText(order.paymentStatus, 60) !== cleanText(journal.order.paymentStatus, 60),
+        cleanText(order.latestPaymentRecordId, 128) !== cleanText(journal.order.latestPaymentRecordId, 128)
+      ];
+      if (orderConflict.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "订单与提交快照冲突", 409);
+    }
+    return journal;
   }
 
   function recoveryCents(value) {
@@ -442,7 +575,10 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
   }
 
   async function validateReceiptAndAccountEvidence(log, payment, order, requestedStatus) {
-    const receiptBusinessKey = `payment_receipt:${cleanText(log.sourceId, 320)}:${cleanText(payment._id, 128)}`;
+    const journal = validateJournal(log, cleanText(log.decision, 20));
+    const frozen = journal.receipt;
+    if (frozen.required !== true) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款账款流水快照缺失", 409);
+    const receiptBusinessKey = cleanText(frozen.businessKey, 512);
     const receipt = await uniqueRecoveryRow("account_logs", { businessKey: receiptBusinessKey }, "付款账款流水证据缺失", "付款账款流水证据重复");
     const beforeOrder = recoveryCents(receipt.beforeTotalOrderAmount);
     const afterOrder = recoveryCents(receipt.afterTotalOrderAmount);
@@ -451,7 +587,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     const beforeUnpaid = recoveryCents(receipt.beforeTotalUnpaidAmount);
     const afterUnpaid = recoveryCents(receipt.afterTotalUnpaidAmount);
     const changeAmount = recoveryCents(receipt.changeAmount);
-    const expectedChangeType = requestedStatus === "partial_paid" && cleanText(log.afterData && log.afterData.orderPaymentStatus, 60) !== "paid"
+    const expectedChangeType = requestedStatus === "partial_paid" && cleanText(journal.order.paymentStatus, 60) !== "paid"
       ? "partial_payment_confirmed"
       : "payment_confirmed";
     const invalidReceipt = [
@@ -460,6 +596,10 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       cleanText(receipt.sourceId, 128) !== cleanText(payment._id, 128),
       cleanText(receipt.relatedPaymentRecordId, 128) !== cleanText(payment._id, 128),
       cleanText(receipt.relatedOrderId, 128) !== cleanText(order._id, 128),
+      cleanText(receipt.accountId, 128) !== cleanText(frozen.accountId, 128),
+      receipt.beforePaymentMutationVersion !== frozen.beforePaymentMutationVersion,
+      receipt.afterPaymentMutationVersion !== frozen.afterPaymentMutationVersion,
+      receipt.afterPaymentMutationVersion !== receipt.beforePaymentMutationVersion + 1,
       cleanText(order.userId, 128) && cleanText(receipt.userId, 128) !== cleanText(order.userId, 128),
       cleanText(order.userOpenid || order.openid, 128) && cleanText(receipt.userOpenid, 128) !== cleanText(order.userOpenid || order.openid, 128),
       cleanText(receipt.changeType, 80) !== expectedChangeType,
@@ -469,13 +609,13 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       changeAmount <= 0,
       beforePaid + changeAmount !== afterPaid,
       beforeUnpaid - changeAmount !== afterUnpaid,
-      recoveryCents(payment.reviewPaidAmount) !== changeAmount,
-      cleanText(payment.reviewBusinessKey, 512) !== cleanText(log.businessKey, 512)
+      versionOf(payment) === journal.payment.committedVersion && recoveryCents(payment.reviewPaidAmount) !== changeAmount
     ];
     if (invalidReceipt.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款账款流水证据冲突", 409);
 
     const account = await findAccount(db, order);
     if (!account) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "客户账款证据缺失", 409);
+    if (cleanText(account._id, 128) !== cleanText(frozen.accountId, 128)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "客户账款标识与付款流水冲突", 409);
     const orderUserId = cleanText(order.userId, 128);
     const orderOpenid = cleanText(order.userOpenid || order.openid, 128);
     if ((orderUserId && cleanText(account.userId, 128) !== orderUserId) || (orderOpenid && cleanText(account.userOpenid, 128) !== orderOpenid)) {
@@ -484,47 +624,60 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     const currentOrder = recoveryCents(account.totalOrderAmount !== undefined ? account.totalOrderAmount : account.totalReceivableAmount);
     const currentPaid = recoveryCents(account.totalPaidAmount !== undefined ? account.totalPaidAmount : account.paidAmount);
     const currentUnpaid = recoveryCents(account.totalUnpaidAmount !== undefined ? account.totalUnpaidAmount : account.unpaidAmount);
-    if (currentPaid + currentUnpaid !== currentOrder || currentOrder < afterOrder || currentPaid < afterPaid) {
+    const currentPaymentMutationVersion = paymentMutationVersionOf(account);
+    if (currentPaid + currentUnpaid !== currentOrder || currentOrder < afterOrder || currentPaid < afterPaid || currentPaymentMutationVersion < frozen.afterPaymentMutationVersion) {
       throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "客户账款当前证据未包含付款流水", 409);
+    }
+    const owner = await uniqueRecoveryRow(
+      "account_logs",
+      { accountId: frozen.accountId, afterPaymentMutationVersion: frozen.afterPaymentMutationVersion },
+      "付款账款序列归属缺失",
+      "付款账款序列归属重复"
+    );
+    if (cleanText(owner.businessKey, 512) !== receiptBusinessKey || cleanText(owner._id, 128) !== cleanText(receipt._id, 128)) {
+      throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款账款序列归属冲突", 409);
     }
   }
 
   async function validateDeliveryEvidence(log, payment, order) {
-    const afterPaymentStatus = cleanText(log.afterData && log.afterData.orderPaymentStatus, 60);
-    const expectedAfterStatus = afterPaymentStatus !== "paid"
-      ? ""
-      : order.deliveryType === "self_pickup"
-        ? "waiting_pickup"
-        : order.deliveryType === "shipping"
-          ? "waiting_shipping"
-          : "";
-    if (!expectedAfterStatus) return;
-    const businessKey = `payment_delivery:${cleanText(payment._id, 128)}:${expectedAfterStatus}`;
+    const journal = validateJournal(log, cleanText(log.decision, 20));
+    const deliverySnapshot = journal.delivery;
+    const businessKey = cleanText(deliverySnapshot.businessKey, 512);
+    if (deliverySnapshot.changed !== true) {
+      const response = await db.collection("delivery_logs").where({ businessKey }).limit(2).get();
+      const rows = Array.isArray(response.data) ? response.data : [];
+      if (rows.length > 1) throw new PaymentMutationError("BUSINESS_LOG_DUPLICATE", "付款配送流水证据重复", 409);
+      if (rows[0]) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "未变更配送状态却存在付款配送流水", 409);
+      return;
+    }
     const delivery = await uniqueRecoveryRow("delivery_logs", { businessKey }, "付款配送流水证据缺失", "付款配送流水证据重复");
     const invalid = [
       cleanText(delivery.businessKey, 512) !== businessKey,
       cleanText(delivery.orderId, 128) !== cleanText(order._id, 128),
-      cleanText(delivery.afterStatus, 60) !== expectedAfterStatus,
-      cleanText(delivery.beforeStatus, 60) === expectedAfterStatus,
+      cleanText(delivery.beforeStatus, 60) !== cleanText(deliverySnapshot.beforeStatus, 60),
+      cleanText(delivery.afterStatus, 60) !== cleanText(deliverySnapshot.afterStatus, 60),
+      cleanText(delivery.beforeStatus, 60) === cleanText(delivery.afterStatus, 60),
       cleanText(delivery.action, 80) !== "payment_confirmed"
     ];
     if (invalid.some(Boolean)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款配送流水证据冲突", 409);
   }
 
   async function validateSyncEvidence(log, payment, order, decision) {
+    const journal = validateJournal(log, decision);
     const changedFields = ["status", "paymentStatus", "confirmStatus", "version", "updatedAt"];
     for (const audience of ["owner", "admin"]) {
-      const prefix = audience === "owner" ? "payment_event_owner" : "payment_event_admin";
-      const eventId = deterministicId(prefix, log.businessKey);
+      const eventId = audience === "owner" ? journal.sync.ownerEventId : journal.sync.adminEventId;
+      const expectedEventId = deterministicId(audience === "owner" ? "payment_event_owner" : "payment_event_admin", log.businessKey);
       const event = await uniqueRecoveryRow("sync_events", { eventId }, "付款同步事件证据缺失", "付款同步事件证据重复");
       const invalid = [
-        cleanText(event.eventId, 128) !== eventId,
+        cleanText(eventId, 128) !== expectedEventId,
+        cleanText(event.eventId, 128) !== cleanText(eventId, 128),
         cleanText(event.audience, 20) !== audience,
         cleanText(event.eventType, 80) !== "payment.status_changed",
         cleanText(event.entityType, 40) !== "payment",
         cleanText(event.entityId, 128) !== cleanText(payment._id, 128),
         cleanText(event.action, 20) !== decision,
-        event.version !== versionOf(payment),
+        event.version !== journal.payment.committedVersion,
         JSON.stringify(event.changedFields) !== JSON.stringify(changedFields),
         audience === "owner" && cleanText(event.ownerKey, 128) !== ownerKey(order)
       ];
@@ -533,12 +686,13 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
   }
 
   async function validateRecoveryEvidence(log, payment, order, decision, requestedStatus) {
-    validateRecoveryLog(log, payment, order, decision, requestedStatus);
+    const journal = validateCurrentMonotonicity(log, payment, order, decision);
     const hasReceipt = decision === "confirm" && ["paid", "partial_paid"].includes(requestedStatus || "paid");
+    if (hasReceipt !== (journal.receipt.required === true)) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款账款流水要求与操作日志冲突", 409);
     if (hasReceipt) {
       await validateReceiptAndAccountEvidence(log, payment, order, requestedStatus || "paid");
-      await validateDeliveryEvidence(log, payment, order);
     }
+    await validateDeliveryEvidence(log, payment, order);
     await validateSyncEvidence(log, payment, order, decision);
   }
 
@@ -600,17 +754,17 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     for (const log of logs) {
       const order = (await db.collection("orders").doc(log.orderId).get()).data;
       const payment = (await db.collection("payment_records").doc(log.resourceId).get()).data;
-      if (!order || !payment || cleanText(order.latestPaymentRecordId, 128) !== cleanText(payment._id, 128)) {
+      if (!order || !payment) {
         throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核业务日志关联结果缺失", 409);
       }
       await validateRecoveryEvidence(log, payment, order, decision, input.paymentStatus);
-      recovered.push({ payment, order });
+      recovered.push({ payment, order, log });
     }
     const seed = (await db.collection("orders").doc(input.orderId).get()).data;
     if (!seed) throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "付款审核入口订单证据缺失", 409);
     validateBatchIdentity(seed, recovered.map((item) => item.order));
     const first = recovered[0];
-    return mutationResult(first.payment, first.order, decision, { affected: 0, reused: true, updatedCount: recovered.length, accountRecalculationPending: recovered.some((item) => item.order.accountRecalculationPending === true) });
+    return replayJournalResult(first.log, recovered.length);
   }
 
   async function contextFromAuditLogs(logs, seedOrderId) {
@@ -750,8 +904,11 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       nextPayment = { ...createData, _id: paymentId };
     }
 
-    await writeAccountReceipt(tx, { order, paymentId, next, actor, timestamp, reason, receiptOperationId: operationId });
+    const receiptEvidence = await writeAccountReceipt(tx, { order, paymentId, next, actor, timestamp, reason, receiptOperationId: operationId });
     const deliveryStatus = nextDeliveryStatus(next, order);
+    const deliveryBeforeStatus = cleanText(order.deliveryStatus, 60) || "pending";
+    const deliveryChanged = deliveryBeforeStatus !== deliveryStatus;
+    const deliveryBusinessKey = `payment_delivery:${operationId}:${paymentId}`;
     const nextOrderVersion = versionOf(order, "订单") + 1;
     const ownsRecalculation = next.changeAmount > 0;
     const nextOrder = {
@@ -795,8 +952,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       version: nextOrder.version,
       updatedAt: nextOrder.updatedAt
     } });
-    if ((cleanText(order.deliveryStatus, 60) || "pending") !== deliveryStatus) {
-      const deliveryBusinessKey = `payment_delivery:${paymentId}:${deliveryStatus}`;
+    if (deliveryChanged) {
       const priorDeliveryResponse = await tx.collection("delivery_logs").where({ businessKey: deliveryBusinessKey }).limit(2).get();
       const priorDeliveries = Array.isArray(priorDeliveryResponse.data) ? priorDeliveryResponse.data : [];
       if (priorDeliveries.length > 1) throw new PaymentMutationError("DELIVERY_LOG_DUPLICATE", "付款配送流水重复，暂不能继续", 409);
@@ -806,7 +962,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
         orderId: order._id,
         orderNo: cleanText(order.orderNo, 100),
         deliveryType: cleanText(order.deliveryType, 40),
-        beforeStatus: cleanText(order.deliveryStatus, 60) || "pending",
+        beforeStatus: deliveryBeforeStatus,
         afterStatus: deliveryStatus,
         action: "payment_confirmed",
         operatorId: actor.id,
@@ -814,6 +970,51 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
         createdAt: timestamp
       } });
     }
+    const eventIds = syncEventIds(businessKey);
+    const completionBusinessKey = `payment_recalculation:${rootOperationId}:${order._id}`;
+    const journalResult = mutationResult(nextPayment, nextOrder, decision, {
+      affected: operationMemberCount,
+      reused: false,
+      updatedCount: operationMemberCount,
+      accountRecalculationPending: ownsRecalculation
+    });
+    const journal = {
+      schemaVersion: 1,
+      committedAt: timestamp,
+      result: journalResult,
+      payment: {
+        id: paymentId,
+        orderId: order._id,
+        committedVersion: versionOf(nextPayment),
+        status: cleanText(nextPayment.status || nextPayment.paymentStatus, 60),
+        paymentStatus: cleanText(nextPayment.paymentStatus, 60),
+        confirmStatus: cleanText(nextPayment.confirmStatus, 60),
+        reviewBusinessKey: businessKey
+      },
+      order: {
+        id: order._id,
+        committedVersion: nextOrder.version,
+        status: cleanText(nextOrder.status, 60),
+        paymentStatus: cleanText(nextOrder.paymentStatus, 60),
+        latestPaymentRecordId: paymentId
+      },
+      receipt: receiptEvidence || { required: false },
+      delivery: {
+        changed: deliveryChanged,
+        businessKey: deliveryBusinessKey,
+        beforeStatus: deliveryBeforeStatus,
+        afterStatus: deliveryStatus
+      },
+      sync: eventIds,
+      recalculation: ownsRecalculation
+        ? {
+            required: true,
+            owner: rootOperationId,
+            expectedOrderVersion: nextOrder.version,
+            completionBusinessKey
+          }
+        : { required: false }
+    };
     const auditCreated = await tx.collection("admin_operation_logs").add({ data: {
       businessKey,
       sourceId: operationId,
@@ -823,33 +1024,20 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       operationMemberIndex,
       operationSeedOrderId,
       requestedPaymentStatus,
-      accountRecalculationStatus: ownsRecalculation ? "pending" : "not_required",
       idempotencyKey: idempotencyKey || "",
       action: decision === "reject" ? "payment_reject" : "payment_confirm",
       decision,
       resourceType: "payment",
       resourceId: paymentId,
       orderId: order._id,
-      beforeData: { status: payment && (payment.status || payment.paymentStatus) || "", version: paymentVersion },
-      afterData: {
-        status: nextPayment.status,
-        paymentStatus: nextPayment.paymentStatus,
-        version: nextPayment.version,
-        orderStatus: nextOrder.status,
-        orderPaymentStatus: nextOrder.paymentStatus,
-        orderVersion: nextOrder.version,
-        accountRecalculationPending: nextOrder.accountRecalculationPending,
-        accountRecalculationOwner: nextOrder.accountRecalculationOwner,
-        accountRecalculationExpectedVersion: nextOrder.accountRecalculationExpectedVersion
-      },
+      journal,
       operatorId: actor.id,
       operatorOpenid: actor.openid,
       operatorRole: actor.role,
-      reason,
       status: "success",
       createdAt: timestamp
     } });
-    await writeSyncEvents(tx, { order: nextOrder, payment: nextPayment, actor, businessKey, decision, timestamp });
+    await writeSyncEvents(tx, { order: nextOrder, payment: nextPayment, actor, businessKey, decision, timestamp, eventIds });
     return {
       payment: nextPayment,
       order: nextOrder,
@@ -961,9 +1149,11 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
         orderId: cleanText(value && value.orderId, 128),
         owner: cleanText(value && value.owner, 180),
         expectedVersion: value && value.expectedVersion,
-        auditId: cleanText(value && value.auditId, 128)
+        journalId: cleanText(value && value.journalId, 128),
+        journalBusinessKey: cleanText(value && value.journalBusinessKey, 512),
+        completionBusinessKey: cleanText(value && value.completionBusinessKey, 512)
       };
-      if (!marker.orderId || !marker.owner || !marker.auditId || !Number.isSafeInteger(marker.expectedVersion) || marker.expectedVersion < 0 || seen.has(marker.orderId)) return [];
+      if (!marker.orderId || !marker.owner || !marker.journalId || !marker.journalBusinessKey || !marker.completionBusinessKey || !Number.isSafeInteger(marker.expectedVersion) || marker.expectedVersion < 0 || seen.has(marker.orderId)) return [];
       seen.add(marker.orderId);
       markers.push(marker);
     }
@@ -977,13 +1167,29 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       && versionOf(order, "订单") === marker.expectedVersion;
   }
 
-  function markerMatchesAudit(marker, audit) {
-    const after = audit && audit.afterData || {};
+  function markerMatchesJournal(marker, audit) {
+    const recalculation = audit && audit.journal && audit.journal.recalculation || {};
     return Boolean(audit)
+      && cleanText(audit._id, 128) === marker.journalId
+      && cleanText(audit.businessKey, 512) === marker.journalBusinessKey
       && cleanText(audit.orderId, 128) === marker.orderId
-      && cleanText(after.accountRecalculationOwner, 180) === marker.owner
-      && after.accountRecalculationExpectedVersion === marker.expectedVersion
-      && after.orderVersion === marker.expectedVersion;
+      && recalculation.required === true
+      && cleanText(recalculation.owner, 180) === marker.owner
+      && recalculation.expectedOrderVersion === marker.expectedVersion
+      && cleanText(recalculation.completionBusinessKey, 512) === marker.completionBusinessKey;
+  }
+
+  async function uniqueRecalculationCompletion(source, marker) {
+    const response = await source.collection("admin_operation_logs").where({ businessKey: marker.completionBusinessKey }).limit(2).get();
+    const rows = Array.isArray(response.data) ? response.data : [];
+    if (rows.length > 1) return { conflict: true, row: null };
+    const row = rows[0] || null;
+    if (!row) return { conflict: false, row: null };
+    const valid = cleanText(row.operationKind, 80) === "payment_recalculation_completion"
+      && cleanText(row.sourceBusinessKey, 512) === marker.journalBusinessKey
+      && cleanText(row.resourceId, 128) === marker.orderId
+      && cleanText(row.status, 20) === "success";
+    return { conflict: !valid, row: valid ? row : null };
   }
 
   async function replayRecalculationState(result, context) {
@@ -993,8 +1199,9 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     if (!markers.length) return publicResult;
     try {
       for (const marker of markers) {
-        const audit = (await db.collection("admin_operation_logs").doc(marker.auditId).get()).data;
-        if (!markerMatchesAudit(marker, audit) || audit.accountRecalculationStatus !== "success") return publicResult;
+        const audit = (await db.collection("admin_operation_logs").doc(marker.journalId).get()).data;
+        const completion = await uniqueRecalculationCompletion(db, marker);
+        if (!markerMatchesJournal(marker, audit) || completion.conflict || !completion.row) return publicResult;
       }
       return { ...publicResult, accountRecalculationPending: false };
     } catch (_) {
@@ -1008,12 +1215,17 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       let clearedAll = true;
       for (const marker of markers) {
         const order = (await tx.collection("orders").doc(marker.orderId).get()).data;
-        const audit = (await tx.collection("admin_operation_logs").doc(marker.auditId).get()).data;
-        if (!markerMatchesOrder(marker, order) || !markerMatchesAudit(marker, audit) || !["pending", "success"].includes(audit.accountRecalculationStatus)) {
+        const audit = (await tx.collection("admin_operation_logs").doc(marker.journalId).get()).data;
+        const completion = await uniqueRecalculationCompletion(tx, marker);
+        if (!markerMatchesJournal(marker, audit) || completion.conflict) {
           clearedAll = false;
           continue;
         }
-        if (order.accountRecalculationPending === false && audit.accountRecalculationStatus === "success") continue;
+        if (completion.row && order && order.accountRecalculationPending === false) continue;
+        if (completion.row || !markerMatchesOrder(marker, order)) {
+          clearedAll = false;
+          continue;
+        }
         if (order.accountRecalculationPending !== true) {
           clearedAll = false;
           continue;
@@ -1024,12 +1236,16 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
             accountRecalculatedAt: db.serverDate ? db.serverDate() : now()
           }
         });
-        await tx.collection("admin_operation_logs").doc(marker.auditId).update({
-          data: {
-            accountRecalculationStatus: "success",
-            accountRecalculatedAt: db.serverDate ? db.serverDate() : now()
-          }
-        });
+        await tx.collection("admin_operation_logs").add({ data: {
+          businessKey: marker.completionBusinessKey,
+          sourceBusinessKey: marker.journalBusinessKey,
+          operationKind: "payment_recalculation_completion",
+          action: "payment_account_recalculated",
+          resourceType: "order",
+          resourceId: marker.orderId,
+          status: "success",
+          createdAt: db.serverDate ? db.serverDate() : now()
+        } });
       }
       return clearedAll;
     });
