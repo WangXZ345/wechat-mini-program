@@ -1339,6 +1339,65 @@ test("processing recovery returns the frozen Web result after a later shipment a
   assert.equal(db.snapshot().orders[0].status, "shipped");
 });
 
+test("processing recovery returns A frozen success after a later refund recalculation lowers current account aggregates", async () => {
+  const key = "journal-web-later-refund";
+  const state = await committedWebRecoveryState(key);
+  const audit = state.admin_operation_logs.find((log) => log.operationKind === "web_payment");
+  const receipt = state.account_logs.find((log) => log.businessKey === audit.journal.receipt.businessKey);
+  assert.ok(receipt);
+  assert.equal(state.customer_accounts[0]._id, audit.journal.receipt.accountId);
+  assert.ok(state.customer_accounts[0].paymentMutationVersion >= audit.journal.receipt.afterPaymentMutationVersion);
+  assert.equal(state.account_logs.filter((log) => log.accountId === audit.journal.receipt.accountId
+    && log.afterPaymentMutationVersion === audit.journal.receipt.afterPaymentMutationVersion).length, 1);
+
+  Object.assign(state.customer_accounts[0], {
+    totalOrderAmount: 700,
+    totalReceivableAmount: 700,
+    totalPaidAmount: 700,
+    paidAmount: 700,
+    totalUnpaidAmount: 0,
+    unpaidAmount: 0
+  });
+  state.account_logs.push({
+    _id: "later-refund-recalculation",
+    businessKey: "refund_recalculation:refund-1:account-1",
+    accountId: "account-1",
+    sourceType: "refund",
+    sourceId: "refund-1",
+    relatedOrderId: "order-1",
+    beforeTotalOrderAmount: 1000,
+    afterTotalOrderAmount: 700,
+    beforeTotalPaidAmount: 1000,
+    afterTotalPaidAmount: 700,
+    beforeTotalUnpaidAmount: 0,
+    afterTotalUnpaidAmount: 0,
+    changeAmount: -300,
+    changeType: "refund_recalculated"
+  });
+
+  const db = database(state);
+  const recovered = await confirm(paymentService(db, { idempotency: sharedIdempotency }), {}, key);
+  assert.deepEqual({ status: recovered.status, version: recovered.version, affected: recovered.affected, reused: recovered.reused }, {
+    status: "paid",
+    version: 3,
+    affected: 0,
+    reused: true
+  });
+  assert.deepEqual({
+    id: db.snapshot().customer_accounts[0]._id,
+    totalOrderAmount: db.snapshot().customer_accounts[0].totalOrderAmount,
+    totalPaidAmount: db.snapshot().customer_accounts[0].totalPaidAmount,
+    totalUnpaidAmount: db.snapshot().customer_accounts[0].totalUnpaidAmount,
+    paymentMutationVersion: db.snapshot().customer_accounts[0].paymentMutationVersion
+  }, {
+    id: "account-1",
+    totalOrderAmount: 700,
+    totalPaidAmount: 700,
+    totalUnpaidAmount: 0,
+    paymentMutationVersion: 1
+  });
+});
+
 test("processing recovery detects a missing A account mutation even after later aggregate growth", async () => {
   const key = "journal-missing-account-sequence";
   const state = await committedWebRecoveryState(key);

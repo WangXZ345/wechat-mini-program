@@ -654,11 +654,8 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
     if ((orderUserId && cleanText(account.userId, 128) !== orderUserId) || (orderOpenid && cleanText(account.userOpenid, 128) !== orderOpenid)) {
       throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "客户账款双身份证据冲突", 409);
     }
-    const currentOrder = recoveryCents(account.totalOrderAmount !== undefined ? account.totalOrderAmount : account.totalReceivableAmount);
-    const currentPaid = recoveryCents(account.totalPaidAmount !== undefined ? account.totalPaidAmount : account.paidAmount);
-    const currentUnpaid = recoveryCents(account.totalUnpaidAmount !== undefined ? account.totalUnpaidAmount : account.unpaidAmount);
     const currentPaymentMutationVersion = paymentMutationVersionOf(account);
-    if (currentPaid + currentUnpaid !== currentOrder || currentOrder < afterOrder || currentPaid < afterPaid || currentPaymentMutationVersion < frozen.afterPaymentMutationVersion) {
+    if (currentPaymentMutationVersion < frozen.afterPaymentMutationVersion) {
       throw new PaymentMutationError("BUSINESS_LOG_CONFLICT", "客户账款当前证据未包含付款流水", 409);
     }
     const owner = await uniqueRecoveryRow(
