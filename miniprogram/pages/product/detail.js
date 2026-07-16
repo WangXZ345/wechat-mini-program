@@ -109,6 +109,7 @@ Page({
   },
 
   onLoad(options) {
+    this._isUnloaded = false;
     const id = options.id || "";
     this.setData({ id });
     initOrientation(this);
@@ -119,33 +120,46 @@ Page({
   onShow() {
     this.afterFirstPaint(() => {
       ensureFrontendAccess()
-        .then(() => this.applySelectedAddressFromStorage())
+        .then(() => {
+          if (!this._isUnloaded) this.applySelectedAddressFromStorage();
+        })
         .catch(() => null);
     });
   },
 
   afterFirstPaint(callback) {
+    const runIfActive = () => {
+      if (!this._isUnloaded) callback();
+    };
     if (typeof wx.nextTick === "function") {
-      wx.nextTick(callback);
+      wx.nextTick(runIfActive);
       return;
     }
-    setTimeout(callback, 0);
+    setTimeout(runIfActive, 0);
   },
 
   initializeAfterFirstPaint(hasPreview) {
+    if (this._isUnloaded) return Promise.resolve(null);
     this.subscribeToProductSync();
     return ensureLogin({ showLoading: false })
-      .then(() => ensureFrontendAccess())
-      .then(() => Promise.all([
-        this.loadProduct({ silent: hasPreview }),
-        this.loadDeliveryOptions()
-      ]))
-      .catch((err) => toast(err.message));
+      .then(() => this._isUnloaded ? null : ensureFrontendAccess())
+      .then(() => {
+        if (this._isUnloaded) return null;
+        return Promise.all([
+          this.loadProduct({ silent: hasPreview }),
+          this.loadDeliveryOptions()
+        ]);
+      })
+      .catch((err) => {
+        if (!this._isUnloaded) toast(err.message);
+        return null;
+      });
   },
 
   subscribeToProductSync() {
-    if (this._unsubscribeSync) return;
+    if (this._isUnloaded || this._unsubscribeSync) return;
     this._unsubscribeSync = sync.subscribe(this, ["product", "inventory"], (events) => {
+      if (this._isUnloaded) return;
       const relevant = events.some((event) => !event.entityId || event.entityId === this.data.id);
       if (!relevant) return;
       const busy = Boolean(this.productLoading);
@@ -176,12 +190,14 @@ Page({
   },
 
   loadProduct(options = {}) {
+    if (this._isUnloaded) return Promise.resolve(null);
     if (this.productLoading) return this.productLoading;
     this.setData({ loading: !options.silent && !this.data.product });
     this.productLoading = call("getProducts", {
       onlyActive: true,
       productId: this.data.id
     }, { showLoading: false }).then((data) => {
+      if (this._isUnloaded) return;
       const product = (data.products || []).find((item) => item._id === this.data.id);
       if (!product) {
         clearProductPreview(this.data.id);
@@ -192,30 +208,39 @@ Page({
       const shapedProduct = this.shapeProduct(product);
       writeProductPreview(shapedProduct);
       this.setData({ product: shapedProduct }, () => {
+        if (this._isUnloaded) return;
         this.updateTotal();
         this.loadFavoriteStatus();
       });
-    }).catch((err) => feedback.showError(err.message))
+    }).catch((err) => {
+      if (!this._isUnloaded) feedback.showError(err.message);
+    })
       .finally(() => {
         this.productLoading = null;
-        this.setData({ loading: false, initialized: true });
+        if (!this._isUnloaded) this.setData({ loading: false, initialized: true });
       });
     return this.productLoading;
   },
 
   loadFavoriteStatus() {
-    if (!this.data.id) return Promise.resolve();
+    if (this._isUnloaded || !this.data.id) return Promise.resolve();
     return call("getFavoriteStatus", { productId: this.data.id }, { showLoading: false })
-      .then((data) => this.setData({ isFavorite: Boolean(data.isFavorite) }))
-      .catch(() => this.setData({ isFavorite: false }));
+      .then((data) => {
+        if (!this._isUnloaded) this.setData({ isFavorite: Boolean(data.isFavorite) });
+      })
+      .catch(() => {
+        if (!this._isUnloaded) this.setData({ isFavorite: false });
+      });
   },
 
   loadDeliveryOptions() {
+    if (this._isUnloaded) return Promise.resolve(null);
     return Promise.all([
       call("getUserDeliveryPreference", {}, { showLoading: false }),
       call("getSettings", {}, { showLoading: false }),
       call("getDefaultAddress", {}, { showLoading: false })
     ]).then(([preference, settings, defaultAddress]) => {
+      if (this._isUnloaded) return;
       const pickup = settings.pickupSettings || {};
       const deliveryType = pickup.isConfigured === false && preference.defaultDeliveryType === "self_pickup"
         ? "shipping"
@@ -228,7 +253,9 @@ Page({
         selectedAddress,
         selectedAddressText: selectedAddress ? formatSelectedAddress(selectedAddress) : ""
       });
-    }).catch((err) => feedback.showError(err.message));
+    }).catch((err) => {
+      if (!this._isUnloaded) feedback.showError(err.message);
+    });
   },
 
   applySelectedAddressFromStorage() {
@@ -482,7 +509,11 @@ Page({
   },
 
   onUnload() {
-    if (this._unsubscribeSync) this._unsubscribeSync();
+    this._isUnloaded = true;
+    if (this._unsubscribeSync) {
+      this._unsubscribeSync();
+      this._unsubscribeSync = null;
+    }
     cleanupOrientation(this);
   }
 });

@@ -6,6 +6,7 @@ const ORDER_CACHE_TTL_MS = 30 * 1000;
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PRODUCT_PREVIEW_TTL_MS = 2 * 60 * 1000;
 const stagedProductPreviews = new Map();
+const pendingProductPreviewWrites = new Map();
 
 const SENSITIVE_KEYS = [
   "stock",
@@ -358,11 +359,14 @@ function stageProductPreview(product = {}, options = {}) {
   const key = productPreviewCacheKey(preview.productId, options.openid);
   if (!key || !preview.productId) return null;
   const updatedAt = now();
-  const ttlMs = Number(options.ttlMs || PRODUCT_PREVIEW_TTL_MS);
+  const requestedTtlMs = Number(options.ttlMs);
+  const ttlMs = Number.isFinite(requestedTtlMs) && requestedTtlMs > 0
+    ? requestedTtlMs
+    : PRODUCT_PREVIEW_TTL_MS;
   stagedProductPreviews.set(key, {
     data: preview,
     updatedAt,
-    expiresAt: updatedAt + Math.max(1, ttlMs)
+    expiresAt: updatedAt + ttlMs
   });
   return preview;
 }
@@ -382,6 +386,11 @@ function writeProductPreview(product = {}, options = {}) {
   const preview = publicProductPreview(product);
   const key = productPreviewCacheKey(preview.productId, options.openid);
   if (!key || !preview.productId) return null;
+  const pendingState = pendingProductPreviewWrites.get(key);
+  if (pendingState) {
+    pendingState.generation += 1;
+    pendingState.authoritative = { type: "preview", preview };
+  }
   cache.set(key, preview, { ttlMs: PRODUCT_PREVIEW_TTL_MS });
   return preview;
 }
@@ -390,9 +399,31 @@ function writeProductPreviewAsync(product = {}, options = {}) {
   const preview = publicProductPreview(product);
   const key = productPreviewCacheKey(preview.productId, options.openid);
   if (!key || !preview.productId) return Promise.resolve(null);
+  const pendingState = pendingProductPreviewWrites.get(key) || {
+    generation: 0,
+    pendingCount: 0,
+    authoritative: null
+  };
+  pendingState.generation += 1;
+  pendingState.pendingCount += 1;
+  pendingState.authoritative = { type: "preview", preview };
+  const generation = pendingState.generation;
+  pendingProductPreviewWrites.set(key, pendingState);
+
+  const finish = (written) => {
+    const currentState = pendingProductPreviewWrites.get(key);
+    if (currentState) {
+      if (generation !== currentState.generation && currentState.authoritative) {
+        if (currentState.authoritative.type === "tombstone") cache.remove(key);
+        else cache.set(key, currentState.authoritative.preview, { ttlMs: PRODUCT_PREVIEW_TTL_MS });
+      }
+      currentState.pendingCount -= 1;
+      if (currentState.pendingCount <= 0) pendingProductPreviewWrites.delete(key);
+    }
+    return written ? preview : null;
+  };
   return cache.setAsync(key, preview, { ttlMs: PRODUCT_PREVIEW_TTL_MS })
-    .then((written) => written ? preview : null)
-    .catch(() => null);
+    .then(finish, () => finish(false));
 }
 
 function readProductPreview(productId, options = {}) {
@@ -401,6 +432,7 @@ function readProductPreview(productId, options = {}) {
   if (!key) return null;
   return cache.get(key, {
     ttlMs: PRODUCT_PREVIEW_TTL_MS,
+    allowExpired: false,
     validate: (data) => Boolean(data && typeof data === "object" && String(data.productId || data._id || "") === id)
   });
 }
@@ -408,6 +440,11 @@ function readProductPreview(productId, options = {}) {
 function clearProductPreview(productId, options = {}) {
   const key = productPreviewCacheKey(productId, options.openid);
   if (!key) return;
+  const pendingState = pendingProductPreviewWrites.get(key);
+  if (pendingState) {
+    pendingState.generation += 1;
+    pendingState.authoritative = { type: "tombstone" };
+  }
   stagedProductPreviews.delete(key);
   cache.remove(key);
 }

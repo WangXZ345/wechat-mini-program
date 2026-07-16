@@ -4,10 +4,15 @@ const Module = require("node:module");
 
 const state = {
   authCalls: [],
+  authDeferred: null,
   calls: [],
   cleared: [],
+  deferredResponses: {},
+  feedbackErrors: [],
+  feedbackWarnings: [],
   nextTicks: [],
   persisted: null,
+  persistedWrites: [],
   responses: {},
   staged: null,
   subscribeCalls: [],
@@ -37,15 +42,22 @@ function loadDefinition() {
       return {
         call(name, payload) {
           state.calls.push({ name, payload });
+          if (state.deferredResponses[name]) return state.deferredResponses[name].promise;
           return Promise.resolve(state.responses[name] || {});
         },
         moneyText(value) {
           return (Number(value) / 100).toFixed(2);
         },
-        toast() {},
+        toast(message) {
+          state.feedbackErrors.push(message);
+        },
         feedback: {
-          showWarning() {},
-          showError() {}
+          showWarning(message) {
+            state.feedbackWarnings.push(message);
+          },
+          showError(message) {
+            state.feedbackErrors.push(message);
+          }
         }
       };
     }
@@ -53,10 +65,12 @@ function loadDefinition() {
       return {
         ensureFrontendAccess() {
           state.authCalls.push("ensureFrontendAccess");
+          if (state.authDeferred) return state.authDeferred.promise;
           return Promise.resolve();
         },
         ensureLogin(options) {
           state.authCalls.push({ name: "ensureLogin", options });
+          if (state.authDeferred) return state.authDeferred.promise;
           return Promise.resolve();
         }
       };
@@ -86,7 +100,9 @@ function loadDefinition() {
         clearProductPreview(productId) {
           state.cleared.push(productId);
         },
-        writeProductPreview() {},
+        writeProductPreview(product) {
+          state.persistedWrites.push(product);
+        },
         markDirty() {},
         cartItemFromAddResult() {},
         upsertCartCacheItem() {}
@@ -130,10 +146,15 @@ test.after(() => {
 
 function resetState() {
   state.authCalls.length = 0;
+  state.authDeferred = null;
   state.calls.length = 0;
   state.cleared.length = 0;
+  state.deferredResponses = {};
+  state.feedbackErrors.length = 0;
+  state.feedbackWarnings.length = 0;
   state.nextTicks.length = 0;
   state.persisted = null;
+  state.persistedWrites.length = 0;
   state.responses = {};
   state.staged = null;
   state.subscribeCalls.length = 0;
@@ -146,6 +167,7 @@ function createPage() {
     data: JSON.parse(JSON.stringify(definition.data))
   };
   page.setData = function setData(patch, callback) {
+    if (this._testUnloaded) this._testSetDataAfterUnload = (this._testSetDataAfterUnload || 0) + 1;
     Object.assign(this.data, patch);
     if (callback) callback();
   };
@@ -153,6 +175,21 @@ function createPage() {
     this.data.totalUpdated = true;
   };
   return page;
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function unloadPage(page) {
+  page.onUnload();
+  page._testUnloaded = true;
 }
 
 function runNextTicks() {
@@ -243,6 +280,70 @@ test("product sync subscribes once and is cancelled on unload", async () => {
   assert.equal(state.unsubscribeCalls, 1);
 });
 
+test("unload before pending first-paint callback prevents subscription, authentication and API calls", async () => {
+  const page = createPage();
+
+  page.onLoad({ id: "p1" });
+  unloadPage(page);
+  runNextTicks();
+  await flushPromises();
+
+  assert.equal(state.subscribeCalls.length, 0);
+  assert.deepEqual(state.authCalls, []);
+  assert.deepEqual(state.calls, []);
+  assert.equal(state.unsubscribeCalls, 0);
+});
+
+test("initialization stopped by unload does not continue from authentication into API calls", async () => {
+  state.authDeferred = deferred();
+  const page = createPage();
+
+  page.onLoad({ id: "p1" });
+  runNextTicks();
+  unloadPage(page);
+  state.authDeferred.resolve();
+  await flushPromises();
+
+  assert.equal(state.subscribeCalls.length, 1);
+  assert.equal(state.unsubscribeCalls, 1);
+  assert.deepEqual(state.calls, []);
+  assert.equal(page._testSetDataAfterUnload || 0, 0);
+  assert.deepEqual(state.feedbackErrors, []);
+});
+
+test("in-flight product, favorite and delivery results do not update or toast after unload", async () => {
+  const productResponse = deferred();
+  const favoriteResponse = deferred();
+  const preferenceResponse = deferred();
+  const settingsResponse = deferred();
+  const addressResponse = deferred();
+  state.deferredResponses = {
+    getProducts: productResponse,
+    getFavoriteStatus: favoriteResponse,
+    getUserDeliveryPreference: preferenceResponse,
+    getSettings: settingsResponse,
+    getDefaultAddress: addressResponse
+  };
+  const page = createPage();
+  page.data.id = "p1";
+
+  const productRequest = page.loadProduct({ silent: true });
+  const favoriteRequest = page.loadFavoriteStatus();
+  const deliveryRequest = page.loadDeliveryOptions();
+  unloadPage(page);
+  productResponse.resolve({ products: [{ _id: "p1", name: "late", price: 200 }] });
+  favoriteResponse.resolve({ isFavorite: true });
+  preferenceResponse.resolve({});
+  settingsResponse.resolve({});
+  addressResponse.resolve({});
+  await Promise.all([productRequest, favoriteRequest, deliveryRequest]);
+
+  assert.equal(page._testSetDataAfterUnload || 0, 0);
+  assert.deepEqual(state.feedbackErrors, []);
+  assert.deepEqual(state.feedbackWarnings, []);
+  assert.equal(page.productLoading, null);
+});
+
 test("onShow authentication does not start before the first paint", async () => {
   const page = createPage();
 
@@ -253,6 +354,21 @@ test("onShow authentication does not start before the first paint", async () => 
   runNextTicks();
   await flushPromises();
   assert.deepEqual(state.authCalls, ["ensureFrontendAccess"]);
+});
+
+test("in-flight onShow authentication does not apply stored address after unload", async () => {
+  state.authDeferred = deferred();
+  const page = createPage();
+  page.applySelectedAddressFromStorage = () => page.setData({ selectedAddressText: "late" });
+
+  page.onShow();
+  runNextTicks();
+  unloadPage(page);
+  state.authDeferred.resolve();
+  await flushPromises();
+
+  assert.equal(page._testSetDataAfterUnload || 0, 0);
+  assert.equal(page.data.selectedAddressText, "");
 });
 
 test("an unavailable exact network result clears the product preview", async () => {
