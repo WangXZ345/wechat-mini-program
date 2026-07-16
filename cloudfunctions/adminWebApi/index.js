@@ -36,6 +36,7 @@ const orderReviewModule = require("./lib/orderReviewService");
 const shipmentQueryModule = require("./lib/shipmentQueryService");
 const accountQueryModule = require("./lib/accountQueryService");
 const paymentQueryModule = require("./lib/paymentQueryService");
+const paymentMutationModule = require("./lib/paymentMutationService");
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
@@ -131,6 +132,15 @@ const defaultOrderQueryService = orderQueryModule.createOrderQueryService({ db, 
 const defaultShipmentQueryService = shipmentQueryModule.createShipmentQueryService({ db, command });
 const defaultAccountQueryService = accountQueryModule.createAccountQueryService({ db, command });
 const defaultPaymentQueryService = paymentQueryModule.createPaymentQueryService({ db, command });
+const defaultPaymentMutationService = paymentMutationModule.createPaymentMutationService({
+  db,
+  idempotency: inventoryWarningIdempotency,
+  ownerKeyFor,
+  syncOwnerPepper: process.env.SYNC_OWNER_PEPPER,
+  recalculateAccount({ userId, userOpenid }) {
+    return cloud.callFunction({ name: "recalculateCustomerAccount", data: { userId, userOpenid } });
+  }
+});
 const defaultOrderReviewService = orderReviewModule.createOrderReviewService({
   db,
   command,
@@ -291,6 +301,195 @@ async function readWebPaymentDetail(id, principal, service = defaultPaymentQuery
   } catch (error) {
     throw paymentQueryApiError(error);
   }
+}
+const PAYMENT_MUTATION_BODY_FIELDS = new Set([
+  "paymentId",
+  "expectedStatus",
+  "expectedVersion",
+  "expectedUpdatedAt",
+  "reason"
+]);
+const PAYMENT_MUTATION_INPUT_ERRORS = new Set([
+  "UNKNOWN_FIELD",
+  "PAYMENT_ID_REQUIRED",
+  "PAYMENT_ID_INVALID",
+  "DECISION_INVALID",
+  "EXPECTED_STATUS_REQUIRED",
+  "EXPECTED_STATUS_INVALID",
+  "EXPECTED_VERSION_REQUIRED",
+  "EXPECTED_VERSION_INVALID",
+  "EXPECTED_UPDATED_AT_REQUIRED",
+  "EXPECTED_UPDATED_AT_INVALID",
+  "REASON_REQUIRED",
+  "REASON_INVALID",
+  "IDEMPOTENCY_KEY_REQUIRED",
+  "IDEMPOTENCY_KEY_INVALID"
+]);
+const PAYMENT_MUTATION_CONFLICT_ERRORS = new Set([
+  "DATA_VERSION_CONFLICT",
+  "DATA_VERSION_INVALID",
+  "PAYMENT_STATUS_CONFLICT",
+  "PAYMENT_RECORD_STALE",
+  "ORDER_STATUS_CONFLICT",
+  "ORDER_AMOUNT_INVALID",
+  "ORDER_ALREADY_PAID",
+  "PAYMENT_OVERPAY",
+  "ACCOUNT_DUPLICATE",
+  "ACCOUNT_IDENTITY_CONFLICT",
+  "ACCOUNT_AMOUNT_INVALID",
+  "ACCOUNT_MUTATION_VERSION_INVALID",
+  "ACCOUNT_ID_REQUIRED",
+  "ACCOUNT_LOG_DUPLICATE",
+  "ACCOUNT_LOG_CONFLICT",
+  "ACCOUNT_MUTATION_LOG_DUPLICATE",
+  "ACCOUNT_MUTATION_LOG_CONFLICT",
+  "SYNC_EVENT_DUPLICATE",
+  "SYNC_EVENT_CONFLICT",
+  "BUSINESS_LOG_DUPLICATE",
+  "BUSINESS_LOG_CONFLICT",
+  "DELIVERY_LOG_DUPLICATE",
+  "DELIVERY_LOG_CONFLICT",
+  "PAYMENT_PREFLIGHT_INVALID",
+  "IDEMPOTENCY_KEY_CONFLICT",
+  "IDEMPOTENCY_PROCESSING",
+  "IDEMPOTENCY_NOT_EXECUTABLE"
+]);
+
+function paymentMutationRoute(route = {}) {
+  return route.resource === "payments" && ["confirm", "reject"].includes(route.mutationAction);
+}
+
+function assertWebPaymentMutation(principal, action) {
+  const permission = action === "reject" ? "payment:update_status" : "payment:confirm";
+  if (!principal
+    || principal.status !== "active"
+    || principal.isActive === false
+    || !PAYMENT_WEB_ROLES.has(principal.role)
+    || !Array.isArray(principal.permissions)
+    || (!principal.permissions.includes("*") && !principal.permissions.includes(permission))) {
+    throw new ApiError("FORBIDDEN", "无权执行付款审核操作", 403);
+  }
+}
+
+function normalizePaymentMutation(request = {}) {
+  const body = request.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError("INVALID_REQUEST_BODY", "付款审核请求无效", 400);
+  }
+  if (Object.keys(body).some((key) => !PAYMENT_MUTATION_BODY_FIELDS.has(key))) {
+    throw new ApiError("INVALID_REQUEST_BODY", "付款审核请求包含不允许的字段", 400);
+  }
+  let idempotencyKey;
+  try {
+    idempotencyKey = inventoryWarningIdempotency.assertIdempotencyKey(
+      request.headers && (request.headers["idempotency-key"] || request.headers["Idempotency-Key"])
+    );
+  } catch (error) {
+    throw new ApiError(error.code || "IDEMPOTENCY_KEY_INVALID", "付款审核操作凭证无效", 400);
+  }
+  if (typeof body.paymentId !== "string" || !body.paymentId.trim()) {
+    throw new ApiError("PAYMENT_ID_REQUIRED", "缺少付款记录 ID", 400);
+  }
+  if (body.paymentId.trim().length > 128) {
+    throw new ApiError("PAYMENT_ID_INVALID", "付款记录 ID 格式无效", 400);
+  }
+  if (body.expectedStatus === undefined || body.expectedStatus === null || body.expectedStatus === "") {
+    throw new ApiError("EXPECTED_STATUS_REQUIRED", "缺少付款当前状态，请刷新后重试", 400);
+  }
+  if (body.expectedStatus !== "pending_confirm") {
+    throw new ApiError("EXPECTED_STATUS_INVALID", "付款当前状态无效，请刷新后重试", 400);
+  }
+  if (body.expectedVersion === undefined || body.expectedVersion === null || body.expectedVersion === "") {
+    throw new ApiError("EXPECTED_VERSION_REQUIRED", "缺少付款记录版本，请刷新后重试", 400);
+  }
+  if (typeof body.expectedVersion !== "number" || !Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) {
+    throw new ApiError("EXPECTED_VERSION_INVALID", "付款记录版本无效，请刷新后重试", 400);
+  }
+  if (body.expectedUpdatedAt === undefined || body.expectedUpdatedAt === null || body.expectedUpdatedAt === "") {
+    throw new ApiError("EXPECTED_UPDATED_AT_REQUIRED", "缺少付款记录更新时间，请刷新后重试", 400);
+  }
+  if (typeof body.expectedUpdatedAt !== "string") {
+    throw new ApiError("EXPECTED_UPDATED_AT_INVALID", "付款记录更新时间无效，请刷新后重试", 400);
+  }
+  const parsedUpdatedAt = new Date(body.expectedUpdatedAt);
+  if (Number.isNaN(parsedUpdatedAt.getTime()) || parsedUpdatedAt.toISOString() !== body.expectedUpdatedAt) {
+    throw new ApiError("EXPECTED_UPDATED_AT_INVALID", "付款记录更新时间无效，请刷新后重试", 400);
+  }
+  if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.trim().length > 300)) {
+    throw new ApiError("REASON_INVALID", "付款审核原因格式无效", 400);
+  }
+  const reason = body.reason === undefined ? "" : body.reason.trim();
+  const decision = request.route && request.route.mutationAction === "reject" ? "reject" : "confirm";
+  if (decision === "reject" && !reason) {
+    throw new ApiError("REASON_REQUIRED", "请填写驳回原因", 400);
+  }
+  return {
+    idempotencyKey,
+    input: {
+      paymentId: body.paymentId.trim(),
+      decision,
+      expectedStatus: "pending_confirm",
+      expectedVersion: body.expectedVersion,
+      expectedUpdatedAt: body.expectedUpdatedAt,
+      reason
+    }
+  };
+}
+
+function paymentMutationActor(auth = {}) {
+  return inventoryWarningActor(auth);
+}
+
+function paymentMutationApiError(error) {
+  const code = cleanString(error && error.code, 80);
+  if (PAYMENT_MUTATION_INPUT_ERRORS.has(code)) {
+    const message = code === "REASON_REQUIRED" ? "请填写驳回原因" : "付款审核请求无效";
+    return new ApiError(code, message, 400);
+  }
+  if (code === "FORBIDDEN" || code === "INVALID_ACTOR") {
+    return new ApiError(code, "无权执行付款审核操作", 403);
+  }
+  if (code === "PAYMENT_NOT_FOUND" || code === "ORDER_NOT_FOUND") {
+    return new ApiError(code, "付款记录或关联订单不存在", 404);
+  }
+  if (PAYMENT_MUTATION_CONFLICT_ERRORS.has(code)) {
+    return new ApiError(code, "付款记录或订单状态已变化，请刷新后重试", 409);
+  }
+  if (code === "SYNC_OWNER_CONFIG_REQUIRED" || code === "CLOCK_INVALID") {
+    return new ApiError(code, "付款审核服务暂时不可用，请稍后重试", 503);
+  }
+  return new ApiError("PAYMENT_MUTATION_FAILED", "付款审核服务暂时不可用，请稍后重试", 503);
+}
+
+function paymentMutationResult(result = {}, requestId = "") {
+  const paymentId = cleanString(result.paymentId, 128);
+  const decision = result.decision === "reject" ? "reject" : result.decision === "confirm" ? "confirm" : "";
+  const status = cleanString(result.status, 60);
+  const updatedAt = dateValue(result.updatedAt);
+  if (!paymentId
+    || !decision
+    || !status
+    || !updatedAt
+    || typeof result.version !== "number"
+    || !Number.isSafeInteger(result.version)
+    || result.version < 0) {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "付款审核结果无效", 502);
+  }
+  return {
+    item: {
+      id: paymentId,
+      orderNo: cleanString(result.orderNo, 100),
+      status,
+      version: result.version,
+      updatedAt
+    },
+    affected: result.affected === 1 ? 1 : 0,
+    reused: result.reused === true,
+    decision,
+    accountRecalculationPending: result.accountRecalculationPending === true,
+    message: decision === "reject" ? "付款凭证已驳回" : "付款已确认",
+    requestId
+  };
 }
 const INVENTORY_WARNING_BODY_FIELDS = new Set([
   "id",
@@ -1893,6 +2092,22 @@ async function dispatch(request, auth, config, dependencies = {}) {
     const permission = getMutationPermission(route.resource, route.mutationAction);
     assertPermission(auth.principal, permission);
     assertSessionCsrf({ session: auth.session, request, config });
+    if (paymentMutationRoute(route)) {
+      assertWebPaymentMutation(auth.principal, route.mutationAction);
+      const normalized = normalizePaymentMutation(request);
+      const service = dependencies.paymentMutationService || defaultPaymentMutationService;
+      let result;
+      try {
+        result = await service.reviewWebPayment({
+          actor: paymentMutationActor(auth),
+          input: normalized.input,
+          idempotencyKey: normalized.idempotencyKey
+        });
+      } catch (error) {
+        throw paymentMutationApiError(error);
+      }
+      return paymentMutationResult(result, request.requestId);
+    }
     if (orderReviewRoute(route)) {
       const normalized = normalizeOrderReviewMutation(request);
       const service = dependencies.orderReviewService || defaultOrderReviewService;
@@ -2139,6 +2354,13 @@ exports._test = {
   readWebPaymentList,
   readWebPaymentDetail,
   defaultPaymentQueryService,
+  paymentMutationRoute,
+  assertWebPaymentMutation,
+  normalizePaymentMutation,
+  paymentMutationActor,
+  paymentMutationApiError,
+  paymentMutationResult,
+  defaultPaymentMutationService,
   orderReviewRoute,
   normalizeOrderReviewMutation,
   orderReviewActor,
