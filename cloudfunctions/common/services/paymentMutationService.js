@@ -4,6 +4,20 @@ const crypto = require("crypto");
 
 const PAYMENT_ROLES = new Set(["finance", "super_admin"]);
 const LEGACY_STATUSES = new Set(["paid", "partial_paid", "abnormal", "unpaid"]);
+const PAYMENT_MUTATION_REQUIRED_UNIQUE_INDEXES = Object.freeze([
+  Object.freeze({
+    collection: "account_logs",
+    indexName: "uniq_account_payment_mutation_version",
+    unique: true,
+    fields: Object.freeze(["accountId", "afterPaymentMutationVersion"])
+  }),
+  Object.freeze({
+    collection: "sync_events",
+    indexName: "uniq_payment_sync_event_id",
+    unique: true,
+    fields: Object.freeze(["eventId"])
+  })
+]);
 
 class PaymentMutationError extends Error {
   constructor(code, message, statusCode = 400, details) {
@@ -313,7 +327,15 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       throw new PaymentMutationError("ACCOUNT_MUTATION_VERSION_INVALID", "客户账款付款序列异常，暂不能确认付款", 409);
     }
 
-    let accountId = account && cleanText(account._id, 128);
+    const accountUserId = cleanText(order.userId, 128);
+    const accountUserOpenid = cleanText(order.userOpenid || order.openid, 128);
+    const accountIdentity = accountUserId || accountUserOpenid ? `${accountUserId}|${accountUserOpenid}` : `order:${cleanText(order._id, 128)}`;
+    let accountId = (account && cleanText(account._id, 128)) || deterministicId("customer_account", accountIdentity);
+    if (!accountId) throw new PaymentMutationError("ACCOUNT_ID_REQUIRED", "客户账款标识缺失，暂不能确认付款", 409);
+    const sequenceResponse = await tx.collection("account_logs").where({ accountId, afterPaymentMutationVersion }).limit(2).get();
+    const sequenceOwners = Array.isArray(sequenceResponse.data) ? sequenceResponse.data : [];
+    if (sequenceOwners.length > 1) throw new PaymentMutationError("ACCOUNT_MUTATION_LOG_DUPLICATE", "客户账款付款序列流水重复，暂不能继续", 409);
+    if (sequenceOwners[0]) throw new PaymentMutationError("ACCOUNT_MUTATION_LOG_CONFLICT", "客户账款付款序列已被其他流水占用", 409);
 
     if (account) {
       await tx.collection("customer_accounts").doc(account._id).update({ data: {
@@ -328,6 +350,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       } });
     } else {
       const created = await tx.collection("customer_accounts").add({ data: {
+        _id: accountId,
         userId: cleanText(order.userId, 128),
         userOpenid: cleanText(order.userOpenid || order.openid, 128),
         totalOrderAmount: beforeOrder,
@@ -401,6 +424,16 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
       createdAt: timestamp,
       expiresAt: new Date(now().getTime() + 7 * 24 * 60 * 60 * 1000)
     };
+    const ownerExistingResponse = await tx.collection("sync_events").where({ eventId: eventIds.ownerEventId }).limit(2).get();
+    const adminExistingResponse = await tx.collection("sync_events").where({ eventId: eventIds.adminEventId }).limit(2).get();
+    const ownerExisting = Array.isArray(ownerExistingResponse.data) ? ownerExistingResponse.data : [];
+    const adminExisting = Array.isArray(adminExistingResponse.data) ? adminExistingResponse.data : [];
+    if (ownerExisting.length > 1 || adminExisting.length > 1) {
+      throw new PaymentMutationError("SYNC_EVENT_DUPLICATE", "付款同步事件标识重复，暂不能继续", 409);
+    }
+    if (ownerExisting[0] || adminExisting[0]) {
+      throw new PaymentMutationError("SYNC_EVENT_CONFLICT", "付款同步事件标识已被占用，暂不能继续", 409);
+    }
     await tx.collection("sync_events").add({ data: { ...common, eventId: eventIds.ownerEventId, audience: "owner", ownerKey: ownerKey(order) } });
     await tx.collection("sync_events").add({ data: { ...common, eventId: eventIds.adminEventId, audience: "admin" } });
     return eventIds;
@@ -1346,6 +1379,7 @@ function createPaymentMutationService({ db, idempotency, ownerKeyFor, syncOwnerP
 
 module.exports = {
   PaymentMutationError,
+  PAYMENT_MUTATION_REQUIRED_UNIQUE_INDEXES,
   createPaymentMutationService,
   normalizeActor,
   normalizeWebInput,

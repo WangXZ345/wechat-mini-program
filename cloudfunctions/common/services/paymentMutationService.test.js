@@ -2,7 +2,12 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createPaymentMutationService, PaymentMutationError } = require("./paymentMutationService");
+const crypto = require("node:crypto");
+const {
+  createPaymentMutationService,
+  PaymentMutationError,
+  PAYMENT_MUTATION_REQUIRED_UNIQUE_INDEXES
+} = require("./paymentMutationService");
 const sharedIdempotency = require("../idempotency");
 
 const FIXED_DATE = new Date("2026-07-14T00:00:00.000Z");
@@ -165,6 +170,7 @@ function database(initial = {}, options = {}) {
       limit(limit) { queryState.limit = limit; return query; },
       orderBy(field, direction) { queryState.orderBy = { field, direction }; return query; },
       async get() {
+        if (options.observe) options.observe({ operation: "get", collection: name, where: structuredClone(queryState.where), limit: queryState.limit });
         if (options.failOn && options.failOn({ operation: "get", collection: name })) throw new Error(`forced ${name}.get failure`);
         let rows = target[name].filter((row) => matches(row, queryState.where));
         if (queryState.orderBy) {
@@ -174,6 +180,7 @@ function database(initial = {}, options = {}) {
         return { data: rows.slice(0, queryState.limit).map((row) => structuredClone(row)) };
       },
       async add({ data }) {
+        if (options.observe) options.observe({ operation: "add", collection: name, data: structuredClone(data) });
         if (options.failOn && options.failOn({ operation: "add", collection: name, data })) throw new Error(`forced ${name}.add failure`);
         let generatedId = data._id;
         while (!generatedId) {
@@ -188,11 +195,13 @@ function database(initial = {}, options = {}) {
       doc(id) {
         return {
           async get() {
+            if (options.observe) options.observe({ operation: "get", collection: name, id });
             if (options.failOn && options.failOn({ operation: "get", collection: name, id })) throw new Error(`forced ${name}.get failure`);
             const row = target[name].find((item) => item._id === id);
             return { data: row ? structuredClone(row) : null };
           },
           async update({ data }) {
+            if (options.observe) options.observe({ operation: "update", collection: name, id, data: structuredClone(data) });
             if (options.failOn && options.failOn({ operation: "update", collection: name, id, data })) throw new Error(`forced ${name}.update failure`);
             const row = target[name].find((item) => item._id === id);
             if (!row) throw new Error("document not exist");
@@ -1499,4 +1508,129 @@ test("the immutable operation journal freezes public result and recovery evidenc
   const completion = state.admin_operation_logs.find((log) => log.operationKind === "payment_recalculation_completion");
   assert.ok(completion);
   assert.equal(completion.sourceBusinessKey, audit.businessKey);
+});
+
+test("sync event IDs are both checked with limit(2) before either event is added", async () => {
+  function eventId(prefix, businessKey) {
+    return `${prefix}:${crypto.createHash("sha256").update(businessKey).digest("hex").slice(0, 40)}`;
+  }
+  const key = "sync-event-preflight";
+  const businessKey = `payment_mutation:${key}:payment-1:confirm`;
+  const ownerEventId = eventId("payment_event_owner", businessKey);
+  const adminEventId = eventId("payment_event_admin", businessKey);
+  const cases = [
+    ["owner-existing", [{ _id: "owner-existing", eventId: ownerEventId }], "SYNC_EVENT_CONFLICT"],
+    ["admin-existing", [{ _id: "admin-existing", eventId: adminEventId }], "SYNC_EVENT_CONFLICT"],
+    ["owner-duplicate", [{ _id: "owner-duplicate-1", eventId: ownerEventId }, { _id: "owner-duplicate-2", eventId: ownerEventId }], "SYNC_EVENT_DUPLICATE"]
+  ];
+  for (const [name, syncEvents, expectedCode] of cases) {
+    const operations = [];
+    const initial = fixture({ state: { sync_events: syncEvents } });
+    const db = database(initial, { observe: (entry) => operations.push(entry) });
+    await assert.rejects(
+      () => confirm(paymentService(db), {}, key),
+      (error) => error.code === expectedCode,
+      name
+    );
+    const eventQueries = operations.filter((entry) => entry.collection === "sync_events" && entry.operation === "get");
+    assert.deepEqual(eventQueries.map((entry) => ({ eventId: entry.where.eventId, limit: entry.limit })), [
+      { eventId: ownerEventId, limit: 2 },
+      { eventId: adminEventId, limit: 2 }
+    ], `${name} must preflight both deterministic IDs`);
+    assert.equal(operations.some((entry) => entry.collection === "sync_events" && entry.operation === "add"), false, `${name} must fail before the first sync add`);
+    const state = db.snapshot();
+    assert.equal(state.payment_records[0].status, "pending_confirm");
+    assert.equal(state.orders[0].status, "pending_payment_confirm");
+    assert.equal(state.customer_accounts[0].totalPaidAmount, 200);
+    assert.equal(state.customer_accounts[0].paymentMutationVersion, undefined);
+    assert.equal(state.account_logs.length, 0);
+    assert.equal(state.admin_operation_logs.length, 0);
+    assert.equal(state.sync_events.length, syncEvents.length);
+  }
+});
+
+test("account payment-mutation sequence ownership is checked before account writes", async () => {
+  for (const [name, occupiedLogs, expectedCode] of [
+    ["occupied", [{ _id: "occupied-sequence", businessKey: "other-business", accountId: "account-1", afterPaymentMutationVersion: 1 }], "ACCOUNT_MUTATION_LOG_CONFLICT"],
+    ["duplicate", [
+      { _id: "duplicate-sequence-1", businessKey: "other-business-1", accountId: "account-1", afterPaymentMutationVersion: 1 },
+      { _id: "duplicate-sequence-2", businessKey: "other-business-2", accountId: "account-1", afterPaymentMutationVersion: 1 }
+    ], "ACCOUNT_MUTATION_LOG_DUPLICATE"]
+  ]) {
+    const operations = [];
+    const initial = fixture({ state: { account_logs: occupiedLogs } });
+    const db = database(initial, { observe: (entry) => operations.push(entry) });
+    await assert.rejects(
+      () => confirm(paymentService(db), {}, `account-sequence-${name}`),
+      (error) => error.code === expectedCode,
+      name
+    );
+    const sequenceQueries = operations.filter((entry) => entry.collection === "account_logs"
+      && entry.operation === "get"
+      && entry.where.accountId === "account-1"
+      && entry.where.afterPaymentMutationVersion === 1);
+    assert.deepEqual(sequenceQueries.map((entry) => entry.limit), [2]);
+    assert.equal(operations.some((entry) => entry.collection === "customer_accounts" && ["update", "add"].includes(entry.operation)), false, `${name} must fail before account mutation`);
+    const state = db.snapshot();
+    assert.equal(state.payment_records[0].status, "pending_confirm");
+    assert.equal(state.orders[0].status, "pending_payment_confirm");
+    assert.equal(state.customer_accounts[0].totalPaidAmount, 200);
+    assert.equal(state.customer_accounts[0].paymentMutationVersion, undefined);
+    assert.deepEqual(state.account_logs, occupiedLogs);
+    assert.equal(state.admin_operation_logs.length, 0);
+    assert.equal(state.sync_events.length, 0);
+  }
+});
+
+test("a new deterministic account ID is sequence-checked before customer account add", async () => {
+  const accountIdentity = "user-1|openid-private";
+  const accountId = `customer_account:${crypto.createHash("sha256").update(accountIdentity).digest("hex").slice(0, 40)}`;
+  const occupied = {
+    _id: "occupied-new-account-sequence",
+    businessKey: "other-new-account-business",
+    accountId,
+    afterPaymentMutationVersion: 1
+  };
+  const operations = [];
+  const db = database(fixture({ state: { customer_accounts: [], account_logs: [occupied] } }), {
+    observe: (entry) => operations.push(entry)
+  });
+  await assert.rejects(
+    () => confirm(paymentService(db), {}, "new-account-sequence-occupied"),
+    (error) => error.code === "ACCOUNT_MUTATION_LOG_CONFLICT"
+  );
+  const sequenceQuery = operations.find((entry) => entry.collection === "account_logs"
+    && entry.operation === "get"
+    && entry.where.accountId === accountId
+    && entry.where.afterPaymentMutationVersion === 1);
+  assert.equal(sequenceQuery.limit, 2);
+  assert.equal(operations.some((entry) => entry.collection === "customer_accounts" && entry.operation === "add"), false);
+  const state = db.snapshot();
+  assert.equal(state.customer_accounts.length, 0);
+  assert.deepEqual(state.account_logs, [occupied]);
+  assert.equal(state.payment_records[0].status, "pending_confirm");
+  assert.equal(state.orders[0].status, "pending_payment_confirm");
+});
+
+test("canonical service exports the required unique index metadata gate", () => {
+  assert.ok(Object.isFrozen(PAYMENT_MUTATION_REQUIRED_UNIQUE_INDEXES));
+  assert.deepEqual(PAYMENT_MUTATION_REQUIRED_UNIQUE_INDEXES, [
+    {
+      collection: "account_logs",
+      indexName: "uniq_account_payment_mutation_version",
+      unique: true,
+      fields: ["accountId", "afterPaymentMutationVersion"]
+    },
+    {
+      collection: "sync_events",
+      indexName: "uniq_payment_sync_event_id",
+      unique: true,
+      fields: ["eventId"]
+    }
+  ]);
+  for (const index of PAYMENT_MUTATION_REQUIRED_UNIQUE_INDEXES) {
+    assert.equal(index.unique, true);
+    assert.ok(Object.isFrozen(index));
+    assert.ok(Object.isFrozen(index.fields));
+  }
 });
