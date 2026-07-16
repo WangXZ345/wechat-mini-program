@@ -219,3 +219,35 @@ test("scan-cap cursor advances only past rows already proven stale", async () =>
   assert.deepEqual(second.items.map((item) => item.id), ["current-after-cap"]);
   assert.equal(second.hasMore, false);
 });
+
+test("pending filter excludes a paid primary status even when the legacy status still says pending", async () => {
+  const conflict = record("paid-primary", 2, { paymentStatus: "paid", status: "pending_confirm" });
+  const current = record("current-pending", 1, { status: "pending_confirm" });
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [conflict, current],
+    orders: [pendingOrder("current-pending")]
+  }));
+  const result = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm" } });
+  assert.deepEqual(result.items.map((item) => [item.id, item.status]), [["current-pending", "pending_confirm"]]);
+});
+
+test("pending filter excludes a rejected primary status even when the legacy status still says pending", async () => {
+  const conflict = record("rejected-primary", 2, { paymentStatus: "rejected", status: "pending_confirm" });
+  const current = record("current-pending", 1, { status: "pending_confirm" });
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [conflict, current],
+    orders: [pendingOrder("current-pending")]
+  }));
+  const result = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm" } });
+  assert.deepEqual(result.items.map((item) => [item.id, item.status]), [["current-pending", "pending_confirm"]]);
+});
+
+test("status filter keeps legacy records that have no paymentStatus field", async () => {
+  const legacy = record("legacy-status-only", 1, { paymentStatus: undefined, status: "pending_confirm" });
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [legacy],
+    orders: [pendingOrder("legacy-status-only")]
+  }));
+  const result = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm" } });
+  assert.deepEqual(result.items.map((item) => [item.id, item.status]), [["legacy-status-only", "pending_confirm"]]);
+});

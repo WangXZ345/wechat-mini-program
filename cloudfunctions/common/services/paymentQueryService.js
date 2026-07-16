@@ -230,6 +230,7 @@ function createPaymentQueryService({ db, command }) {
         lastScanned = batch[batch.length - 1];
         const orderMap = await supplementOrders(batch);
         for (const row of batch) {
+          if (normalized.status && paymentStatus(row) !== normalized.status) continue;
           const order = orderMap.get(cleanText(row.orderId, 128));
           if (isAuthoritativePending(row, order)) authoritative.push({ row, order });
           if (authoritative.length > normalized.pageSize) break;
