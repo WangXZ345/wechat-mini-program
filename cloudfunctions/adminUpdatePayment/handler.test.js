@@ -155,11 +155,36 @@ test("legacy adapter preserves paid, partial aliases, abnormal, and unpaid input
       assert.equal(commands[0].input.paidAmount, event.paidAmount);
       assert.equal(commands[0].input.paidAmountCents, event.paidAmountCents);
       assert.equal(commands[0].input.paymentMethod, event.paymentMethod);
-      assert.equal(commands[0].input.paymentRemark, event.paymentRemark);
       assert.equal(commands[0].idempotencyKey, "legacy-key-0001");
       assert.equal(commands[0].allowMissingIdempotencyKey, false);
     });
   }
+});
+
+test("legacy adapter preserves remark fallback semantics and sends only one normalized remark", async (t) => {
+  const cases = [
+    { name: "non-empty remark wins", event: { remark: "  主备注  ", paymentRemark: "备用备注" }, expected: "主备注" },
+    { name: "empty remark falls back", event: { remark: "", paymentRemark: "  备用备注  " }, expected: "备用备注" },
+    { name: "whitespace remark falls back", event: { remark: "   ", paymentRemark: "备用备注" }, expected: "备用备注" },
+    { name: "both empty stay empty", event: { remark: " ", paymentRemark: "  " }, expected: "" }
+  ];
+  for (const item of cases) {
+    await t.test(item.name, async () => {
+      const { handler, commands } = setup();
+      const response = await handler({ orderId: "order-1", paymentStatus: "paid", idempotencyKey: "legacy-key-0001", ...item.event });
+      assert.equal(response.ok, true);
+      assert.equal(commands[0].input.remark, item.expected);
+      assert.equal(Object.hasOwn(commands[0].input, "paymentRemark"), false);
+    });
+  }
+});
+
+test("legacy adapter forwards applyBatch false exactly so canonical processing stays on the seed order", async () => {
+  const { handler, commands } = setup();
+  const response = await handler({ orderId: "order-1", paymentStatus: "paid", applyBatch: false, idempotencyKey: "legacy-key-0001" });
+  assert.equal(response.ok, true);
+  assert.equal(commands[0].input.orderId, "order-1");
+  assert.equal(commands[0].input.applyBatch, false);
 });
 
 test("legacy adapter derives actor only from the trusted permission result", async () => {

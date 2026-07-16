@@ -34,14 +34,14 @@ function operationKey(event, randomId) {
 }
 
 function legacyInput(event = {}) {
+  const remark = cleanText(event.remark, 300) || cleanText(event.paymentRemark, 300);
   return {
     orderId: cleanText(event.orderId, 128),
     paymentStatus: event.paymentStatus,
     isPartial: event.isPartial,
     paidAmount: event.paidAmount,
     paidAmountCents: event.paidAmountCents,
-    remark: event.remark,
-    paymentRemark: event.paymentRemark,
+    remark,
     applyBatch: event.applyBatch,
     paymentMethod: event.paymentMethod
   };
