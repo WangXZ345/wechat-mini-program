@@ -43,6 +43,11 @@ import type { ApiError } from "@/services/http/api-error";
 import type { ResourceActionDefinition, ResourceDefinition, TableColumnDefinition } from "@/types/resource";
 import type { SyncEvent } from "@/types/realtime";
 import type { InventoryResource } from "@/services/transport/inventory-adjustment-contract";
+import {
+  isCurrentPaymentMutationSnapshot,
+  paymentMutationInputFromRow,
+  type PaymentMutationAction
+} from "@/services/transport/payment-mutation-contract";
 import { createIdempotencyKey, formatDateTime, formatMoney } from "@/utils/format";
 
 type Row = Record<string, unknown> & { id: string; version?: number };
@@ -110,6 +115,14 @@ const actionConfirmText = computed(() => activeAction.value?.key === "toggle-sta
 
 function isActionServiceAvailable(action: ResourceActionDefinition): boolean {
   return transport.mode === "mock" || action.realEnabled === true;
+}
+
+function isPaymentReviewAction(action: ResourceActionDefinition): action is ResourceActionDefinition & { key: PaymentMutationAction } {
+  return definition.value.key === "payments" && (action.key === "confirm" || action.key === "reject");
+}
+
+function isRowActionAvailable(action: ResourceActionDefinition, row: Record<string, unknown>): boolean {
+  return !isPaymentReviewAction(action) || isCurrentPaymentMutationSnapshot(row);
 }
 
 function isValidWarningThreshold(value: unknown): value is number {
@@ -202,6 +215,10 @@ function beginAction(action: ResourceActionDefinition, row?: Record<string, unkn
     return;
   }
   if (action.permission && !auth.can(action.permission)) return;
+  if (isPaymentReviewAction(action) && !isCurrentPaymentMutationSnapshot(row as Row | undefined)) {
+    ElMessage.error("当前付款记录不可审核，请刷新后重新核对");
+    return;
+  }
   if (action.key === "adjust" && ["inventory", "inventory-alerts"].includes(definition.value.key)) {
     if (!row || typeof row.id !== "string" || !row.id.trim()) {
       ElMessage.warning("请从商品所在行发起库存调整");
@@ -316,11 +333,11 @@ async function confirmAction(): Promise<void> {
     ElMessage.error("缺少需要设置预警值的商品");
     return;
   }
-  if ((action.key === "review" || action.key === "reject") && !selectedRow.value?.id) {
+  if (definition.value.key === "orders" && (action.key === "review" || action.key === "reject") && !selectedRow.value?.id) {
     ElMessage.error("缺少需要审核的订单");
     return;
   }
-  if ((action.key === "review" || action.key === "reject")
+  if (definition.value.key === "orders" && (action.key === "review" || action.key === "reject")
     && !["pending_admin", "auto_reviewing"].includes(String(selectedRow.value?.status || ""))) {
     ElMessage.error("当前订单状态不可审核，请刷新后重试");
     return;
@@ -331,7 +348,9 @@ async function confirmAction(): Promise<void> {
   }
   operationLoading.value = true;
   try {
-    const payload: Record<string, unknown> = action.key === "change-price"
+    const payload: Record<string, unknown> = isPaymentReviewAction(action)
+      ? paymentMutationInputFromRow(action.key, selectedRow.value!, actionForm.note)
+      : action.key === "change-price"
       ? {
           id: selectedRow.value!.id,
           newPriceCents,
@@ -369,7 +388,7 @@ async function confirmAction(): Promise<void> {
           expectedWarningThreshold: actionExpectedWarningThreshold.value,
           reason: actionForm.note
         }
-      : (action.key === "review" || action.key === "reject")
+      : definition.value.key === "orders" && (action.key === "review" || action.key === "reject")
       ? {
           id: selectedRow.value!.id,
           expectedStatus: selectedRow.value!.status,
@@ -399,7 +418,9 @@ async function confirmAction(): Promise<void> {
     const result = action.key === "batch-tags"
       ? parseProductTagMutationResult(rawResult, selection.value.map((item) => item.id.trim()))
       : rawResult;
-    if ((action.key === "review" || action.key === "reject") && result.accountRecalculationPending === true) {
+    if (isPaymentReviewAction(action) && result.accountRecalculationPending === true) {
+      ElMessage.warning("付款已审核，客户账款汇总将在稍后更新");
+    } else if (definition.value.key === "orders" && (action.key === "review" || action.key === "reject") && result.accountRecalculationPending === true) {
       ElMessage.warning("订单已审核，客户账款汇总将在稍后更新");
     } else if ((result.failedCount ?? result.failures?.length ?? 0) > 0) {
       ElMessage.warning(result.message);
@@ -411,6 +432,19 @@ async function confirmAction(): Promise<void> {
     await load();
   } catch (reason) {
     const apiError = toApiError(reason);
+    if (isPaymentReviewAction(action) && apiError.status === 409) {
+      syncRefreshPending = false;
+      actionOpen.value = false;
+      selectedRow.value = null;
+      activeAction.value = null;
+      actionIdempotencyKey.value = "";
+      actionAttemptFingerprint.value = "";
+      await load();
+      ElMessage.error(error.value
+        ? "付款记录已变化且刷新失败，请重新加载后核对"
+        : "付款记录已变化，请重新核对后提交");
+      return;
+    }
     if (apiError.code === "DATA_VERSION_CONFLICT") {
       if (action.key === "batch-tags") {
         syncRefreshPending = false;
@@ -671,7 +705,7 @@ onBeforeUnmount(() => {
                 :type="action.type || 'primary'"
                 :data-action-key="action.key"
                 data-action-scope="row"
-                :disabled="!isActionServiceAvailable(action) || Boolean(action.permission && !auth.can(action.permission))"
+                :disabled="!isActionServiceAvailable(action) || !isRowActionAvailable(action, row) || Boolean(action.permission && !auth.can(action.permission))"
                 @click="beginAction(action, row)"
               >
                 {{ rowActionLabel(action, row) }}
@@ -774,7 +808,7 @@ onBeforeUnmount(() => {
           <strong>{{ selection.length }} 个商品 · {{ productTagForm.present ? '添加' : '移除' }}“{{ productTagForm.tag }}”</strong>
         </el-form-item>
         <el-form-item label="操作说明">
-          <el-input v-model="actionForm.note" type="textarea" :rows="3" maxlength="120" show-word-limit :disabled="operationLoading" placeholder="填写本次操作说明" />
+          <el-input v-model="actionForm.note" type="textarea" :rows="3" :maxlength="definition.key === 'payments' ? 300 : 120" show-word-limit :disabled="operationLoading" placeholder="填写本次操作说明" />
         </el-form-item>
       </el-form>
       <template #footer>

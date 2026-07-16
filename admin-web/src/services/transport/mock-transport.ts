@@ -53,6 +53,12 @@ import {
   parsePaymentListPage,
   type PaymentSummary
 } from "./payment-query-contract";
+import {
+  normalizePaymentMutationInput,
+  parsePaymentMutationResult,
+  type PaymentMutationAction,
+  type PaymentMutationResult
+} from "./payment-mutation-contract";
 import { cloneMockRows } from "./mock-data";
 
 type Row = Record<string, unknown> & { id: string; version: number };
@@ -225,6 +231,7 @@ function mockPaymentSummary(row: Row): PaymentSummary {
   const proofCount = Number.isSafeInteger(row.proofCount) ? Number(row.proofCount) : (row.proofLabel && row.proofLabel !== "无凭证" ? 1 : 0);
   return parsePaymentDetail({
     id: row.id,
+    version: row.version,
     orderNo: typeof row.orderNo === "string" ? row.orderNo : "",
     customerMasked: typeof row.customerMasked === "string" ? row.customerMasked : "客户",
     amountCents: typeof row.amountCents === "number" ? row.amountCents : 0,
@@ -912,7 +919,10 @@ export class MockTransport implements AdminTransport {
       throw new ApiError("账款写入与导出尚未接入", "SERVICE_NOT_MIGRATED", 501);
     }
     if (resource === "payments") {
-      throw new ApiError("付款审核写入尚未接入", "SERVICE_NOT_MIGRATED", 501);
+      if (action !== "confirm" && action !== "reject") {
+        throw new ApiError("该付款写操作尚未接入", "SERVICE_NOT_MIGRATED", 501);
+      }
+      return this.mutatePayment(profile, action, payload, options) as unknown as MutationResult<T>;
     }
     if (resource === "products"
       && action === "batch-tags"
@@ -997,6 +1007,68 @@ export class MockTransport implements AdminTransport {
     this.mutationResults.set(options.idempotencyKey, { fingerprint, result });
     if (affected > 0) this.pushEvent(resource, resultItem?.id || ids[0] || "batch", action, resultItem?.version || 1);
     return structuredClone(result) as MutationResult<T>;
+  }
+
+  private mutatePayment(
+    profile: AdminProfile,
+    action: PaymentMutationAction,
+    payload: Record<string, unknown>,
+    options: MutationOptions
+  ): PaymentMutationResult {
+    const permission = action === "confirm" ? "payment:confirm" : "payment:update_status";
+    if (!profile.isActive
+      || !["finance", "super_admin"].includes(profile.role)
+      || !profileHasPermission(profile, permission)) {
+      throw new ApiError("无权执行付款审核操作", "FORBIDDEN", 403);
+    }
+    const input = normalizePaymentMutationInput(action, payload);
+    if (options.expectedVersion !== input.expectedVersion) {
+      throw new ApiError("付款版本与请求选项不一致", "EXPECTED_VERSION_MISMATCH", 400);
+    }
+    if (!options.idempotencyKey?.trim()) throw new ApiError("缺少幂等键", "IDEMPOTENCY_KEY_REQUIRED", 400);
+
+    const fingerprint = JSON.stringify({ resource: "payments", action, input });
+    const prior = this.mutationResults.get(options.idempotencyKey);
+    if (prior && prior.fingerprint !== fingerprint) {
+      throw new ApiError("请求已被用于其他付款审核，请重新核对后重试", "IDEMPOTENCY_KEY_CONFLICT", 409);
+    }
+    if (prior) {
+      return parsePaymentMutationResult({ ...structuredClone(prior.result), affected: 0, reused: true });
+    }
+
+    const payment = (this.rows.payments || []).find((row) => row.id === input.id);
+    if (!payment) throw new ApiError("付款记录不存在", "PAYMENT_NOT_FOUND", 404);
+    const currentUpdatedAt = typeof payment.updatedAt === "string"
+      ? payment.updatedAt
+      : typeof payment.submittedAt === "string" ? payment.submittedAt : null;
+    if (payment.status !== "pending_confirm") {
+      throw new ApiError("付款记录已变化，请刷新后重新核对", "PAYMENT_STATE_CONFLICT", 409);
+    }
+    if (payment.version !== input.expectedVersion || currentUpdatedAt !== input.expectedUpdatedAt) {
+      throw new ApiError("付款记录已被其他管理员更新", "DATA_VERSION_CONFLICT", 409);
+    }
+
+    const updatedAt = new Date().toISOString();
+    payment.status = action === "confirm" ? "paid" : "rejected";
+    payment.version += 1;
+    payment.updatedAt = updatedAt;
+    const result = parsePaymentMutationResult({
+      item: {
+        id: payment.id,
+        orderNo: typeof payment.orderNo === "string" ? payment.orderNo : "",
+        status: payment.status,
+        version: payment.version,
+        updatedAt
+      },
+      affected: 1,
+      reused: false,
+      decision: action,
+      accountRecalculationPending: false,
+      message: action === "confirm" ? "付款已确认" : "付款已驳回",
+      requestId: `mock-${crypto.randomUUID()}`
+    });
+    this.mutationResults.set(options.idempotencyKey, { fingerprint, result });
+    return structuredClone(result);
   }
 
   async catchUp(cursor?: string): Promise<SyncBatch> {

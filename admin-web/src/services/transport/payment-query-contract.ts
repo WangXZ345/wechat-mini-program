@@ -9,6 +9,7 @@ const shortText = (max: number) => z.string().max(max);
 
 const paymentSummarySchema = z.object({
   id: shortText(128).min(1),
+  version: safeInteger,
   orderNo: shortText(120),
   customerMasked: shortText(160),
   amountCents: safeInteger,

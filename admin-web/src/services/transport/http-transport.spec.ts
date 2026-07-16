@@ -974,6 +974,131 @@ describe("HttpBffTransport inventory adjustment", () => {
   });
 });
 
+describe("HttpBffTransport payment review mutation", () => {
+  beforeEach(() => window.sessionStorage.clear());
+
+  const paymentInput = {
+    id: "pay-001",
+    expectedStatus: "pending_confirm",
+    expectedVersion: 2,
+    expectedUpdatedAt: "2026-07-13T08:05:00.000Z",
+    reason: "已核对到账"
+  };
+
+  function paymentResult(decision: "confirm" | "reject" = "confirm") {
+    return {
+      item: {
+        id: "pay-001",
+        orderNo: "ORDER-001",
+        status: decision === "confirm" ? "paid" : "rejected",
+        version: 3,
+        updatedAt: "2026-07-13T08:06:00.000Z"
+      },
+      affected: 1,
+      reused: false,
+      decision,
+      accountRecalculationPending: false,
+      message: decision === "confirm" ? "付款已确认" : "付款已驳回",
+      requestId: "request-payment-1"
+    };
+  }
+
+  it("posts the exact payment body with CSRF and the header-only idempotency key", async () => {
+    let request: InternalAxiosRequestConfig | undefined;
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-1") };
+      if (config.url === "/payments/confirm") {
+        request = config;
+        return { status: 200, data: { ok: true, data: paymentResult() } };
+      }
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+
+    const response = await transport.mutate("payments", "confirm", paymentInput, {
+      idempotencyKey: "payments:confirm:test",
+      expectedVersion: 2
+    });
+
+    expect(response).toEqual(paymentResult());
+    expect(requestBody(request!)).toEqual({
+      paymentId: "pay-001",
+      expectedStatus: "pending_confirm",
+      expectedVersion: 2,
+      expectedUpdatedAt: "2026-07-13T08:05:00.000Z",
+      reason: "已核对到账"
+    });
+    expect(Object.keys(requestBody(request!))).toEqual(["paymentId", "expectedStatus", "expectedVersion", "expectedUpdatedAt", "reason"]);
+    expect(header(request!, "Idempotency-Key")).toBe("payments:confirm:test");
+    expect(header(request!, "X-Admin-CSRF")).toBe("csrf-1");
+  });
+
+  it("retries one payment network failure with the identical body and key", async () => {
+    const attempts: Array<{ body: Record<string, unknown>; key: string }> = [];
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-1") };
+      if (config.url === "/payments/reject") {
+        attempts.push({ body: requestBody(config), key: header(config, "Idempotency-Key") });
+        if (attempts.length === 1) return failure("UPSTREAM_UNAVAILABLE", 503);
+        return { status: 200, data: { ok: true, data: paymentResult("reject") } };
+      }
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+
+    await expect(transport.mutate("payments", "reject", { ...paymentInput, reason: "凭证不清晰" }, {
+      idempotencyKey: "payments:reject:retry",
+      expectedVersion: 2
+    })).resolves.toMatchObject({ decision: "reject", item: { status: "rejected" } });
+
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+  });
+
+  it("rejects forbidden payment input and mismatched option versions before posting", async () => {
+    let paymentCalls = 0;
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-1") };
+      if (config.url === "/payments/confirm") {
+        paymentCalls += 1;
+        return { status: 200, data: { ok: true, data: paymentResult() } };
+      }
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+
+    await expect(transport.mutate("payments", "confirm", { ...paymentInput, amountCents: 1 }, {
+      idempotencyKey: "payments:confirm:forbidden",
+      expectedVersion: 2
+    })).rejects.toMatchObject({ code: "INVALID_PAYMENT_MUTATION", status: 400 });
+    await expect(transport.mutate("payments", "confirm", paymentInput, {
+      idempotencyKey: "payments:confirm:mismatch",
+      expectedVersion: 9
+    })).rejects.toMatchObject({ code: "EXPECTED_VERSION_MISMATCH", status: 400 });
+    expect(paymentCalls).toBe(0);
+  });
+
+  it("rejects a payment response that includes sensitive or unknown fields", async () => {
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-1") };
+      if (config.url === "/payments/confirm") {
+        return { status: 200, data: { ok: true, data: { ...paymentResult(), orderId: "order-secret" } } };
+      }
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+
+    await expect(transport.mutate("payments", "confirm", paymentInput, {
+      idempotencyKey: "payments:confirm:unsafe-result",
+      expectedVersion: 2
+    })).rejects.toMatchObject({ code: "INVALID_PAYMENT_MUTATION_CONTRACT", status: 502 });
+  });
+});
+
 describe("HttpBffTransport product analytics contract", () => {
   beforeEach(() => {
     window.sessionStorage.clear();

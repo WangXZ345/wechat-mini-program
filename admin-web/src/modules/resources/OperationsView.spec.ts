@@ -789,7 +789,7 @@ describe("OperationsView real inventory warning action", () => {
       ...definition.bulkActions
     ].filter((action) => action.realEnabled).map((action) => `${definition.key}:${action.key}`));
 
-    expect(enabled).toEqual(["products:create", "products:edit", "products:change-price", "products:toggle-status", "products:batch-enable", "products:batch-tags", "inventory:adjust", "inventory:set-warning", "inventory-alerts:set-warning", "inventory-alerts:adjust", "orders:review", "orders:reject"]);
+    expect(enabled).toEqual(["products:create", "products:edit", "products:change-price", "products:toggle-status", "products:batch-enable", "products:batch-tags", "inventory:adjust", "inventory:set-warning", "inventory-alerts:set-warning", "inventory-alerts:adjust", "orders:review", "orders:reject", "payments:confirm", "payments:reject"]);
   });
 
   it("enables row adjustment and set-warning while keeping unsafe top-level and bulk actions disabled", async () => {
@@ -1088,6 +1088,185 @@ describe("OperationsView real inventory warning action", () => {
     expect(retryOptions.expectedVersion).toBe(0);
     expect(transportMock.list).toHaveBeenCalledTimes(1);
     expect(messageMock.success).not.toHaveBeenCalled();
+  });
+});
+
+describe("OperationsView real payment review", () => {
+  const pendingPayment: TestRow = {
+    id: "pay-001",
+    version: 2,
+    orderNo: "ORDER-1",
+    customerMasked: "张* / 138****1201",
+    amountCents: 32000,
+    proofLabel: "已提交凭证",
+    proofCount: 1,
+    status: "pending_confirm",
+    submittedAt: "2026-07-13T08:00:00.000Z",
+    updatedAt: "2026-07-13T08:05:00.000Z"
+  };
+
+  function configurePaymentPage(row: TestRow = pendingPayment): void {
+    routeMock.meta.resource = "payments";
+    authMock.can.mockImplementation((permission?: string) => !permission || [
+      "payment:view_screenshot",
+      "payment:confirm",
+      "payment:update_status"
+    ].includes(permission));
+    transportMock.list.mockResolvedValue({ items: [{ ...row }], total: 1, page: 1, pageSize: 20, nextCursor: null });
+    transportMock.mutate.mockResolvedValue({
+      item: { id: row.id, orderNo: row.orderNo, status: "paid", version: row.version + 1, updatedAt: "2026-07-13T08:06:00.000Z" },
+      affected: 1,
+      reused: false,
+      decision: "confirm",
+      accountRecalculationPending: false,
+      message: "付款已确认",
+      requestId: "request-1"
+    });
+  }
+
+  it("enables only current pending snapshots with the matching permission", async () => {
+    configurePaymentPage();
+    const wrapper = await mountPage();
+
+    expect(resourceDefinitions.payments?.rowActions.every((action) => action.realEnabled === true)).toBe(true);
+    expect(actionButton(wrapper, "row", "confirm").attributes("disabled")).toBeUndefined();
+    expect(actionButton(wrapper, "row", "reject").attributes("disabled")).toBeUndefined();
+  });
+
+  it.each([
+    ["payment:update_status", "confirm", "reject"],
+    ["payment:confirm", "reject", "confirm"]
+  ])("enables only the payment action backed by %s", async (permission, disabledAction, enabledAction) => {
+    configurePaymentPage();
+    authMock.can.mockImplementation((requested?: string) => !requested || ["payment:view_screenshot", permission].includes(requested));
+    const wrapper = await mountPage();
+    expect(actionButton(wrapper, "row", disabledAction).attributes("disabled")).toBeDefined();
+    expect(actionButton(wrapper, "row", enabledAction).attributes("disabled")).toBeUndefined();
+  });
+
+  it.each([
+    ["non-pending status", { status: "paid" }],
+    ["missing updatedAt", { updatedAt: null }],
+    ["invalid updatedAt", { updatedAt: "not-a-date" }],
+    ["invalid version", { version: -1 }],
+    ["empty id", { id: "" }]
+  ])("disables payment actions for a %s", async (_label, patch) => {
+    configurePaymentPage({ ...pendingPayment, ...patch } as TestRow);
+    const wrapper = await mountPage();
+    expect(actionButton(wrapper, "row", "confirm").attributes("disabled")).toBeDefined();
+    expect(actionButton(wrapper, "row", "reject").attributes("disabled")).toBeDefined();
+  });
+
+  it("builds only the exact payment snapshot payload and does not apply order reject rules", async () => {
+    configurePaymentPage();
+    transportMock.mutate.mockResolvedValue({
+      item: { id: "pay-001", orderNo: "ORDER-1", status: "rejected", version: 3, updatedAt: "2026-07-13T08:06:00.000Z" },
+      affected: 1,
+      reused: false,
+      decision: "reject",
+      accountRecalculationPending: false,
+      message: "付款已驳回",
+      requestId: "request-1"
+    });
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "reject").trigger("click");
+    await setReason(wrapper, "  凭证不清晰  ");
+    await confirm(wrapper);
+
+    expect(transportMock.mutate).toHaveBeenCalledTimes(1);
+    const [resource, action, payload, options] = transportMock.mutate.mock.calls[0]!;
+    expect(resource).toBe("payments");
+    expect(action).toBe("reject");
+    expect(payload).toEqual({
+      id: "pay-001",
+      expectedStatus: "pending_confirm",
+      expectedVersion: 2,
+      expectedUpdatedAt: "2026-07-13T08:05:00.000Z",
+      reason: "凭证不清晰"
+    });
+    expect(Object.keys(payload)).toEqual(["id", "expectedStatus", "expectedVersion", "expectedUpdatedAt", "reason"]);
+    expect(options).toMatchObject({ expectedVersion: 2, idempotencyKey: expect.stringMatching(/^payments:reject:/) });
+  });
+
+  it("requires a reject reason without sending a mutation", async () => {
+    configurePaymentPage();
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "reject").trigger("click");
+    await confirm(wrapper);
+
+    expect(messageMock.warning).toHaveBeenCalledWith("请填写驳回原因");
+    expect(transportMock.mutate).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(ElDialog).props("modelValue")).toBe(true);
+  });
+
+  it("closes and refreshes on any payment 409, then reopens with the fresh snapshot and key", async () => {
+    configurePaymentPage();
+    const refreshed = { ...pendingPayment, version: 3, updatedAt: "2026-07-13T08:07:00.000Z" };
+    transportMock.list
+      .mockResolvedValueOnce({ items: [{ ...pendingPayment }], total: 1, page: 1, pageSize: 20, nextCursor: null })
+      .mockResolvedValue({ items: [refreshed], total: 1, page: 1, pageSize: 20, nextCursor: null });
+    transportMock.mutate
+      .mockRejectedValueOnce(new ApiError("付款记录已变化", "PAYMENT_STATE_CONFLICT", 409))
+      .mockResolvedValueOnce({
+        item: { id: "pay-001", orderNo: "ORDER-1", status: "paid", version: 4, updatedAt: "2026-07-13T08:08:00.000Z" },
+        affected: 1,
+        reused: false,
+        decision: "confirm",
+        accountRecalculationPending: false,
+        message: "付款已确认",
+        requestId: "request-2"
+      });
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "confirm").trigger("click");
+    await confirm(wrapper);
+    const firstOptions = transportMock.mutate.mock.calls[0]![3];
+
+    expect(wrapper.findComponent(ElDialog).props("modelValue")).toBe(false);
+    expect(transportMock.list).toHaveBeenCalledTimes(2);
+    expect(messageMock.error).toHaveBeenCalledWith("付款记录已变化，请重新核对后提交");
+
+    await actionButton(wrapper, "row", "confirm").trigger("click");
+    await confirm(wrapper);
+    const [,, retryPayload, retryOptions] = transportMock.mutate.mock.calls[1]!;
+    expect(retryPayload).toMatchObject({ expectedVersion: 3, expectedUpdatedAt: "2026-07-13T08:07:00.000Z" });
+    expect(retryOptions.idempotencyKey).not.toBe(firstOptions.idempotencyKey);
+  });
+
+  it("keeps the dialog and reuses the same key for an unchanged non-conflict retry", async () => {
+    configurePaymentPage();
+    transportMock.mutate
+      .mockRejectedValueOnce(new ApiError("网络不可用", "NETWORK_ERROR", 503))
+      .mockResolvedValueOnce({
+        item: { id: "pay-001", orderNo: "ORDER-1", status: "paid", version: 3, updatedAt: "2026-07-13T08:06:00.000Z" },
+        affected: 1,
+        reused: false,
+        decision: "confirm",
+        accountRecalculationPending: false,
+        message: "付款已确认",
+        requestId: "request-3"
+      });
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "confirm").trigger("click");
+    await confirm(wrapper);
+    const firstKey = transportMock.mutate.mock.calls[0]![3].idempotencyKey;
+
+    expect(wrapper.findComponent(ElDialog).props("modelValue")).toBe(true);
+    await confirm(wrapper);
+    expect(transportMock.mutate.mock.calls[1]![3].idempotencyKey).toBe(firstKey);
+  });
+
+  it("rotates the key when the payment payload is edited after a failure", async () => {
+    configurePaymentPage();
+    transportMock.mutate.mockRejectedValueOnce(new ApiError("暂时失败", "NETWORK_ERROR", 503));
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "confirm").trigger("click");
+    await setReason(wrapper, "第一次核对");
+    await confirm(wrapper);
+    const firstKey = transportMock.mutate.mock.calls[0]![3].idempotencyKey;
+
+    await setReason(wrapper, "第二次核对");
+    await confirm(wrapper);
+    expect(transportMock.mutate.mock.calls[1]![3].idempotencyKey).not.toBe(firstKey);
   });
 });
 

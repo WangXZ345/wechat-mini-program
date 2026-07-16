@@ -38,6 +38,12 @@ import {
   type AccountSummary
 } from "./account-query-contract";
 import { parsePaymentDetail, parsePaymentListPage, type PaymentSummary } from "./payment-query-contract";
+import {
+  normalizePaymentMutationInput,
+  parsePaymentMutationResult,
+  toPaymentMutationRequest,
+  type PaymentMutationAction
+} from "./payment-mutation-contract";
 
 export class HttpBffTransport implements AdminTransport {
   readonly mode = "http" as const;
@@ -215,6 +221,9 @@ export class HttpBffTransport implements AdminTransport {
     payload: Record<string, unknown>,
     options: MutationOptions
   ): Promise<MutationResult<T>> {
+    if (resource === "payments" && (action === "confirm" || action === "reject")) {
+      return this.mutatePayment(action, payload, options) as unknown as Promise<MutationResult<T>>;
+    }
     return this.requestWithSession(
       () => this.client.post<ApiEnvelope<MutationResult<T>>>(
         `/${encodeURIComponent(resource)}/${encodeURIComponent(action)}`,
@@ -228,6 +237,32 @@ export class HttpBffTransport implements AdminTransport {
       ),
       false
     );
+  }
+
+  private async mutatePayment(
+    action: PaymentMutationAction,
+    payload: Record<string, unknown>,
+    options: MutationOptions
+  ): Promise<ReturnType<typeof parsePaymentMutationResult>> {
+    const input = normalizePaymentMutationInput(action, payload);
+    if (options.expectedVersion !== input.expectedVersion) {
+      throw new ApiError("付款版本与请求选项不一致", "EXPECTED_VERSION_MISMATCH", 400);
+    }
+    if (!options.idempotencyKey?.trim()) throw new ApiError("缺少幂等键", "IDEMPOTENCY_KEY_REQUIRED", 400);
+    const request = toPaymentMutationRequest(input);
+    const raw = await this.requestWithSession(
+      () => this.client.post<ApiEnvelope<unknown>>(
+        `/payments/${action}`,
+        request,
+        {
+          headers: {
+            ...this.csrfHeaders(),
+            "Idempotency-Key": options.idempotencyKey
+          }
+        }
+      )
+    );
+    return parsePaymentMutationResult(raw);
   }
 
   async catchUp(cursor?: string): Promise<SyncBatch> {

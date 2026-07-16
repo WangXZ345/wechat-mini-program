@@ -3,6 +3,7 @@ import { parsePaymentDetail, parsePaymentListPage } from "./payment-query-contra
 
 const row = {
   id: "pay-001",
+  version: 2,
   orderNo: "ORDER-001",
   customerMasked: "张* / 138****1201",
   amountCents: 32000,
@@ -21,6 +22,10 @@ describe("payment query contract", () => {
   it("rejects sensitive proof URLs and unsafe status values", () => {
     expect(() => parsePaymentDetail({ ...row, paymentScreenshotUrl: "cloud://secret" })).toThrow("付款记录详情响应");
     expect(() => parsePaymentDetail({ ...row, status: "processing" })).toThrow("付款记录详情响应");
+  });
+
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1, undefined])("rejects an invalid payment version %s", (version) => {
+    expect(() => parsePaymentDetail({ ...row, version })).toThrow("付款记录详情响应");
   });
 
   it("requires a cursor only when more rows exist", () => {

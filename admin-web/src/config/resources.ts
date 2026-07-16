@@ -223,8 +223,8 @@ export const resourceDefinitions: Record<string, ResourceDefinition> = {
       { key: "submittedAt", label: "提交时间", kind: "date", width: 150 }
     ],
     rowActions: [
-      { key: "confirm", label: "确认付款", permission: "payment:confirm", type: "success", confirmText: "请确认付款记录已核对无误。" },
-      { key: "reject", label: "驳回", permission: "payment:update_status", type: "danger" }
+      { key: "confirm", label: "确认付款", permission: "payment:confirm", realEnabled: true, type: "success", confirmText: "请确认付款记录已核对无误。" },
+      { key: "reject", label: "驳回", permission: "payment:update_status", realEnabled: true, type: "danger" }
     ],
     bulkActions: []
   },
