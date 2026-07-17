@@ -52,14 +52,18 @@ export const mockRows: Record<string, MockRow[]> = {
     { id: "ship-003", version: 7, shipmentNo: "DEMO-S-24070908", ordersCount: 1, customerMasked: "演示客户 06", carrier: "圆通速递", trackingMasked: "YT****4408", status: "completed", updatedAt: ago(420) }
   ],
   "after-sales": [
-    { id: "as-001", version: 1, caseNo: "DEMO-A-24071101", orderNo: "DEMO-O-24071007", customerMasked: "演示客户 04", type: "退货退款", amountCents: 21800, status: "pending_review", createdAt: ago(9) },
-    { id: "as-002", version: 3, caseNo: "DEMO-A-24071002", orderNo: "DEMO-O-24070908", customerMasked: "演示客户 06", type: "仅退款", amountCents: 9900, status: "approved", createdAt: ago(105) },
-    { id: "as-003", version: 6, caseNo: "DEMO-A-24070803", orderNo: "DEMO-O-24070804", customerMasked: "演示客户 07", type: "退货退款", amountCents: 15800, status: "completed", createdAt: ago(720) }
+    { id: "as-001", version: 1, caseNo: "DEMO-A-24071101", orderNo: "DEMO-O-24071007", customerMasked: "演示客户 04", type: "退货退款", amountCents: 21800, status: "pending_review", refundStatus: "none", createdAt: ago(9), updatedAt: ago(9) },
+    { id: "as-002", version: 3, caseNo: "DEMO-A-24071002", orderNo: "DEMO-O-24070908", customerMasked: "演示客户 06", type: "仅退款", amountCents: 9900, status: "approved", refundStatus: "pending", createdAt: ago(105), updatedAt: ago(105) },
+    { id: "as-003", version: 6, caseNo: "DEMO-A-24070803", orderNo: "DEMO-O-24070804", customerMasked: "演示客户 07", type: "退货退款", amountCents: 15800, status: "completed", refundStatus: "none", createdAt: ago(720), updatedAt: ago(720) }
   ],
   refunds: [
-    { id: "ref-001", version: 1, refundNo: "DEMO-R-24071101", orderNo: "DEMO-O-24070908", customerMasked: "演示客户 06", amountCents: 9900, method: "原路退回", status: "pending_refund", updatedAt: ago(12) },
+    { id: "ref-001", version: 1, refundNo: "DEMO-R-24071101", orderNo: "DEMO-O-24070908", customerMasked: "演示客户 06", amountCents: 9900, method: "原路退回", status: "pending", updatedAt: ago(12) },
     { id: "ref-002", version: 3, refundNo: "DEMO-R-24071002", orderNo: "DEMO-O-24070804", customerMasked: "演示客户 07", amountCents: 15800, method: "线下退款", status: "processing", updatedAt: ago(160) },
-    { id: "ref-003", version: 5, refundNo: "DEMO-R-24070903", orderNo: "DEMO-O-24070702", customerMasked: "演示客户 08", amountCents: 7600, method: "原路退回", status: "completed", updatedAt: ago(490) }
+    { id: "ref-003", version: 5, refundNo: "DEMO-R-24070903", orderNo: "DEMO-O-24070702", customerMasked: "演示客户 08", amountCents: 7600, method: "原路退回", status: "failed", updatedAt: ago(490) },
+    { id: "ref-004", version: 2, refundNo: "DEMO-R-24070804", orderNo: "DEMO-O-24070601", customerMasked: "演示客户 02", amountCents: 21800, method: "原路退回", status: "refunded", updatedAt: ago(720) },
+    { id: "ref-005", version: 4, refundNo: "DEMO-R-24070705", orderNo: "DEMO-O-24070503", customerMasked: "演示客户 03", amountCents: 12800, method: "线下退款", status: "partial_refunded", updatedAt: ago(860) },
+    { id: "ref-006", version: 3, refundNo: "DEMO-R-24070606", orderNo: "DEMO-O-24070402", customerMasked: "演示客户 05", amountCents: 6800, method: "原路退回", status: "rejected", updatedAt: ago(990) },
+    { id: "ref-007", version: 2, refundNo: "DEMO-R-24070507", orderNo: "DEMO-O-24070301", customerMasked: "演示客户 01", amountCents: 5200, method: "线下退款", status: "cancelled", updatedAt: ago(1200) }
   ],
   admins: [
     { id: "adm-001", version: 4, name: "演示超级管理员", username: "super_admin.demo", role: "super_admin", permissionSummary: "全部合法后台模块", status: "enabled", lastLoginAt: ago(2) },

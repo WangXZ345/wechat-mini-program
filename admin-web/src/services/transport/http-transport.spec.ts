@@ -1563,3 +1563,353 @@ describe("HttpBffTransport account reads", () => {
     }
   });
 });
+
+describe("HttpBffTransport after-sale review", () => {
+  beforeEach(() => window.sessionStorage.clear());
+
+  it("sends the strict approve body and preserves only the safe result", async () => {
+    let mutationRequest: InternalAxiosRequestConfig | null = null;
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-1") };
+      if (config.url === "/after-sales/approve") {
+        mutationRequest = config;
+        return {
+          status: 200,
+          data: {
+            ok: true,
+            data: {
+              item: { id: "as-001", caseNo: "AS-001", status: "waiting_return", version: 4, updatedAt: "2026-07-16T08:01:00.000Z" },
+              afterSaleId: "as-001",
+              afterSaleStatus: "waiting_return",
+              refundStatus: "pending",
+              approvedRefundAmount: 12800,
+              affected: 1,
+              reused: false,
+              decision: "approve",
+              message: "after-sale request approved",
+              requestId: "request-1"
+            }
+          }
+        };
+      }
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "service.test", password: "Strong-Admin-2026!" });
+
+    const result = await transport.mutate("after-sales", "approve", {
+      id: "as-001",
+      expectedStatus: "pending_review",
+      expectedVersion: 3,
+      expectedUpdatedAt: "2026-07-16T08:00:00.000Z",
+      approvedRefundAmount: 12800,
+      returnRequired: true,
+      reason: "符合规则"
+    }, { idempotencyKey: "after-sales:approve:test", expectedVersion: 3 });
+
+    expect(result.item).toMatchObject({ id: "as-001", status: "waiting_return", version: 4 });
+    expect(mutationRequest).not.toBeNull();
+    expect(mutationRequest!.url).toBe("/after-sales/approve");
+    expect(requestBody(mutationRequest!)).toEqual({
+      afterSaleId: "as-001",
+      expectedStatus: "pending_review",
+      expectedVersion: 3,
+      expectedUpdatedAt: "2026-07-16T08:00:00.000Z",
+      approvedRefundAmount: 12800,
+      returnRequired: true,
+      reason: "符合规则"
+    });
+    expect(header(mutationRequest!, "X-Admin-CSRF")).toBe("csrf-1");
+    expect(header(mutationRequest!, "Idempotency-Key")).toBe("after-sales:approve:test");
+  });
+});
+
+describe("HttpBffTransport return inspection", () => {
+  beforeEach(() => window.sessionStorage.clear());
+
+  it("sends exact receive and inspect bodies with CSRF and idempotency headers", async () => {
+    const requests: InternalAxiosRequestConfig[] = [];
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-return") };
+      if (config.url === "/after-sales/receive") {
+        requests.push(config);
+        return {
+          status: 200,
+          data: {
+            ok: true,
+            data: {
+              item: { id: "as-001", status: "received", version: 5, updatedAt: "2026-07-16T08:01:00.000Z" },
+              afterSaleId: "as-001",
+              afterSaleStatus: "received",
+              restoredQuantity: 0,
+              affected: 1,
+              reused: false,
+              message: "return received",
+              requestId: "request-receive"
+            }
+          }
+        };
+      }
+      if (config.url === "/after-sales/inspect") {
+        requests.push(config);
+        return {
+          status: 200,
+          data: {
+            ok: true,
+            data: {
+              item: { id: "as-001", status: "refund_pending", version: 6, updatedAt: "2026-07-16T08:02:00.000Z" },
+              afterSaleId: "as-001",
+              afterSaleStatus: "refund_pending",
+              restoredQuantity: 2,
+              affected: 1,
+              reused: false,
+              message: "return inspected",
+              requestId: "request-inspect"
+            }
+          }
+        };
+      }
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "service.test", password: "Strong-Admin-2026!" });
+
+    await transport.mutate("after-sales", "receive", {
+      action: "receive",
+      id: "as-001",
+      expectedStatus: "returned",
+      expectedVersion: 4,
+      expectedUpdatedAt: "2026-07-16T08:00:00.000Z",
+      remark: "parcel received"
+    }, { idempotencyKey: "return:receive:1", expectedVersion: 4 });
+    await transport.mutate("after-sales", "inspect", {
+      action: "inspect",
+      id: "as-001",
+      expectedStatus: "received",
+      expectedVersion: 5,
+      expectedUpdatedAt: "2026-07-16T08:01:00.000Z",
+      itemCondition: "sellable",
+      canRestock: true,
+      restockQuantity: 2,
+      inspectionRemark: "sellable"
+    }, { idempotencyKey: "return:inspect:1", expectedVersion: 5 });
+
+    expect(requests.map((request) => request.url)).toEqual([
+      "/after-sales/receive",
+      "/after-sales/inspect"
+    ]);
+    expect(requestBody(requests[0]!)).toEqual({
+      afterSaleId: "as-001",
+      expectedStatus: "returned",
+      expectedVersion: 4,
+      expectedUpdatedAt: "2026-07-16T08:00:00.000Z",
+      remark: "parcel received"
+    });
+    expect(requestBody(requests[1]!)).toEqual({
+      afterSaleId: "as-001",
+      expectedStatus: "received",
+      expectedVersion: 5,
+      expectedUpdatedAt: "2026-07-16T08:01:00.000Z",
+      itemCondition: "sellable",
+      canRestock: true,
+      restockQuantity: 2,
+      inspectionRemark: "sellable"
+    });
+    expect(requests.map((request) => header(request, "X-Admin-CSRF"))).toEqual(["csrf-return", "csrf-return"]);
+    expect(requests.map((request) => header(request, "Idempotency-Key"))).toEqual([
+      "return:receive:1",
+      "return:inspect:1"
+    ]);
+  });
+
+  it("rejects a return inspection response containing sensitive fields", async () => {
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-return") };
+      return {
+        status: 200,
+        data: {
+          ok: true,
+          data: {
+            item: { id: "as-001", status: "received", version: 5, updatedAt: "2026-07-16T08:01:00.000Z" },
+            afterSaleId: "as-001",
+            afterSaleStatus: "received",
+            restoredQuantity: 0,
+            affected: 1,
+            reused: false,
+            message: "return received",
+            requestId: "request-receive",
+            orderId: "secret-order"
+          }
+        }
+      };
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "service.test", password: "Strong-Admin-2026!" });
+
+    await expect(transport.mutate("after-sales", "receive", {
+      action: "receive",
+      id: "as-001",
+      expectedStatus: "returned",
+      expectedVersion: 4,
+      expectedUpdatedAt: "2026-07-16T08:00:00.000Z",
+      remark: ""
+    }, { idempotencyKey: "return:receive:unsafe", expectedVersion: 4 }))
+      .rejects.toMatchObject({ code: "INVALID_RETURN_INSPECTION_CONTRACT", status: 502 });
+  });
+});
+
+describe("HttpBffTransport refund mutation", () => {
+  it("sends only the strict process DTO and parses the safe canonical result", async () => {
+    let mutationRequest: InternalAxiosRequestConfig | null = null;
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-refund") };
+      if (config.url === "/refunds/process") {
+        mutationRequest = config;
+        return { status: 200, data: { ok: true, data: {
+          item: { id: "ref-001", refundNo: "R-001", status: "refunded", version: 2, updatedAt: "2026-07-17T08:01:00.000Z", amountCents: 9_900 },
+          affected: 1, reused: false, action: "process", accountRecalculationPending: true, message: "refund confirmed", requestId: "request-refund-1"
+        } } };
+      }
+      throw new Error(`unexpected request ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+
+    await expect(transport.mutate("refunds", "process", {
+      refundRecordId: "ref-001", refundAmountCents: 9_900, expectedRefundStatus: "pending", expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z", financeRemark: "reconciled", refundProofFileIds: []
+    }, { idempotencyKey: "refund:process:1", expectedVersion: 1 })).resolves.toMatchObject({ action: "process", item: { status: "refunded" } });
+
+    expect(mutationRequest).not.toBeNull();
+    const capturedRequest = mutationRequest as unknown as InternalAxiosRequestConfig;
+    expect(capturedRequest.url).toBe("/refunds/process");
+    expect(requestBody(capturedRequest)).toEqual({
+      refundRecordId: "ref-001", refundAmountCents: 9_900, expectedRefundStatus: "pending", expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z", financeRemark: "reconciled", refundProofFileIds: []
+    });
+    expect(header(capturedRequest, "Idempotency-Key")).toBe("refund:process:1");
+  });
+
+  it("sends only the strict reject DTO and validates the option version before posting", async () => {
+    const requests: InternalAxiosRequestConfig[] = [];
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-refund") };
+      if (config.url === "/refunds/reject") {
+        requests.push(config);
+        return { status: 200, data: { ok: true, data: {
+          item: { id: "ref-001", refundNo: "R-001", status: "rejected", version: 2, updatedAt: "2026-07-17T08:01:00.000Z", amountCents: 9_900 },
+          affected: 1, reused: false, action: "reject", accountRecalculationPending: false, message: "refund rejected", requestId: "request-refund-2"
+        } } };
+      }
+      throw new Error(`unexpected request ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+    const payload = {
+      refundRecordId: "ref-001",
+      expectedRefundStatus: "pending",
+      expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z",
+      rejectReason: "account mismatch"
+    };
+
+    await expect(transport.mutate("refunds", "reject", payload, {
+      idempotencyKey: "refund:reject:1",
+      expectedVersion: 9
+    })).rejects.toMatchObject({ code: "EXPECTED_VERSION_MISMATCH", status: 400 });
+    await expect(transport.mutate("refunds", "reject", payload, {
+      idempotencyKey: "refund:reject:2",
+      expectedVersion: 1
+    })).resolves.toMatchObject({ action: "reject", item: { status: "rejected" } });
+
+    expect(requests).toHaveLength(1);
+    expect(requestBody(requests[0]!)).toEqual(payload);
+    expect(header(requests[0]!, "Idempotency-Key")).toBe("refund:reject:2");
+  });
+
+  it("rejects seven unique refund proofs before posting to the process route", async () => {
+    let processCalls = 0;
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-refund") };
+      if (config.url === "/refunds/process") {
+        processCalls += 1;
+        throw new Error("refund process request must not be sent");
+      }
+      throw new Error(`unexpected request ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+
+    await expect(transport.mutate("refunds", "process", {
+      refundRecordId: "ref-001",
+      refundAmountCents: 9_900,
+      expectedRefundStatus: "pending",
+      expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z",
+      financeRemark: "",
+      refundProofFileIds: Array.from(
+        { length: 7 },
+        (_, index) => `cloud://env.refund-proof-${index + 1}`
+      )
+    }, {
+      idempotencyKey: "refund:proof-limit",
+      expectedVersion: 1
+    })).rejects.toMatchObject({ code: "INVALID_REFUND_MUTATION", status: 400 });
+    expect(processCalls).toBe(0);
+  });
+
+  it.each([
+    ["AUTH_REQUIRED", 401],
+    ["FORBIDDEN", 403],
+    ["DATA_VERSION_CONFLICT", 409],
+    ["SERVICE_NOT_MIGRATED", 501],
+    ["UPSTREAM_UNAVAILABLE", 503]
+  ] as const)("preserves the real %s refund error without unsafe fallback", async (code, status) => {
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-refund") };
+      if (config.url === "/auth/refresh") return failure(code, status);
+      if (config.url === "/refunds/process") return failure(code, status);
+      throw new Error(`unexpected request ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+
+    await expect(transport.mutate("refunds", "process", {
+      refundRecordId: "ref-001", refundAmountCents: 9_900, expectedRefundStatus: "pending", expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z", financeRemark: "", refundProofFileIds: []
+    }, { idempotencyKey: `refund:error:${status}`, expectedVersion: 1 }))
+      .rejects.toMatchObject({ code, status });
+  });
+
+  it("rejects unknown request and response fields through the shared refund contract", async () => {
+    let calls = 0;
+    const client = createClient((config) => {
+      if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-1", "csrf-refund") };
+      if (config.url === "/refunds/process") {
+        calls += 1;
+        return { status: 200, data: { ok: true, data: {
+          item: { id: "ref-001", refundNo: "R-001", status: "refunded", version: 2, updatedAt: "2026-07-17T08:01:00.000Z", amountCents: 9_900 },
+          affected: 1, reused: false, action: "process", accountRecalculationPending: true, message: "refund confirmed",
+          requestId: "request-refund-unsafe", orderId: "secret"
+        } } };
+      }
+      throw new Error(`unexpected request ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+    await transport.login({ account: "finance.test", password: "Strong-Admin-2026!" });
+    const payload = {
+      refundRecordId: "ref-001", refundAmountCents: 9_900, expectedRefundStatus: "pending", expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z", financeRemark: "", refundProofFileIds: []
+    };
+
+    await expect(transport.mutate("refunds", "process", { ...payload, orderId: "secret" }, {
+      idempotencyKey: "refund:unsafe:request",
+      expectedVersion: 1
+    })).rejects.toMatchObject({ code: "INVALID_REFUND_MUTATION", status: 400 });
+    await expect(transport.mutate("refunds", "process", payload, {
+      idempotencyKey: "refund:unsafe:response",
+      expectedVersion: 1
+    })).rejects.toMatchObject({ code: "INVALID_REFUND_MUTATION_CONTRACT", status: 502 });
+    expect(calls).toBe(1);
+  });
+});

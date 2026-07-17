@@ -119,3 +119,18 @@ test("money permissions are applied before value validity", () => {
   assert.equal(hasOwn(projectResource("orders", { totalAmount: 0 }, customerService), "totalAmountCents"), false);
   assert.equal(hasOwn(projectResource("after-sales", { requestedRefundAmount: 0 }, customerService), "amountCents"), false);
 });
+
+test("customer service can see the requested after-sale amount but not refund outcomes", () => {
+  const principal = { role: "customer_service", status: "active", permissions: ["after_sale:review"] };
+  const projected = projectResource("after-sales", {
+    requestedRefundAmount: 6789,
+    approvedRefundAmount: 6000,
+    refundAmount: 5000
+  }, principal);
+  assert.equal(projected.amountCents, 6789);
+  assert.equal(Object.hasOwn(projectResource("after-sales", { requestedRefundAmount: 6789 }, {
+    role: "finance",
+    status: "active",
+    permissions: ["after_sale:review"]
+  }), "amountCents"), false);
+});

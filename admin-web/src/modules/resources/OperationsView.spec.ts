@@ -1,5 +1,5 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
-import { ElButton, ElDialog, ElInput, ElInputNumber, ElRadioGroup, ElSelect } from "element-plus";
+import { ElButton, ElCheckbox, ElDialog, ElInput, ElInputNumber, ElRadioGroup, ElSelect } from "element-plus";
 import { nextTick } from "vue";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resourceDefinitions, statusLabels } from "@/config/resources";
@@ -789,7 +789,7 @@ describe("OperationsView real inventory warning action", () => {
       ...definition.bulkActions
     ].filter((action) => action.realEnabled).map((action) => `${definition.key}:${action.key}`));
 
-    expect(enabled).toEqual(["products:create", "products:edit", "products:change-price", "products:toggle-status", "products:batch-enable", "products:batch-tags", "inventory:adjust", "inventory:set-warning", "inventory-alerts:set-warning", "inventory-alerts:adjust", "orders:review", "orders:reject", "payments:confirm", "payments:reject"]);
+    expect(enabled).toEqual(["products:create", "products:edit", "products:change-price", "products:toggle-status", "products:batch-enable", "products:batch-tags", "inventory:adjust", "inventory:set-warning", "inventory-alerts:set-warning", "inventory-alerts:adjust", "orders:review", "orders:reject", "payments:confirm", "payments:reject", "after-sales:approve", "after-sales:reject", "after-sales:receive", "after-sales:inspect", "refunds:process", "refunds:reject"]);
   });
 
   it("enables row adjustment and set-warning while keeping unsafe top-level and bulk actions disabled", async () => {
@@ -1265,6 +1265,292 @@ describe("OperationsView real payment review", () => {
     const firstKey = transportMock.mutate.mock.calls[0]![3].idempotencyKey;
 
     await setReason(wrapper, "第二次核对");
+    await confirm(wrapper);
+    expect(transportMock.mutate.mock.calls[1]![3].idempotencyKey).not.toBe(firstKey);
+  });
+});
+
+describe("OperationsView real after-sale review", () => {
+  const pendingAfterSale: TestRow = {
+    id: "as-001",
+    version: 3,
+    caseNo: "AS-001",
+    orderNo: "ORDER-1",
+    customerMasked: "演示客户 / 138****1201",
+    type: "退货退款",
+    amountCents: 21800,
+    status: "pending_review",
+    updatedAt: "2026-07-16T08:00:00.000Z"
+  };
+
+  function configureAfterSalePage(row: TestRow = pendingAfterSale): void {
+    routeMock.meta.resource = "after-sales";
+    authMock.can.mockImplementation((permission?: string) => !permission || ["after_sale:view", "after_sale:review"].includes(permission));
+    transportMock.list.mockResolvedValue({ items: [{ ...row }], total: 1, page: 1, pageSize: 20, nextCursor: null });
+    transportMock.mutate.mockResolvedValue({
+      item: { id: row.id, caseNo: row.caseNo, status: "waiting_return", version: row.version + 1, updatedAt: "2026-07-16T08:01:00.000Z" },
+      afterSaleId: row.id,
+      afterSaleStatus: "waiting_return",
+      refundStatus: "pending",
+      approvedRefundAmount: 12800,
+      affected: 1,
+      reused: false,
+      decision: "approve",
+      message: "售后申请已审核通过",
+      requestId: "request-1"
+    });
+  }
+
+  it("enables only review actions for a current snapshot and leaves receive closed", async () => {
+    configureAfterSalePage();
+    const wrapper = await mountPage();
+    expect(actionButton(wrapper, "row", "approve").attributes("disabled")).toBeUndefined();
+    expect(actionButton(wrapper, "row", "reject").attributes("disabled")).toBeUndefined();
+    expect(actionButton(wrapper, "row", "receive").attributes("disabled")).toBeDefined();
+  });
+
+  it("submits a strict receive snapshot for a returned after-sale", async () => {
+    const row = {
+      ...pendingAfterSale,
+      status: "returned",
+      version: 8,
+      updatedAt: "2026-07-16T09:00:00.000Z"
+    };
+    configureAfterSalePage(row);
+    authMock.can.mockImplementation((permission?: string) => !permission || [
+      "after_sale:view",
+      "after_sale:receive_return",
+      "after_sale:inspect"
+    ].includes(permission));
+    transportMock.mutate.mockResolvedValue({
+      item: { id: row.id, status: "received", version: 9, updatedAt: "2026-07-16T09:01:00.000Z" },
+      afterSaleId: row.id,
+      afterSaleStatus: "received",
+      restoredQuantity: 0,
+      affected: 1,
+      reused: false,
+      message: "return received",
+      requestId: "request-receive-1"
+    });
+    const wrapper = await mountPage();
+
+    expect(actionButton(wrapper, "row", "receive").attributes("disabled")).toBeUndefined();
+    expect(actionButton(wrapper, "row", "inspect").attributes("disabled")).toBeDefined();
+    await actionButton(wrapper, "row", "receive").trigger("click");
+    await setReason(wrapper, "return received");
+    await confirm(wrapper);
+
+    const [resource, action, payload, options] = transportMock.mutate.mock.calls[0]!;
+    expect(resource).toBe("after-sales");
+    expect(action).toBe("receive");
+    expect(payload).toEqual({
+      action: "receive",
+      id: row.id,
+      expectedStatus: "returned",
+      expectedVersion: 8,
+      expectedUpdatedAt: "2026-07-16T09:00:00.000Z",
+      remark: "return received"
+    });
+    expect(options).toMatchObject({ expectedVersion: 8, idempotencyKey: expect.stringMatching(/^after-sales:receive:/) });
+  });
+
+  it("submits strict inspect controls only for a received after-sale", async () => {
+    const row = {
+      ...pendingAfterSale,
+      status: "received",
+      version: 9,
+      updatedAt: "2026-07-16T09:02:00.000Z"
+    };
+    configureAfterSalePage(row);
+    authMock.can.mockImplementation((permission?: string) => !permission || [
+      "after_sale:view",
+      "after_sale:inspect"
+    ].includes(permission));
+    transportMock.mutate.mockResolvedValue({
+      item: { id: row.id, status: "refund_pending", version: 10, updatedAt: "2026-07-16T09:03:00.000Z" },
+      afterSaleId: row.id,
+      afterSaleStatus: "refund_pending",
+      restoredQuantity: 2,
+      affected: 1,
+      reused: false,
+      message: "return inspected",
+      requestId: "request-inspect-1"
+    });
+    const wrapper = await mountPage();
+
+    expect(actionButton(wrapper, "row", "receive").attributes("disabled")).toBeDefined();
+    expect(actionButton(wrapper, "row", "inspect").attributes("disabled")).toBeUndefined();
+    await actionButton(wrapper, "row", "inspect").trigger("click");
+    const condition = wrapper.findAllComponents(ElSelect).find((candidate) => candidate.attributes("data-testid") === "item-condition");
+    if (!condition) throw new Error("Item condition select not found");
+    condition.vm.$emit("update:modelValue", "sellable");
+    const restock = wrapper.findAllComponents(ElCheckbox).find((candidate) => candidate.attributes("data-testid") === "restock-toggle");
+    if (!restock) throw new Error("Restock toggle not found");
+    restock.vm.$emit("update:modelValue", true);
+    await nextTick();
+    const quantity = wrapper.findAllComponents(ElInputNumber).find((candidate) => candidate.attributes("data-testid") === "restock-quantity");
+    if (!quantity) throw new Error("Restock quantity input not found");
+    quantity.vm.$emit("update:modelValue", 2);
+    await setReason(wrapper, "items are sellable");
+    await confirm(wrapper);
+
+    const [resource, action, payload, options] = transportMock.mutate.mock.calls[0]!;
+    expect(resource).toBe("after-sales");
+    expect(action).toBe("inspect");
+    expect(payload).toEqual({
+      action: "inspect",
+      id: row.id,
+      expectedStatus: "received",
+      expectedVersion: 9,
+      expectedUpdatedAt: "2026-07-16T09:02:00.000Z",
+      itemCondition: "sellable",
+      canRestock: true,
+      restockQuantity: 2,
+      inspectionRemark: "items are sellable"
+    });
+    expect(options).toMatchObject({ expectedVersion: 9, idempotencyKey: expect.stringMatching(/^after-sales:inspect:/) });
+  });
+
+  it("sends the strict approve amount and return requirement", async () => {
+    configureAfterSalePage();
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "approve").trigger("click");
+    const amount = wrapper.findComponent(ElInputNumber);
+    amount.vm.$emit("update:modelValue", 12800);
+    const returnRequired = wrapper.findComponent(ElCheckbox);
+    returnRequired.vm.$emit("update:modelValue", true);
+    await setReason(wrapper, "符合规则");
+    await confirm(wrapper);
+
+    const [resource, action, payload, options] = transportMock.mutate.mock.calls[0]!;
+    expect(resource).toBe("after-sales");
+    expect(action).toBe("approve");
+    expect(payload).toEqual({
+      id: "as-001",
+      expectedStatus: "pending_review",
+      expectedVersion: 3,
+      expectedUpdatedAt: "2026-07-16T08:00:00.000Z",
+      approvedRefundAmount: 12800,
+      returnRequired: true,
+      reason: "符合规则"
+    });
+    expect(options).toMatchObject({ expectedVersion: 3, idempotencyKey: expect.stringMatching(/^after-sales:approve:/) });
+  });
+
+  it("requires a reason before sending a reject", async () => {
+    configureAfterSalePage();
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "reject").trigger("click");
+    await confirm(wrapper);
+    expect(messageMock.warning).toHaveBeenCalledWith("请填写驳回原因");
+    expect(transportMock.mutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("OperationsView real refund mutation", () => {
+  const pendingRefund: TestRow = {
+    id: "ref-001", version: 1, refundNo: "R-001", orderNo: "ORDER-1", customerMasked: "Customer / 138****1201",
+    amountCents: 9_900, method: "offline", status: "pending", updatedAt: "2026-07-17T08:00:00.000Z"
+  };
+
+  function configureRefundPage(row: TestRow = pendingRefund): void {
+    routeMock.meta.resource = "refunds";
+    authMock.can.mockImplementation((permission?: string) => !permission || ["refund:view", "refund:process"].includes(permission));
+    transportMock.list.mockResolvedValue({ items: [{ ...row }], total: 1, page: 1, pageSize: 20, nextCursor: null });
+    transportMock.mutate.mockResolvedValue({
+      item: { id: row.id, refundNo: row.refundNo, status: "refunded", version: row.version + 1, updatedAt: "2026-07-17T08:01:00.000Z", amountCents: row.amountCents },
+      affected: 1, reused: false, action: "process", accountRecalculationPending: true, message: "refund confirmed", requestId: "refund-1"
+    });
+  }
+
+  it.each(["pending", "processing", "failed"])("enables refund actions only for the processable %s status", async (status) => {
+    configureRefundPage({ ...pendingRefund, status });
+    const wrapper = await mountPage();
+    expect(actionButton(wrapper, "row", "process").attributes("disabled")).toBeUndefined();
+    expect(actionButton(wrapper, "row", "reject").attributes("disabled")).toBeUndefined();
+  });
+
+  it.each(["refunded", "partial_refunded", "rejected", "cancelled"])("disables refund actions for terminal %s status", async (status) => {
+    configureRefundPage({ ...pendingRefund, status });
+    const wrapper = await mountPage();
+    expect(actionButton(wrapper, "row", "process").attributes("disabled")).toBeDefined();
+    expect(actionButton(wrapper, "row", "reject").attributes("disabled")).toBeDefined();
+  });
+
+  it("uses the immutable row amount and complete snapshot for process", async () => {
+    configureRefundPage();
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "process").trigger("click");
+    await setReason(wrapper, "  reconciled  ");
+    await confirm(wrapper);
+    const [resource, action, payload, options] = transportMock.mutate.mock.calls[0]!;
+    expect(resource).toBe("refunds");
+    expect(action).toBe("process");
+    expect(payload).toEqual({
+      refundRecordId: "ref-001", refundAmountCents: 9_900, expectedRefundStatus: "pending", expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z", financeRemark: "reconciled", refundProofFileIds: []
+    });
+    expect(options).toMatchObject({ expectedVersion: 1, idempotencyKey: expect.stringMatching(/^refunds:process:/) });
+  });
+
+  it("requires a reject reason and sends the strict reject snapshot", async () => {
+    configureRefundPage();
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "reject").trigger("click");
+    await confirm(wrapper);
+    expect(messageMock.warning).toHaveBeenCalledWith("请填写驳回原因");
+    expect(transportMock.mutate).not.toHaveBeenCalled();
+
+    await setReason(wrapper, "  account mismatch  ");
+    await confirm(wrapper);
+    expect(transportMock.mutate).toHaveBeenCalledWith("refunds", "reject", {
+      refundRecordId: "ref-001",
+      expectedRefundStatus: "pending",
+      expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z",
+      rejectReason: "account mismatch"
+    }, expect.objectContaining({
+      expectedVersion: 1,
+      idempotencyKey: expect.stringMatching(/^refunds:reject:/)
+    }));
+  });
+
+  it.each([
+    ["version", undefined],
+    ["updatedAt", undefined]
+  ])("does not enable a refund mutation without the %s snapshot", async (field, value) => {
+    configureRefundPage({ ...pendingRefund, [field]: value });
+    const wrapper = await mountPage();
+    expect(actionButton(wrapper, "row", "process").attributes("disabled")).toBeDefined();
+    expect(actionButton(wrapper, "row", "reject").attributes("disabled")).toBeDefined();
+  });
+
+  it("retains the key for unchanged network retries and rotates it after payload changes", async () => {
+    configureRefundPage();
+    transportMock.mutate.mockRejectedValue(new ApiError("network", "NETWORK_ERROR"));
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "process").trigger("click");
+    await setReason(wrapper, "same payload");
+    await confirm(wrapper);
+    await confirm(wrapper);
+    const firstKey = transportMock.mutate.mock.calls[0]![3].idempotencyKey;
+    expect(transportMock.mutate.mock.calls[1]![3].idempotencyKey).toBe(firstKey);
+
+    await setReason(wrapper, "changed payload");
+    await confirm(wrapper);
+    expect(transportMock.mutate.mock.calls[2]![3].idempotencyKey).not.toBe(firstKey);
+  });
+
+  it("closes and rotates the key after a refund conflict", async () => {
+    configureRefundPage();
+    transportMock.mutate.mockRejectedValueOnce(new ApiError("conflict", "DATA_VERSION_CONFLICT", 409));
+    const wrapper = await mountPage();
+    await actionButton(wrapper, "row", "process").trigger("click");
+    await confirm(wrapper);
+    const firstKey = transportMock.mutate.mock.calls[0]![3].idempotencyKey;
+
+    expect(wrapper.findComponent(ElDialog).props("modelValue")).toBe(false);
+    await actionButton(wrapper, "row", "process").trigger("click");
     await confirm(wrapper);
     expect(transportMock.mutate.mock.calls[1]![3].idempotencyKey).not.toBe(firstKey);
   });

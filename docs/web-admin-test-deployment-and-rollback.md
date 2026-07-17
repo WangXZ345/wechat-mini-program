@@ -1,13 +1,23 @@
 # 网页后台测试环境部署与回滚
 
-> **2026-07-13 订单只读部署增量：** 目标函数新增 `getOrders`，并将 canonical `orderQueryService` flatten 到 `adminWebApi/lib/orderQueryService.js` 与 `getOrders/orderQueryService.js`，打包脚本增加 SHA256 一致性门禁。当前唯一候选包为 `.codex-cloudfunction-deploy/admin-web-twelve-functions-guarded-final-20260713-143016/`：12 函数、104 JS、20 JSON、0 禁止目录，订单服务 SHA256 `3A74A12B052C4E135680FD8465DDC2ADF68794F4051532EA6C99A958C0C1AAB8`，`uploadPerformed=false`。订单 mutation 仍不在本轮部署开放范围；未经用户确认不得上传任何函数。
+> **退款 Task 4 guarded 候选（2026-07-18，未上传）：** 当前唯一候选 `.codex-cloudfunction-deploy/admin-web-nineteen-functions-guarded-20260718-030709/` 含 19 个 A-Z 函数、175 JS、30 JSON、0 禁止项；manifest SHA256 `7A733436FEBB6C24C8E88BC3D5747F73E56850EEC5D2BFB340E554D8686AC7C4`，canonical refund 与包内 `adminWebApi/lib`、`afterSales/common/services` 三份 SHA256 均为 `98D4DE9C376F7883747789151F0B27C4C2820D4B0A552C5E48176D58C9615583`，五项索引 metadata 完整，`uploadPerformed=false`。本轮改动云函数按 A-Z 为 `adminWebApi`、`afterSales`、`recalculateCustomerAccount`；`022011` 及此前 19 函数包与失败包均已过期，不是可部署候选。
+>
+> Web 退款仅开放 `POST /refunds/process|reject`，active `finance/super_admin` + `refund:process`（或 `*`）硬门禁；create/WeChat Web 路由不开放，微信入口 fail closed。部署前必须审计并审批五个 partial unique 索引：`admin_operation_logs.businessKey`、`account_logs.businessKey`、`refund_logs.businessKey`、`after_sale_logs.businessKey`、`sync_events.eventId`，并先对缺少 `refundQuantityAppliedAfterSaleIds` 的历史部分退款做数量归属对账。真实 CloudBase 事务/索引、Cookie/CSRF、双端、1～3 秒延迟、上传、部署、Web release 和小程序发布均未验证。
+
+> **退货验收更新（2026-07-16）：** 售后确认收货/验货已接入 canonical `returnInspectionService`，Web 和小程序旧入口共用；客服/超级管理员允许，财务/采购拒绝。Cloud `558/558`、Web `412/412`、TypeScript、ESLint、Mock/Real build 和 Real 资产扫描通过；当前仍是 local-only，Real/CloudBase、双端同步、上传和部署均未验证。
+
+> **2026-07-16 付款审核 local-only 候选：** Web `POST /payments/confirm|reject` 与旧 `adminUpdatePayment` 已共享 canonical `paymentMutationService`。Web 不提交金额、订单 ID、actor/openid、凭证 URL、交易号或账款值；只允许 active `finance/super_admin` 加精确权限审核订单当前权威凭证，并用 `version/updatedAt` 与 `Idempotency-Key` 防旧页和重放。canonical 事务拥有付款、订单、账款/唯一流水、配送日志、不可变管理员 journal 和最小 outbox；驳回不创建收款流水，legacy 状态和批次兼容保留。
+>
+> **历史付款审核候选证据（2026-07-16，已过期）：** 当时 18 函数包、`538/538` Cloud 与 `400/400` Web 结果只保留为历史阶段证据；该包已被顶部 19 函数候选替代，不得部署或称为当前候选。
+
+> **2026-07-13 订单只读部署增量（历史证据，已过期）：** 当时 12 函数包只保留订单只读阶段证据，已被顶部 19 函数候选替代且不得部署。
 
 > **2026-07-12 库存写切片历史包（已过期）：** `.codex-cloudfunction-deploy/admin-web-eleven-functions-guarded-20260712-201743/` 含 11 个函数；已被上方十二函数订单只读包替代，不得再作为当前候选部署。
 
 > **历史商品写切片记录：** `191343` 十函数包已被上方 `201743` 十一函数包替代，不得部署。商品 metadata-only 编辑与 `system_counters/product_index` 的部署前置仍然有效。
 
 > [!CAUTION]
-> 本文只适用于已由负责人明确确认的隔离测试环境。当前商品写、库存预警、行级库存调整和取消订单库存回补已完成本地实现；对应回归和十一函数打包校验已通过。订单审核、付款、发货、售后、退款等其他 Web 业务写仍按设计返回 `501 SERVICE_NOT_MIGRATED`。本地 Mock、单元测试或内存事务测试不代表 CloudBase 真实验证。CloudBase 集合/索引、双端同步和在线 1-3 秒延迟均未完成真实环境验证。严禁把本文步骤用于生产环境，严禁未经确认上传、部署或发布。
+> 本文只适用于已由负责人明确确认的隔离测试环境。商品写、库存预警、行级库存调整、取消订单库存回补、订单审核/驳回、当前付款凭证确认/驳回、售后审核、退货验收和线下退款处理/驳回已完成本地实现；账款结清/导出、凭证预览、发货、微信退款等其他 Web 业务写仍保持关闭。本地 Mock、单元测试或内存事务测试不代表 CloudBase 真实验证。CloudBase 集合/索引、双端同步和在线 1～3 秒延迟均未完成真实环境验证。严禁把本文步骤用于生产环境，严禁未经确认上传、部署或发布。
 
 ## 1. 当前状态与部署目的
 
@@ -27,8 +37,8 @@
 
 当前不具备完整后台上线条件：
 
-- 当前已完成本地迁移的写入口为 `POST /products/create`、`POST /products/edit`、`POST /products/change-price`、`POST /products/toggle-status`、`POST /products/batch-enable`、`POST /products/batch-tags`、`POST /inventory/set-warning` 与 `POST /inventory-alerts/set-warning`。订单、付款、发货、售后和退款写请求仍应返回 `501 SERVICE_NOT_MIGRATED`。
-- 商品分析、商品写、库存预警和库存调整只有在最终十一函数包完整部署、集合前置满足并完成负向安全检查后，才允许在隔离测试数据上验收。
+- 当前已完成本地迁移的写入口为 `POST /products/create`、`POST /products/edit`、`POST /products/change-price`、`POST /products/toggle-status`、`POST /products/batch-enable`、`POST /products/batch-tags`、`POST /inventory/set-warning`、`POST /inventory-alerts/set-warning`、订单审核/驳回、`POST /payments/confirm|reject`、`POST /after-sales/approve|reject`、`POST /after-sales/receive|inspect` 和 `POST /refunds/process|reject`。账款结清/导出、凭证预览、发货及退款 create/WeChat 仍应保持关闭。
+- 商品分析、商品写、库存预警和库存调整只有在最终十九函数包完整部署、集合前置满足并完成负向安全检查后，才允许在隔离测试数据上验收。
 - 不得把 `admin-web` 的 mock 数据、mock 登录、mock 写入或本地 `4173/4174` 服务作为真实环境验收证据。
 - 未迁移到共享业务服务的写操作不得通过临时直连旧云函数、浏览器数据库权限或伪造 `openid` 绕过。
 - 双端各业务模块的 1-3 秒目标只能在真实隔离测试环境采集时间戳后判定。
@@ -58,7 +68,7 @@
 
 1. 负责人书面确认测试 CloudBase 环境标识、用途和数据隔离边界；不能仅根据代码中的环境标识推断。
 2. 确认目标不是生产环境，且测试 Web、测试 BFF、小程序体验版指向同一套隔离测试业务数据。
-3. 备份上一版静态站点、网关、十个目标云函数、环境变量、触发器、集合和索引清单。
+3. 备份上一版静态站点、网关、十九个目标云函数、环境变量、触发器、集合和索引清单。
 4. 以只读方式盘点现有集合、权限规则、索引、数据量和过期数据；盘点前不创建或修改索引。
 5. 建立测试域名、有效 HTTPS 证书和同源 `/api` 网关；禁止使用本地 mock 服务作为部署目标。
 6. 服务端 secret 已在受控密钥存储中生成并完成最小授权；构建日志、命令历史和前端产物均不包含 secret。
@@ -72,46 +82,53 @@
 
 | 云函数 | 部署来源 | 边界 |
 | --- | --- | --- |
-| `adminDashboard` | 最终十二函数临时输出目录中的 `adminDashboard/` | 小程序商品分析聚合入口；必须包含与 BFF 同 hash 的 canonical `productAnalyticsQueryService` |
-| `adminWebApi` | 同一最终临时输出目录中的 `adminWebApi/` | 必须上传临时打包输出，不得直接上传源目录 |
-| `adminWebAuth` | 同一最终临时输出目录中的 `adminWebAuth/` | 必须上传临时打包输出，不得直接上传源目录 |
-| `batchUpdateProductTags` | 同一最终临时输出目录中的 `batchUpdateProductTags/` | 小程序批量标签薄适配器；必须与 BFF 使用同一 `productTagService`、idempotency、permissions 和 recommend helper |
-| `cancelOrder` | 同一最终临时输出目录中的 `cancelOrder/` | 事务内按扣减流水恢复库存并保留账款重算待办；不得绕过原取消条件 |
-| `cleanupSyncEvents` | 同一最终临时输出目录中的 `cleanupSyncEvents/` | 必须保留完整函数目录并配置受控定时触发；只清理已过期 `sync_events` |
-| `getOrders` | 同一最终临时输出目录中的 `getOrders/` | 旧小程序订单读取兼容入口；必须包含 canonical `orderQueryService` 与 permissions 副本 |
-| `getSyncEvents` | 同一最终临时输出目录中的 `getSyncEvents/` | 小程序同步读取入口，必须保留完整嵌套依赖和 canonical sync helper |
-| `getUnsoldProducts` | 同一最终临时输出目录中的 `getUnsoldProducts/` | `deactivate` 显式停用薄适配器；缺货自动下架路径仍未统一，不得扩大迁移范围 |
-| `manageProduct` | 同一最终临时输出目录中的 `manageProduct/` | `create/update` 为商品写 canonical service 兼容适配器；`delete/bulkActivate` 为商品状态 service 适配器；legacy 缺少强制版本/幂等仍是风险 |
-| `updateProductPrice` | 同一最终临时输出目录中的 `updateProductPrice/` | 旧小程序改价入口薄适配器；必须与 BFF 使用同一 canonical `productPriceService` |
-| `updateProductWarningStock` | 同一最终临时输出目录中的 `updateProductWarningStock/` | 旧小程序入口薄适配器；必须与 BFF 使用同一 canonical service，不得直接上传未打包代理 |
+| `adminDashboard` | 当前 guarded 十九函数候选目录中的 `adminDashboard/` | 小程序商品分析聚合入口；必须包含与 BFF 同 hash 的 canonical `productAnalyticsQueryService` |
+| `adminGetCustomerAccountDetail` | 当前 guarded 十九函数候选目录中的 `adminGetCustomerAccountDetail/` | 旧后台客户账款详情兼容入口；必须保持角色权限与敏感字段边界 |
+| `adminListCustomerAccounts` | 当前 guarded 十九函数候选目录中的 `adminListCustomerAccounts/` | 旧后台客户账款列表兼容入口；必须保持角色权限与最小字段投影 |
+| `adminReviewOrder` | 当前 guarded 十九函数候选目录中的 `adminReviewOrder/` | 旧小程序订单审核兼容入口；不得绕过原状态、版本、库存和账款规则 |
+| `adminUpdatePayment` | 当前 guarded 十九函数候选目录中的 `adminUpdatePayment/` | 旧小程序付款审核兼容入口；必须包含与 BFF 同源的 payment service、idempotency 和 sync helper |
+| `adminWebApi` | 当前 guarded 十九函数候选目录中的 `adminWebApi/` | 必须上传临时打包输出，不得直接上传源目录 |
+| `adminWebAuth` | 当前 guarded 十九函数候选目录中的 `adminWebAuth/` | 必须上传临时打包输出，不得直接上传源目录 |
+| `afterSales` | 当前 guarded 十九函数候选目录中的 `afterSales/` | 小程序售后申请/审核/退货验收/退款兼容入口；必须包含与 BFF 同源的 review、inspection 和 `common/services/refundMutationService.js` |
+| `batchUpdateProductTags` | 当前 guarded 十九函数候选目录中的 `batchUpdateProductTags/` | 小程序批量标签薄适配器；必须与 BFF 使用同一 `productTagService`、idempotency、permissions 和 recommend helper |
+| `cancelOrder` | 当前 guarded 十九函数候选目录中的 `cancelOrder/` | 事务内按扣减流水恢复库存并保留账款重算待办；不得绕过原取消条件 |
+| `cleanupSyncEvents` | 当前 guarded 十九函数候选目录中的 `cleanupSyncEvents/` | 必须保留完整函数目录并配置受控定时触发；只清理已过期 `sync_events` |
+| `getOrders` | 当前 guarded 十九函数候选目录中的 `getOrders/` | 旧小程序订单读取兼容入口；必须包含 canonical `orderQueryService` 与 permissions 副本 |
+| `getSyncEvents` | 当前 guarded 十九函数候选目录中的 `getSyncEvents/` | 小程序同步读取入口，必须保留完整嵌套依赖和 canonical sync helper |
+| `getUnsoldProducts` | 当前 guarded 十九函数候选目录中的 `getUnsoldProducts/` | `deactivate` 显式停用薄适配器；缺货自动下架路径仍未统一，不得扩大迁移范围 |
+| `manageProduct` | 当前 guarded 十九函数候选目录中的 `manageProduct/` | `create/update` 为商品写 canonical service 兼容适配器；`delete/bulkActivate` 为商品状态 service 适配器；legacy 缺少强制版本/幂等仍是风险 |
+| `recalculateCustomerAccount` | 当前 guarded 十九函数候选目录中的 `recalculateCustomerAccount/` | 账款重算兼容入口；普通调用方响应不得暴露内部客户标识 |
+| `shipmentGroups` | 当前 guarded 十九函数候选目录中的 `shipmentGroups/` | 发货分组兼容入口；必须保持原订单、权限和物流字段边界 |
+| `updateProductPrice` | 当前 guarded 十九函数候选目录中的 `updateProductPrice/` | 旧小程序改价入口薄适配器；必须与 BFF 使用同一 canonical `productPriceService` |
+| `updateProductWarningStock` | 当前 guarded 十九函数候选目录中的 `updateProductWarningStock/` | 旧小程序入口薄适配器；必须与 BFF 使用同一 canonical service，不得直接上传未打包代理 |
 
 ### 4.1 临时打包规则
 
-`cloudfunctions/adminDashboard/productAnalyticsQueryService.js`、`adminWebApi/security.js`、`adminWebApi/permissions.js`、`adminWebApi/lib/*` 的共享 service proxy，以及各旧入口的 canonical service proxy 是开发期引用。独立部署时相对路径不再可靠，直接上传源目录可能缺失实现，因此禁止这样做。十二个函数必须由同一打包结果生成，保证 order、analytics、price、status、tags、inventory、idempotency、recommend、sync、security 和 permissions 实现一致。
+`cloudfunctions/adminDashboard/productAnalyticsQueryService.js`、`adminWebApi/security.js`、`adminWebApi/permissions.js`、`adminWebApi/lib/*` 的共享 service proxy，以及各旧入口的 canonical service proxy 是开发期引用。独立部署时相对路径不再可靠，直接上传源目录可能缺失实现，因此禁止这样做。十九个函数必须由同一打包结果生成，保证 order、analytics、price、status、tags、inventory、payment、refund、after-sale、idempotency、recommend、sync、security 和 permissions 实现一致。
 
 当前已验证 dry-run 目录为：
 
 ```text
-D:\王希哲\NEW\.codex-cloudfunction-deploy\admin-web-twelve-functions-guarded-final-20260713-143016
+D:\王希哲\NEW\.worktrees\admin-web-payment-review\.codex-cloudfunction-deploy\admin-web-nineteen-functions-guarded-20260718-030709
 ```
 
-后续源码变化后必须使用空输出目录，由脚本重新一次生成十二函数：
+后续源码变化后必须使用空输出目录，由脚本重新生成十九函数：
 
 ```powershell
 .\scripts\package-admin-web-cloudfunctions.ps1 -OutputDirectory <empty-test-package-directory>
 ```
 
-脚本必须校验 security、permissions、inventory warning、product price、product status、product tag、product write、recommend、analytics、idempotency、stock alert 和 sync 等 canonical 实现及所有部署副本；`productWriteService` 必须覆盖 `adminWebApi/lib` 与 `manageProduct`，stock alert 也必须覆盖 `manageProduct`。生成后继续检查生产 JS/JSON，并确认排除 `test/`、`node_modules/`；仅有部分函数的中间输出不得作为部署包。
+脚本必须校验 security、permissions、inventory warning、product price、product status、product tag、product write、order、payment、after-sale review、recommend、analytics、idempotency、stock alert 和 sync 等 canonical 实现及所有部署副本；`productWriteService` 必须覆盖 `adminWebApi/lib` 与 `manageProduct`，`afterSaleReviewService` 必须覆盖 `adminWebApi/lib` 与 `afterSales/common/services`。生成后继续检查生产 JS/JSON，并确认排除 `test/`、`node_modules/`；仅有部分函数的中间输出不得作为部署包。
 
 检查 `package-manifest.json`：
 
-- `functions` 必须按 A-Z 恰好包含 `adminDashboard`、`adminWebApi`、`adminWebAuth`、`batchUpdateProductTags`、`cleanupSyncEvents`、`getSyncEvents`、`getUnsoldProducts`、`manageProduct`、`updateProductPrice`、`updateProductWarningStock`。
-- manifest 已记录并由最终打包流程校验 security、permissions、inventory warning、product price、product status、product tag、recommend、product analytics、idempotency、stock alert 和 sync canonical hash。
+- `functions` 必须按 A-Z 恰好包含 19 个候选函数，包括 `afterSales`、`adminWebApi`、`adminUpdatePayment`、`recalculateCustomerAccount` 及此前已接入函数。
+- manifest 已记录并由最终打包流程校验 security、permissions、inventory warning、product price、product status、product tag、product write、payment、after-sale review、recommend、product analytics、idempotency、stock alert 和 sync canonical hash。
 - `analyticsTimeoutSeconds` 必须为 `60`，并记录 `adminDashboardConfigSha256`、`adminWebApiConfigSha256`；源文件与包内共四份 config 的 hash 必须一致。
 - `uploadPerformed` 必须为 `false`；脚本只打包，不上传。
 - 临时包只能用于本次已确认测试环境，不得上传到生产。
 
-所有早于当前十二函数最终包的 guarded 包均已过期不得部署。当前候选仅为 `.codex-cloudfunction-deploy/admin-web-twelve-functions-guarded-final-20260713-143016/`，且仍需用户明确批准后才能上传隔离测试环境。
+所有早于当前十九函数最终包的 guarded 包及失败包均已过期不得部署，包括 `022011`。当前唯一候选仅为 `.codex-cloudfunction-deploy/admin-web-nineteen-functions-guarded-20260718-030709/`，且仍需用户明确批准后才能上传隔离测试环境。
 
 上传属于高风险动作。本文件只描述流程，不授权执行；实际上传仍需用户明确确认测试环境和范围。
 
@@ -218,7 +235,7 @@ https://<test-admin-host>/api/admin/v1/*      -> adminWebApi
 
 商品创建/legacy 完整更新依赖 `products`、`system_counters`、`inventory_logs`、`price_logs`、`product_tag_logs`、`stock_alert_records`、`admin_operation_logs` 和 `sync_events`；metadata edit 只写商品、审计和 outbox。其他预警、改价、状态和标签服务继续依赖各自既有集合。部署前必须只读确认集合、权限和索引。幂等 helper 可能尝试确保支持集合存在，集合创建本身属于环境变更，必须在已确认测试环境预先评审和授权，不能让首次业务请求成为未经记录的建表步骤。`idempotency_records` 继续沿用项目既有 helper 行为，不新增第二套幂等集合。
 
-当前十二函数目标清单只提供 `cleanupSyncEvents`，没有独立的会话/限流/安全日志清理函数。因此 session 和安全集合的自动清理是运维缺口；在补齐、审查和测试前，不得声称完整运维闭环。
+当前十九函数目标清单只提供 `cleanupSyncEvents`，没有独立的会话/限流/安全日志清理函数。因此 session 和安全集合的自动清理是运维缺口；在补齐、审查和测试前，不得声称完整运维闭环。
 
 ### 7.2 只读盘点先行
 
@@ -264,7 +281,7 @@ https://<test-admin-host>/api/admin/v1/*      -> adminWebApi
 3. 只读盘点集合、权限规则和索引；审批后再创建必要测试索引。
 4. 配置测试专用服务端变量和 secret，不写入 `VITE_*`。
 5. 运行临时打包脚本，核对 manifest 与 canonical hash。
-6. 在维护状态下按第 4 节 A-Z 清单部署十个测试云函数；不要开放流量直到十项和配置均完成。
+6. 在维护状态下按第 4 节 A-Z 清单部署十九个测试云函数；不要开放流量直到十九项和配置均完成。
 7. 配置 HTTPS 测试域名、同源 `/api` 网关、精确 Origin、Cookie 和安全响应头。
 8. 使用 `VITE_APP_ENV=test`、同源 API 和 polling 构建 Web，发布 `dist/` 到测试静态托管。
 9. 只重新编译/预览小程序，确认 `miniprogram/utils/sync.js` 调用 `getSyncEvents`；获得明确确认后才上传该云函数，未经确认不发布小程序。
@@ -315,6 +332,8 @@ https://<test-admin-host>/api/admin/v1/*      -> adminWebApi
 - 环境标识不一致、疑似触达生产或测试数据边界不明。
 - 未认证/越权请求获得 2xx，采购看到付款/退款/账款或完整 PII。
 - 未迁移的真实 Web 写没有返回预期 501，或预警值、改价、显式上下架、显式批量上架、批量公开标签任一入口绕过权限、CSRF、幂等、version/当前值守卫，说明边界被意外绕过。
+- 退款处理允许非 active `finance/super_admin`、缺少 `refund:process` 的会话或旧状态/version/updatedAt 快照通过；累计金额超过已付/审批上限；未完成验货即退款；缺少/冲突 immutable evidence 仍提交；owner/admin 任一事件写失败却未整体回滚。
+- 五个退款 required unique indexes 与部署前审计不一致，或历史部分退款数量归属尚未对账却准备开放处理。
 - 商品分析允许 `customer_service/finance` 通过注入权限访问，采购得到销售额，缺少 `inventory:view` 的会话得到库存变化，或损坏数据被静默转为空/零。
 - refresh Cookie、Origin、CORS、CSRF、轮换或吊销失效。
 - 持续 5xx、登录异常锁定、会话复用未撤销或日志出现 secret/PII。
@@ -327,12 +346,13 @@ https://<test-admin-host>/api/admin/v1/*      -> adminWebApi
 1. 关闭测试入口或置为维护状态，阻止新 Web 请求；不要删除数据。
 2. 恢复上一版静态站点，清理 CDN 缓存并验证 release 标识。
 3. 恢复上一版 `/api` 网关、Origin/CORS、Cookie 和安全头配置。
-4. 从备份恢复十个目标云函数的上一可用版本、运行配置和触发器；保持测试环境限定。
+4. 按实际授权的增量范围恢复上一版云函数；退款增量按 A-Z 为 `adminWebApi`、`afterSales`、`recalculateCustomerAccount`。若部署的是完整 19 函数候选，则必须从同一 release 备份恢复全部 19 个函数、运行配置和触发器，不得混用局部旧副本。
 5. 恢复上一版服务端变量引用；如怀疑 secret 泄露，在密钥系统中轮换并受控撤销相关 Web 会话，而不是删除业务数据。
 6. 数据库集合保持原状。新认证集合可以暂时闲置；不得清空或批量删除业务数据。
 7. 不删除 `sync_events`。若确需释放已过期事件，只能恢复并调用受控 `cleanupSyncEvents`，先以小批量验证。
-8. 重新编译/预览小程序，确认旧业务入口和同步降级行为正常；未经确认不发布。
-9. 执行回滚后健康检查，记录原因、版本、时间、操作者、影响和后续修复项，内容必须脱敏。
+8. 不因代码回滚直接删除五个退款唯一索引或 immutable journal/log evidence；索引变更和历史数据修复需要独立审计、回滚方案及用户明确授权。
+9. 重新编译/预览小程序，确认旧业务入口和同步降级行为正常；未经确认不发布。
+10. 执行回滚后健康检查，记录原因、版本、时间、操作者、影响和后续修复项，内容必须脱敏。
 
 回滚不是数据库清理。任何数据修复、批量状态变更、库存/账款调整或集合删除都需要单独方案和用户明确授权。
 
@@ -382,7 +402,7 @@ https://<test-admin-host>/api/admin/v1/*      -> adminWebApi
 
 测试部署只有在以下记录齐全时才可保留：
 
-- 明确的隔离测试环境、release、静态版本、十一函数版本和网关版本。
+- 明确的隔离测试环境、release、静态版本、十九函数版本和网关版本。
 - 本地检查、测试环境 API、浏览器、小程序和双端同步证据分开记录。
 - 五角色和 401/403/404/501 全部符合预期，无敏感字段泄漏。
 - 会话轮换、吊销、Origin、CSRF、Cookie 和日志检查通过。
@@ -402,6 +422,6 @@ https://<test-admin-host>/api/admin/v1/*      -> adminWebApi
 - `sync_events` outbox 尚需随各共享写服务逐模块接入；当前 fallback 读取不等于完整事件发布闭环。
 - 双端各业务模块和在线 1-3 秒目标尚未真实测量。
 - Web 会话、登录限流和安全日志缺少已验证的定时清理函数。
-- 独立 `cloudfunctions/getProductAnalytics` 仍会追加 `source: current_product` 的合成报价点，是未迁移 legacy；当前小程序源码走 `adminDashboard` canonical 入口，该 legacy 函数不在十二函数目标清单中。
+- 独立 `cloudfunctions/getProductAnalytics` 仍会追加 `source: current_product` 的合成报价点，是未迁移 legacy；当前小程序源码走 `adminDashboard` canonical 入口，该 legacy 函数不在十九函数目标清单中。
 - `cancelOrder` 的本地原子库存回补和账款重算可重试标记已经实现并通过内存事务测试；真实 CloudBase 事务、历史数据和双端验收仍未执行。
 - 本文没有授权任何上传、部署、发布、生产操作或真实数据写入。

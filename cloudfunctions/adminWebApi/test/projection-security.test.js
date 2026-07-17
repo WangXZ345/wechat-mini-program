@@ -88,7 +88,7 @@ test("ordinary user and four admin roles keep their bounded mutation matrix", ()
   });
 });
 
-test("customer service order and after-sale DTOs omit financial amounts", () => {
+test("customer service order DTOs omit totals while after-sale review DTO exposes only requested amount", () => {
   const orderRow = { _id: "order-1", orderNo: "NO-1", totalAmount: 12345 };
   const afterSaleRow = {
     _id: "after-sale-1",
@@ -100,7 +100,7 @@ test("customer service order and after-sale DTOs omit financial amounts", () => 
   const customerServiceOrder = projectResource("orders", orderRow, principals.customer_service, true);
   const customerServiceAfterSale = projectResource("after-sales", afterSaleRow, principals.customer_service, true);
   assert.equal(Object.hasOwn(customerServiceOrder, "totalAmountCents"), false);
-  assert.equal(Object.hasOwn(customerServiceAfterSale, "amountCents"), false);
+  assert.equal(customerServiceAfterSale.amountCents, 6789);
 
   for (const principal of [principals.finance, principals.super_admin]) {
     assert.equal(projectResource("orders", orderRow, principal, true).totalAmountCents, 12345);
@@ -134,6 +134,66 @@ test("all customer-bearing DTOs re-mask untrusted customer labels and phones", (
   assert.equal(untrustedAddress.customerMasked, "o***");
   assert.equal(untrustedAddress.shippingAddressMasked, "地址已脱敏");
   assert.equal(JSON.stringify(untrustedAddress).includes(phone), false);
+});
+
+test("refund read projection is an exact safe whitelist with canonical statuses and optimistic snapshots", () => {
+  const canonicalStatuses = [
+    "pending",
+    "processing",
+    "refunded",
+    "partial_refunded",
+    "failed",
+    "rejected",
+    "cancelled"
+  ];
+  for (const status of canonicalStatuses) {
+    const dto = projectResource("refunds", {
+      _id: "refund-1",
+      refundNo: "RF-001",
+      orderNo: "SO-001",
+      customerMasked: "13800138000",
+      refundMethod: "offline",
+      refundStatus: status,
+      refundAmount: 300,
+      version: 4,
+      updatedAt: new Date("2026-07-17T08:00:00.000Z"),
+      createdAt: new Date("2026-07-16T08:00:00.000Z"),
+      userId: "private-user",
+      openid: "private-openid",
+      refundAccountInfo: { accountNo: "private" },
+      refundProofFileIds: ["cloud://private-proof"],
+      transactionNo: "private-transaction",
+      financeRemark: "private-remark",
+      journal: { private: true }
+    }, principals.finance, true);
+
+    assert.deepEqual(Object.keys(dto).sort(), [
+      "amountCents",
+      "customerMasked",
+      "id",
+      "method",
+      "orderNo",
+      "refundNo",
+      "status",
+      "updatedAt",
+      "version"
+    ]);
+    assert.equal(dto.status, status);
+    assert.equal(dto.amountCents, 300);
+    assert.equal(dto.version, 4);
+    assert.equal(dto.updatedAt, "2026-07-17T08:00:00.000Z");
+    assert.equal(JSON.stringify(dto).includes("private"), false);
+    assert.equal(JSON.stringify(dto).includes("cloud://"), false);
+  }
+
+  const unsupported = projectResource("refunds", {
+    _id: "refund-2",
+    refundStatus: "paid",
+    refundAmount: 0,
+    version: 1,
+    updatedAt: new Date("2026-07-17T08:00:00.000Z")
+  }, principals.finance);
+  assert.equal(unsupported.status, "");
 });
 
 test("address DTOs never trust forged masking markers", () => {

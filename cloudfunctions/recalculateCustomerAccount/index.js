@@ -115,6 +115,28 @@ async function getExistingAccount(user) {
   return null;
 }
 
+async function getAccountById(accountId) {
+  if (!accountId) return null;
+  try {
+    return (await db.collection("customer_accounts").doc(accountId).get()).data || null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function userFromAccount(account) {
+  if (!account) return null;
+  const userId = String(account.userId || "").trim();
+  const userOpenid = String(account.userOpenid || "").trim();
+  if (!userId && !userOpenid) return null;
+  return {
+    _id: userId,
+    openid: userOpenid,
+    nickname: account.nickname || "",
+    phone: account.phone || ""
+  };
+}
+
 function buildSummary(user, orders, existing) {
   const today = localDateKey(new Date());
   const approved = orders.filter(isApprovedOrder);
@@ -212,8 +234,6 @@ function publicAccount(account) {
   const todayOrderAmount = Number(account.todayOrderAmount || 0);
   const historyUnpaidAmount = Number(account.historyUnpaidAmount || 0);
   return {
-    userId: account.userId || "",
-    userOpenid: account.userOpenid || "",
     totalOrderAmount: Number(account.totalOrderAmount || account.totalReceivableAmount || 0),
     totalPaidAmount: Number(account.totalPaidAmount || account.paidAmount || 0),
     totalUnpaidAmount: Number(account.totalUnpaidAmount || account.unpaidAmount || 0),
@@ -228,11 +248,19 @@ exports.main = async (event = {}) => {
   try {
     const callerOpenid = cloud.getWXContext().OPENID;
     const admin = await isActiveAdmin(callerOpenid);
-    const safeEvent = admin ? event : { userOpenid: callerOpenid };
-    const user = await findUser(safeEvent);
+    let existing = null;
+    let user = null;
+    if (admin && event.accountId) {
+      existing = await getAccountById(String(event.accountId).trim());
+      if (!existing) return fail("客户账款不存在");
+      user = userFromAccount(existing);
+    } else {
+      const safeEvent = admin ? event : { userOpenid: callerOpenid };
+      user = await findUser(safeEvent);
+      if (user) existing = await getExistingAccount(user);
+    }
     if (!user) return fail("缺少客户标识");
     if (!admin && user.openid !== callerOpenid) return fail("无权限访问该客户账款");
-    const existing = await getExistingAccount(user);
     const orders = await getAllOrders(user);
     const summary = buildSummary(user, orders, existing);
 

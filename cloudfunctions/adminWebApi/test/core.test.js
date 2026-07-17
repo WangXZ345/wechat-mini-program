@@ -89,6 +89,10 @@ test("role boundaries remove injected procurement finance permissions", () => {
   assert.throws(() => assertPermission(principal, "payment:view_screenshot"), (err) => err.code === "FORBIDDEN");
 });
 
+test("customer service role includes the bounded return inspection permission", () => {
+  assert.equal(permissionModel.permissionsForRole("customer_service").includes("after_sale:inspect"), true);
+});
+
 test("payment, order and admin projections are strict whitelists", () => {
   const finance = { role: "finance", status: "active", permissions: ["payment:view_screenshot", "order:view"] };
   const payment = projectResource("payments", {
@@ -195,6 +199,22 @@ test("product projection exposes the authoritative active flag for optimistic st
   assert.equal(legacyDraft.status, "draft");
 });
 
+test("analytics projection and search prefer canonical product identifiers", () => {
+  const principal = { role: "super_admin", status: "active", permissions: ["product:analytics:view"] };
+  const row = {
+    _id: "product-analytics-1",
+    name: "分析商品",
+    productIndex: "P000777",
+    skuCode: "SKU-CANONICAL",
+    sku: "SKU-LEGACY",
+    productCode: "CODE-LEGACY"
+  };
+  assert.equal(projectResource("analytics", row, principal).sku, "P000777");
+  assert.deepEqual(getResourcePolicy("analytics").searchFields, [
+    "name", "productName", "brand", "productIndex", "skuCode", "sku", "productCode", "searchText"
+  ]);
+});
+
 test("HTTP routes match AdminTransport generic paths", () => {
   assert.deepEqual(parseHttpRoute("/api/admin/v1/auth/profile", "GET"), { action: "profile" });
   assert.deepEqual(parseHttpRoute("/api/admin/v1/dashboard", "GET"), { action: "dashboard" });
@@ -247,11 +267,23 @@ test("mutation routes require an explicit action permission before migration", (
   assert.equal(getMutationPermission("orders", "review"), "order:review");
   assert.equal(getMutationPermission("payments", "confirm"), "payment:confirm");
   assert.equal(getMutationPermission("after-sales", "approve"), "after_sale:review");
+  assert.deepEqual(parseHttpRoute("/api/admin/v1/refunds/process", "POST"), {
+    action: "mutate", resource: "refunds", mutationAction: "process"
+  });
+  assert.deepEqual(parseHttpRoute("/api/admin/v1/refunds/reject", "POST"), {
+    action: "mutate", resource: "refunds", mutationAction: "reject"
+  });
+  assert.equal(getMutationPermission("refunds", "process"), "refund:process");
+  assert.equal(getMutationPermission("refunds", "reject"), "refund:process");
+  assert.throws(() => getMutationPermission("refunds", "create"), (err) => (
+    err.code === "MUTATION_NOT_SUPPORTED" && err.statusCode === 404
+  ));
   assert.throws(() => getMutationPermission("orders", "unknown"), (err) => err.code === "MUTATION_NOT_SUPPORTED");
 
   const finance = { role: "finance", status: "active", permissions: ["after_sale:view", "refund:process", "payment:confirm"] };
   assert.throws(() => assertPermission(finance, getMutationPermission("after-sales", "approve")), (err) => err.code === "FORBIDDEN");
   assert.doesNotThrow(() => assertPermission(finance, getMutationPermission("payments", "confirm")));
+  assert.doesNotThrow(() => assertPermission(finance, getMutationPermission("refunds", "process")));
 });
 
 test("product analytics contract rejects fake history and normalizes range", () => {

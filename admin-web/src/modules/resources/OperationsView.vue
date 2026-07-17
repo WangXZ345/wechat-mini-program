@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import {
   ElAlert,
   ElButton,
+  ElCheckbox,
   ElDialog,
   ElDrawer,
   ElEmpty,
@@ -48,9 +49,26 @@ import {
   paymentMutationInputFromRow,
   type PaymentMutationAction
 } from "@/services/transport/payment-mutation-contract";
+import {
+  afterSaleReviewInputFromRow,
+  isCurrentAfterSaleReviewSnapshot,
+  type AfterSaleReviewAction
+} from "@/services/transport/after-sale-review-contract";
+import {
+  isCurrentReturnInspectionSnapshot,
+  returnInspectionInputFromRow,
+  type ReturnInspectionAction
+} from "@/services/transport/return-inspection-contract";
+import {
+  buildRefundProcessPayload,
+  buildRefundRejectPayload,
+  isCurrentRefundMutationSnapshot,
+  type RefundMutationAction
+} from "@/services/transport/refund-mutation-contract";
 import { createIdempotencyKey, formatDateTime, formatMoney } from "@/utils/format";
 
 type Row = Record<string, unknown> & { id: string; version?: number };
+type ReturnItemCondition = "sellable" | "damaged" | "defective" | "missing" | "opened" | "unknown";
 
 const route = useRoute();
 const router = useRouter();
@@ -90,6 +108,16 @@ const actionExpectedWarningThreshold = ref<number | null>(null);
 const actionExpectedPriceCents = ref<number | null>(null);
 const actionExpectedIsActive = ref<boolean | null>(null);
 const actionTargetIsActive = ref<boolean | null>(null);
+const actionReturnRequired = ref(false);
+const returnInspectionForm = reactive<{
+  itemCondition: ReturnItemCondition;
+  canRestock: boolean;
+  restockQuantity: number;
+}>({
+  itemCondition: "unknown",
+  canRestock: false,
+  restockQuantity: 0
+});
 const productTagForm = reactive<{ tag: PublicProductTag; present: boolean }>({ tag: "新货", present: true });
 let searchTimer: number | null = null;
 let syncRefreshPending = false;
@@ -121,8 +149,24 @@ function isPaymentReviewAction(action: ResourceActionDefinition): action is Reso
   return definition.value.key === "payments" && (action.key === "confirm" || action.key === "reject");
 }
 
+function isAfterSaleReviewAction(action: ResourceActionDefinition): action is ResourceActionDefinition & { key: AfterSaleReviewAction } {
+  return definition.value.key === "after-sales" && (action.key === "approve" || action.key === "reject");
+}
+
+function isReturnInspectionAction(action: ResourceActionDefinition): action is ResourceActionDefinition & { key: ReturnInspectionAction } {
+  return definition.value.key === "after-sales" && (action.key === "receive" || action.key === "inspect");
+}
+
+function isRefundMutationAction(action: ResourceActionDefinition): action is ResourceActionDefinition & { key: RefundMutationAction } {
+  return definition.value.key === "refunds" && (action.key === "process" || action.key === "reject");
+}
+
 function isRowActionAvailable(action: ResourceActionDefinition, row: Record<string, unknown>): boolean {
-  return !isPaymentReviewAction(action) || isCurrentPaymentMutationSnapshot(row);
+  if (isPaymentReviewAction(action)) return isCurrentPaymentMutationSnapshot(row);
+  if (isAfterSaleReviewAction(action)) return isCurrentAfterSaleReviewSnapshot(row);
+  if (isReturnInspectionAction(action)) return isCurrentReturnInspectionSnapshot(action.key, row);
+  if (isRefundMutationAction(action)) return isCurrentRefundMutationSnapshot(row);
+  return true;
 }
 
 function isValidWarningThreshold(value: unknown): value is number {
@@ -219,6 +263,14 @@ function beginAction(action: ResourceActionDefinition, row?: Record<string, unkn
     ElMessage.error("当前付款记录不可审核，请刷新后重新核对");
     return;
   }
+  if (isReturnInspectionAction(action) && !isCurrentReturnInspectionSnapshot(action.key, row)) {
+    ElMessage.error("当前售后记录不可执行退货验收，请刷新后重试");
+    return;
+  }
+  if (isRefundMutationAction(action) && !isCurrentRefundMutationSnapshot(row)) {
+    ElMessage.error("当前退款记录不可处理，请刷新后重新核对");
+    return;
+  }
   if (action.key === "adjust" && ["inventory", "inventory-alerts"].includes(definition.value.key)) {
     if (!row || typeof row.id !== "string" || !row.id.trim()) {
       ElMessage.warning("请从商品所在行发起库存调整");
@@ -269,7 +321,14 @@ function beginAction(action: ResourceActionDefinition, row?: Record<string, unkn
   actionTargetIsActive.value = action.key === "toggle-status" && isBoolean(row?.isActive)
     ? !row.isActive
     : null;
-  actionForm.value = action.key === "change-price"
+  actionReturnRequired.value = definition.value.key === "after-sales" && action.key === "approve"
+    ? row?.returnRequired === true
+    : false;
+  actionForm.value = definition.value.key === "after-sales" && action.key === "approve"
+    ? typeof row?.approvedRefundAmount === "number" ? row.approvedRefundAmount : typeof row?.amountCents === "number" ? row.amountCents : null
+    : definition.value.key === "refunds" && action.key === "process" && typeof row?.amountCents === "number"
+    ? row.amountCents
+    : action.key === "change-price"
     ? actionExpectedPriceCents.value === null ? null : actionExpectedPriceCents.value / 100
     : action.key.includes("warning")
       ? isValidWarningThreshold(currentValue) ? currentValue : null
@@ -279,6 +338,11 @@ function beginAction(action: ResourceActionDefinition, row?: Record<string, unkn
     : null;
   productTagForm.tag = "新货";
   productTagForm.present = true;
+  returnInspectionForm.itemCondition = row && ["sellable", "damaged", "defective", "missing", "opened", "unknown"].includes(String(row.itemCondition))
+    ? row.itemCondition as ReturnItemCondition
+    : "unknown";
+  returnInspectionForm.canRestock = false;
+  returnInspectionForm.restockQuantity = 0;
   actionForm.note = "";
   actionIdempotencyKey.value = createIdempotencyKey(`${definition.value.key}:${action.key}`);
   actionAttemptFingerprint.value = "";
@@ -342,6 +406,40 @@ async function confirmAction(): Promise<void> {
     ElMessage.error("当前订单状态不可审核，请刷新后重试");
     return;
   }
+  if (isAfterSaleReviewAction(action)) {
+    if (!selectedRow.value?.id || !isCurrentAfterSaleReviewSnapshot(selectedRow.value)) {
+      ElMessage.error("当前售后记录不可审核，请刷新后重试");
+      return;
+    }
+    if (action.key === "approve" && (!Number.isSafeInteger(actionForm.value) || Number(actionForm.value) < 0)) {
+      ElMessage.warning("审批退款金额必须是非负整数分");
+      return;
+    }
+    if (action.key === "approve"
+      && typeof selectedRow.value.amountCents === "number"
+      && Number(actionForm.value) > selectedRow.value.amountCents) {
+      ElMessage.warning("审批退款金额不能超过申请金额");
+      return;
+    }
+  }
+  if (isReturnInspectionAction(action)) {
+    if (!selectedRow.value?.id || !isCurrentReturnInspectionSnapshot(action.key, selectedRow.value)) {
+      ElMessage.error("当前售后记录不可执行退货验收，请刷新后重试");
+      return;
+    }
+    if (action.key === "inspect"
+      && returnInspectionForm.canRestock
+      && (returnInspectionForm.itemCondition !== "sellable"
+        || !Number.isSafeInteger(returnInspectionForm.restockQuantity)
+        || returnInspectionForm.restockQuantity <= 0)) {
+      ElMessage.warning("只有可售商品可以按正整数数量回补库存");
+      return;
+    }
+  }
+  if (isRefundMutationAction(action) && (!selectedRow.value || !isCurrentRefundMutationSnapshot(selectedRow.value))) {
+    ElMessage.error("当前退款记录不可处理，请刷新后重新核对");
+    return;
+  }
   if (action.key === "reject" && !actionForm.note.trim()) {
     ElMessage.warning("请填写驳回原因");
     return;
@@ -350,6 +448,25 @@ async function confirmAction(): Promise<void> {
   try {
     const payload: Record<string, unknown> = isPaymentReviewAction(action)
       ? paymentMutationInputFromRow(action.key, selectedRow.value!, actionForm.note)
+      : isAfterSaleReviewAction(action)
+      ? afterSaleReviewInputFromRow(action.key, selectedRow.value!, {
+          approvedRefundAmount: action.key === "approve" ? Number(actionForm.value) : undefined,
+          returnRequired: action.key === "approve" ? actionReturnRequired.value : undefined,
+          reason: actionForm.note
+        })
+      : isReturnInspectionAction(action)
+      ? returnInspectionInputFromRow(action.key, selectedRow.value!, action.key === "receive"
+        ? { remark: actionForm.note }
+        : {
+            itemCondition: returnInspectionForm.itemCondition,
+            canRestock: returnInspectionForm.canRestock,
+            restockQuantity: returnInspectionForm.canRestock ? returnInspectionForm.restockQuantity : 0,
+            inspectionRemark: actionForm.note
+          })
+      : isRefundMutationAction(action)
+      ? action.key === "process"
+        ? buildRefundProcessPayload(selectedRow.value!, { remark: actionForm.note })
+        : buildRefundRejectPayload(selectedRow.value!, { reason: actionForm.note })
       : action.key === "change-price"
       ? {
           id: selectedRow.value!.id,
@@ -445,6 +562,19 @@ async function confirmAction(): Promise<void> {
         : "付款记录已变化，请重新核对后提交");
       return;
     }
+    if (isRefundMutationAction(action) && apiError.status === 409) {
+      syncRefreshPending = false;
+      actionOpen.value = false;
+      selectedRow.value = null;
+      activeAction.value = null;
+      actionIdempotencyKey.value = "";
+      actionAttemptFingerprint.value = "";
+      await load();
+      ElMessage.error(error.value
+        ? "退款记录已变化且刷新失败，请重新加载后核对"
+        : "退款记录已变化，请重新核对后提交");
+      return;
+    }
     if (apiError.code === "DATA_VERSION_CONFLICT") {
       if (action.key === "batch-tags") {
         syncRefreshPending = false;
@@ -519,7 +649,7 @@ function handleSync(event: Event): void {
 
 function tagType(value: unknown): "success" | "warning" | "danger" | "info" | "primary" {
   if (["active", "normal", "paid", "approved", "completed", "enabled", "success", "shipped"].includes(String(value))) return "success";
-  if (["low", "warning", "pending_confirm", "pending_admin", "pending_review", "pending_refund", "processing", "approved_pending_payment", "pending_shipment"].includes(String(value))) return "warning";
+  if (["low", "warning", "pending_confirm", "pending_admin", "pending_review", "pending_refund", "refund_pending", "waiting_return", "processing", "approved_pending_payment", "pending_shipment"].includes(String(value))) return "warning";
   if (["out", "rejected", "cancelled", "disabled", "overdue"].includes(String(value))) return "danger";
   return "info";
 }
@@ -692,14 +822,14 @@ onBeforeUnmount(() => {
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="224" fixed="right" align="right">
+        <el-table-column label="操作" width="320" fixed="right" align="right">
           <template #default="{ row }">
             <div class="row-actions">
               <el-tooltip content="查看详情" placement="top">
                 <el-button text circle :icon="Eye" @click="openDetails(row)"><span class="sr-only">查看详情</span></el-button>
               </el-tooltip>
               <el-button
-                v-for="action in definition.rowActions.slice(0, 3)"
+                v-for="action in definition.rowActions"
                 :key="action.key"
                 text
                 :type="action.type || 'primary'"
@@ -793,6 +923,43 @@ onBeforeUnmount(() => {
         <el-form-item v-if="activeAction && ['adjust', 'set-warning', 'batch-warning'].includes(activeAction.key)" label="调整值（整数）">
           <el-input-number v-model="actionForm.value" :min="activeAction?.key === 'set-warning' ? undefined : 0" :step="1" :disabled="operationLoading" controls-position="right" style="width: 100%" />
         </el-form-item>
+        <el-form-item v-if="activeAction?.key === 'approve' && definition.key === 'after-sales'" label="审批退款金额（分）">
+          <el-input-number v-model="actionForm.value" :min="0" :step="1" :precision="0" :disabled="operationLoading" controls-position="right" style="width: 100%" />
+        </el-form-item>
+        <el-form-item v-if="activeAction?.key === 'approve' && definition.key === 'after-sales'" label="退货要求">
+          <el-checkbox v-model="actionReturnRequired" :disabled="operationLoading">需要退货后再退款</el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="activeAction?.key === 'inspect' && definition.key === 'after-sales'" label="商品验货结果">
+          <el-select v-model="returnInspectionForm.itemCondition" data-testid="item-condition" :disabled="operationLoading" style="width: 100%">
+            <el-option label="可售" value="sellable" />
+            <el-option label="破损" value="damaged" />
+            <el-option label="瑕疵" value="defective" />
+            <el-option label="缺失" value="missing" />
+            <el-option label="已拆封" value="opened" />
+            <el-option label="待确认" value="unknown" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="activeAction?.key === 'inspect' && definition.key === 'after-sales'" label="库存处理">
+          <el-checkbox
+            v-model="returnInspectionForm.canRestock"
+            data-testid="restock-toggle"
+            :disabled="operationLoading || returnInspectionForm.itemCondition !== 'sellable'"
+          >
+            回补可售库存
+          </el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="activeAction?.key === 'inspect' && definition.key === 'after-sales' && returnInspectionForm.canRestock" label="回补数量">
+          <el-input-number
+            v-model="returnInspectionForm.restockQuantity"
+            data-testid="restock-quantity"
+            :min="1"
+            :step="1"
+            :precision="0"
+            :disabled="operationLoading"
+            controls-position="right"
+            style="width: 100%"
+          />
+        </el-form-item>
         <el-form-item v-if="activeAction?.key === 'batch-tags'" label="公开标签">
           <el-select v-model="productTagForm.tag" data-testid="product-tag-select" :disabled="operationLoading" style="width: 100%">
             <el-option v-for="tag in PUBLIC_PRODUCT_TAGS" :key="tag" :label="tag" :value="tag" />
@@ -808,7 +975,7 @@ onBeforeUnmount(() => {
           <strong>{{ selection.length }} 个商品 · {{ productTagForm.present ? '添加' : '移除' }}“{{ productTagForm.tag }}”</strong>
         </el-form-item>
         <el-form-item label="操作说明">
-          <el-input v-model="actionForm.note" type="textarea" :rows="3" :maxlength="definition.key === 'payments' ? 300 : 120" show-word-limit :disabled="operationLoading" placeholder="填写本次操作说明" />
+          <el-input v-model="actionForm.note" type="textarea" :rows="3" :maxlength="['payments', 'after-sales'].includes(definition.key) ? 300 : 120" show-word-limit :disabled="operationLoading" placeholder="填写本次操作说明" />
         </el-form-item>
       </el-form>
       <template #footer>

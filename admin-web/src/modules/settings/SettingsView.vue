@@ -29,7 +29,7 @@ interface SettingsRecord extends Record<string, unknown> {
   allowMultiplePaymentRecords: boolean;
   maxPaymentScreenshotCount: number;
   lowStockDefaultThreshold: number;
-  sessionIdleMinutes: number;
+  sessionIdleMinutes?: number;
   updatedAt: string;
 }
 
@@ -48,7 +48,6 @@ const form = reactive<SettingsRecord>({
   allowMultiplePaymentRecords: false,
   maxPaymentScreenshotCount: 3,
   lowStockDefaultThreshold: 50,
-  sessionIdleMinutes: 30,
   updatedAt: ""
 });
 
@@ -56,7 +55,8 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    Object.assign(form, await transport.get<SettingsRecord>("settings", "system"));
+    const result = await transport.get<SettingsRecord>("settings", "system");
+    Object.assign(form, result);
     loaded.value = true;
   } catch (reason) {
     error.value = toApiError(reason);
@@ -129,7 +129,7 @@ onMounted(() => void load());
 
         <section class="settings-section">
           <header><div><h2>管理员会话</h2><p>设置无操作自动锁定时间</p></div></header>
-          <el-form-item label="无操作自动锁定（分钟）"><el-input-number v-model="form.sessionIdleMinutes" :min="5" :max="240" :step="5" controls-position="right" /></el-form-item>
+          <el-form-item v-if="form.sessionIdleMinutes !== undefined" label="无操作自动锁定（分钟）"><el-input-number v-model="form.sessionIdleMinutes" :min="5" :max="240" :step="5" controls-position="right" /></el-form-item>
         </section>
       </el-form>
     </section>

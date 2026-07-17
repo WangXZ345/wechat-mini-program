@@ -111,6 +111,7 @@ const ROLE_PERMISSIONS = {
     "after_sale:view",
     "after_sale:review",
     "after_sale:receive_return",
+    "after_sale:inspect",
     "after_sale:update",
     "after_sale:complete",
     "shipment:view",
@@ -227,5 +228,4 @@ module.exports = {
   permissionsForRole,
   uniquePermissions
 };
-
 
