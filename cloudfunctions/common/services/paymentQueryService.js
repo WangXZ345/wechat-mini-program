@@ -3,6 +3,8 @@ const WEB_PAYMENT_ROLES = new Set(["finance", "super_admin"]);
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 const MAX_SEARCH_LENGTH = 80;
+const PAYMENT_AUTHORITY_SCAN_BATCH_SIZE = 100;
+const PAYMENT_AUTHORITY_SCAN_LIMIT = 500;
 
 class PaymentQueryError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -56,6 +58,11 @@ function amountCents(row) {
   return safeNonNegative(field ? row[field] : 0, field || "amount");
 }
 
+function versionOf(row) {
+  const value = row && row.version;
+  return safeNonNegative(value === undefined || value === null || value === "" ? 0 : value, "version");
+}
+
 function maskPhone(value) {
   const digits = cleanText(value, 40).replace(/\D/g, "");
   if (digits.length >= 7) return `${digits.slice(0, 3)}****${digits.slice(-4)}`;
@@ -95,7 +102,7 @@ function normalizeQuery(query = {}) {
 }
 
 function encodeCursor(row, normalized) {
-  const updatedAt = dateIso(row.updatedAt || row.submittedAt || row.createdAt);
+  const updatedAt = dateIso(row.updatedAt);
   const id = cleanText(row._id || row.id, 128);
   if (!updatedAt || !id) return null;
   return Buffer.from(JSON.stringify({ v: 1, updatedAt, id, status: normalized.status, search: normalized.search, pageSize: normalized.pageSize }), "utf8").toString("base64url");
@@ -143,7 +150,7 @@ function searchWhere(db, command, search) {
 
 function paymentProjection(row, order) {
   const id = cleanText(row._id || row.id, 128);
-  const updatedAt = dateIso(row.updatedAt || row.submittedAt || row.createdAt);
+  const updatedAt = dateIso(row.updatedAt);
   if (!id || !updatedAt) throw new PaymentQueryError("PAYMENT_DATA_INVALID", "付款记录稳定标识或更新时间异常", 503);
   const proofCount = Array.isArray(row.screenshotUrls) ? row.screenshotUrls.length : (row.paymentScreenshotUrl || row.screenshotUrl ? 1 : 0);
   if (!Number.isSafeInteger(proofCount) || proofCount < 0 || proofCount > 20) throw new PaymentQueryError("PAYMENT_DATA_INVALID", "付款记录凭证数量异常", 503);
@@ -157,8 +164,19 @@ function paymentProjection(row, order) {
     proofCount,
     status: paymentStatus(row),
     submittedAt,
-    updatedAt
+    updatedAt,
+    version: versionOf(row)
   };
+}
+
+function isAuthoritativePending(row, order) {
+  if (paymentStatus(row) !== "pending_confirm") return true;
+  const paymentId = cleanText(row && (row._id || row.id), 128);
+  return Boolean(paymentId
+    && order
+    && cleanText(order.latestPaymentRecordId, 128) === paymentId
+    && order.paymentStatus === "pending_confirm"
+    && order.status === "pending_payment_confirm");
 }
 
 function isMissingCollection(error) {
@@ -191,18 +209,52 @@ function createPaymentQueryService({ db, command }) {
     const normalized = normalizeQuery(query);
     const cursor = decodeCursor(normalized.cursor, normalized);
     try {
-      const where = combine(command, [statusWhere(command, normalized.status), searchWhere(db, command, normalized.search), cursorWhere(command, cursor)]);
-      let request = db.collection("payment_records");
-      if (where) request = request.where(where);
-      const response = await request.orderBy("updatedAt", "desc").orderBy("_id", "desc").limit(normalized.pageSize + 1).get();
-      const rows = Array.isArray(response.data) ? response.data : [];
-      const pageRows = rows.slice(0, normalized.pageSize);
-      const orderMap = await supplementOrders(pageRows);
+      const baseConditions = [statusWhere(command, normalized.status), searchWhere(db, command, normalized.search)];
+      const authoritative = [];
+      let scanCursor = cursor;
+      let lastScanned = null;
+      let scanned = 0;
+      let exhausted = false;
+      while (authoritative.length <= normalized.pageSize && scanned < PAYMENT_AUTHORITY_SCAN_LIMIT && !exhausted) {
+        const batchLimit = Math.min(PAYMENT_AUTHORITY_SCAN_BATCH_SIZE, PAYMENT_AUTHORITY_SCAN_LIMIT - scanned);
+        const where = combine(command, [...baseConditions, cursorWhere(command, scanCursor)]);
+        let request = db.collection("payment_records");
+        if (where) request = request.where(where);
+        const response = await request.orderBy("updatedAt", "desc").orderBy("_id", "desc").limit(batchLimit).get();
+        const batch = Array.isArray(response.data) ? response.data : [];
+        if (!batch.length) {
+          exhausted = true;
+          break;
+        }
+        scanned += batch.length;
+        lastScanned = batch[batch.length - 1];
+        const orderMap = await supplementOrders(batch);
+        for (const row of batch) {
+          if (normalized.status && paymentStatus(row) !== normalized.status) continue;
+          const order = orderMap.get(cleanText(row.orderId, 128));
+          if (isAuthoritativePending(row, order)) authoritative.push({ row, order });
+          if (authoritative.length > normalized.pageSize) break;
+        }
+        exhausted = batch.length < batchLimit;
+        const encodedScanCursor = encodeCursor(lastScanned, normalized);
+        if (!encodedScanCursor) {
+          throw new PaymentQueryError("PAYMENT_DATA_INVALID", "付款记录稳定标识或更新时间异常", 503);
+        }
+        scanCursor = decodeCursor(encodedScanCursor, normalized);
+      }
+      const pageEntries = authoritative.slice(0, normalized.pageSize);
+      const pageRows = pageEntries.map((entry) => entry.row);
+      const hasBufferedMore = authoritative.length > normalized.pageSize;
+      const scanLimitReached = !exhausted && scanned >= PAYMENT_AUTHORITY_SCAN_LIMIT;
+      const hasMore = hasBufferedMore || scanLimitReached;
+      const cursorRow = hasBufferedMore
+        ? pageRows[pageRows.length - 1]
+        : scanLimitReached ? lastScanned : null;
       return {
-        items: pageRows.map((row) => paymentProjection(row, orderMap.get(cleanText(row.orderId, 128)))),
+        items: pageEntries.map(({ row, order }) => paymentProjection(row, order)),
         pageSize: normalized.pageSize,
-        hasMore: rows.length > normalized.pageSize,
-        nextCursor: rows.length > normalized.pageSize ? encodeCursor(pageRows[pageRows.length - 1], normalized) : null
+        hasMore,
+        nextCursor: hasMore && cursorRow ? encodeCursor(cursorRow, normalized) : null
       };
     } catch (error) {
       throw readFailure(error);
@@ -217,7 +269,11 @@ function createPaymentQueryService({ db, command }) {
       const result = await db.collection("payment_records").doc(paymentId).get();
       if (!result.data) throw new PaymentQueryError("PAYMENT_NOT_FOUND", "付款记录不存在", 404);
       const orderMap = await supplementOrders([result.data]);
-      return paymentProjection(result.data, orderMap.get(cleanText(result.data.orderId, 128)));
+      const order = orderMap.get(cleanText(result.data.orderId, 128));
+      if (!isAuthoritativePending(result.data, order)) {
+        throw new PaymentQueryError("PAYMENT_NOT_FOUND", "付款记录不存在", 404);
+      }
+      return paymentProjection(result.data, order);
     } catch (error) {
       if (error instanceof PaymentQueryError) throw error;
       throw readFailure(error);

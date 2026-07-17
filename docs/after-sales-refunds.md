@@ -1,5 +1,11 @@
 # 售后退款功能说明
 
+> **2026-07-18 Web 退款 local-only 更新：** 线下退款处理与驳回已收口到 canonical `refundMutationService`，Web 路由为 `POST /api/admin/v1/refunds/process` 和 `POST /api/admin/v1/refunds/reject`，小程序旧 `afterSales` action 保留兼容 adapter。Web 只允许 active `finance` / `super_admin` 且具备 `refund:process`（或 `*`）的主体；`customer_service`、`procurement` 以及只注入权限字符串的其他角色均硬拒绝。canonical 退款状态固定为 `pending`、`processing`、`refunded`、`partial_refunded`、`failed`、`rejected`、`cancelled`。
+>
+> 线下退款在同一业务事务内更新退款、售后、订单、订单明细、账款日志、退款/售后日志和不可变管理员 journal，并写 owner/admin 两个 audience 的最小 `sync_events`。提交后的账款重算使用 journal 中的 account/owner/version/completion business key 恢复，清理 marker 前执行 owner/version/evidence compare-before-clear；不能从后来已变化的订单或账款状态反推既有成功。历史已确认部分退款若 `order_items.refundQuantityAppliedAfterSaleIds` 缺少当前售后归属，必须先人工对账数量归属并补齐证据；服务返回 `REFUND_ITEM_QUANTITY_RECONCILIATION_REQUIRED` 且零业务写，禁止猜测或重复累计。
+>
+> 部署前必须审计并审批五个 partial unique 索引：`admin_operation_logs.businessKey`、`account_logs.businessKey`、`refund_logs.businessKey`、`after_sale_logs.businessKey`、`sync_events.eventId`。当前仅有本地测试与 guarded 包证据；真实 CloudBase 事务/索引、Cookie/CSRF BFF、Web+小程序双端、1～3 秒延迟、上传、部署和发布均未验证。`createWechatPayRefund` / `handleWechatRefundNotify` 继续 fail closed 且零业务写。
+
 ## 业务边界
 
 - 所有售后申请必须先由后台人工审核，系统不会自动同意售后，也不会自动退款。
@@ -19,7 +25,7 @@
 - `afterSaleType`: `refund_only` / `return_refund` / `exchange` / `price_adjustment_refund`
 - `reasonType`、`customerReasonDetail`、`evidenceImages`
 - `afterSaleStatus`: `pending_review` / `approved` / `waiting_return` / `received` / `inspecting` / `refund_pending` / `refunded` / `rejected` / `completed` / `cancelled`
-- `refundStatus`: `none` / `pending` / `processing` / `refunded` / `rejected` / `failed`
+- `refundStatus`: `none` 或 canonical `pending` / `processing` / `refunded` / `partial_refunded` / `failed` / `rejected` / `cancelled`
 - `requestedRefundAmount`、`approvedRefundAmount`、`actualRefundAmount`
 - `returnItems`、`returnLogistics`、`inspectionResult`
 - `adminReviewRemark`、`rejectReason`、`reviewedBy`、`reviewedAt`
@@ -30,7 +36,7 @@
 
 - `refundNo`、`afterSaleId`、`orderId`、`orderNo`
 - `refundMethod`: `offline` / `wechat_pay` / `balance`
-- `refundAmount`、`refundStatus`
+- `refundAmount`、`refundStatus`（canonical 值为 `pending` / `processing` / `refunded` / `partial_refunded` / `failed` / `rejected` / `cancelled`）
 - `refundProofImages`、`financeRemark`
 - `processedBy`、`processedAt`
 
@@ -108,9 +114,9 @@
 
 默认角色：
 
-- `customer_service`: 查看、审核、确认退货、更新和完成售后，可查看退款记录。
+- `customer_service`: 查看、审核、确认退货收货、执行验货、更新和完成允许状态的售后；不能执行最终退款。
 - `finance`: 查看售后，创建和处理退款，导出退款，查看敏感退款信息，具备微信退款入口权限。
-- `procurement`: 仅查看售后和验货，不具备审核和退款权限。
+- `procurement`: 不具备售后审核、退货验收或退款权限。
 - `super_admin`: 全部权限。
 
 如果已有管理员账号保存了显式 `permissions` 数组，上线后需要在后台角色/管理员权限中补齐以上权限。
@@ -148,7 +154,13 @@
 
 ## 部署范围
 
-需要上传的云函数按 A-Z 排序：
+本轮 Web 退款增量若经负责人确认后需要上传，改动云函数按 A-Z 为：
+
+- `adminWebApi`
+- `afterSales`
+- `recalculateCustomerAccount`
+
+当前 guarded 包只是本地部署候选，尚未上传云函数、部署 Web 或发布小程序。以下是完整售后功能的历史云函数清单，不代表本轮已部署：
 
 - `afterSales`
 - `completeAfterSale`

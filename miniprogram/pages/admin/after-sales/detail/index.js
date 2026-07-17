@@ -142,7 +142,14 @@ Page({
   },
 
   confirmReceived() {
-    call("confirmReturnReceived", { afterSaleId: this.data.id })
+    const afterSale = this.data.afterSale || {};
+    call("confirmReturnReceived", {
+      afterSaleId: this.data.id,
+      expectedStatus: afterSale.afterSaleStatus,
+      expectedVersion: afterSale.version,
+      expectedUpdatedAt: afterSale.updatedAt,
+      idempotencyKey: generateIdempotencyKey("confirm_return_received")
+    })
       .then(() => {
         feedback.showSuccess("已确认收货");
         this.load();

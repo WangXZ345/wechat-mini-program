@@ -11,7 +11,7 @@ const RESOURCE_POLICIES = Object.freeze({
   refunds: { permission: "refund:view", collection: "refund_records", sortField: "updatedAt", statusField: "refundStatus", searchFields: ["refundNo", "orderNo"] },
   admins: { permission: "admin:view", collection: "admin_users", sortField: "updatedAt", statusField: "status", searchFields: ["name", "username"] },
   audit: { permission: "operation_log:view", collection: "admin_operation_logs", sortField: "createdAt", statusField: "status", searchFields: ["action", "resourceType", "description"] },
-  analytics: { permission: "product:analytics:view", collection: "products", sortField: "totalSales", searchFields: ["name", "productName", "brand", "sku"] },
+  analytics: { permission: "product:analytics:view", collection: "products", sortField: "totalSales", searchFields: ["name", "productName", "brand", "productIndex", "skuCode", "sku", "productCode", "searchText"] },
   imports: { permission: "inventory:import", collection: "import_records", sortField: "createdAt", statusField: "status", searchFields: ["fileName", "importNo"] },
   settings: {
     permission: "system:settings",
@@ -51,11 +51,25 @@ const MUTATION_POLICIES = Object.freeze({
   payments: Object.freeze({ confirm: "payment:confirm", reject: "payment:update_status" }),
   accounts: Object.freeze({ export: "customer:export_account" }),
   shipments: Object.freeze({ merge: "shipment:merge", ship: "shipment:ship", edit: "shipment:update" }),
-  "after-sales": Object.freeze({ approve: "after_sale:review", reject: "after_sale:review", receive: "after_sale:receive_return" }),
+  "after-sales": Object.freeze({
+    approve: "after_sale:review",
+    reject: "after_sale:review",
+    receive: "after_sale:receive_return",
+    inspect: "after_sale:inspect"
+  }),
   refunds: Object.freeze({ process: "refund:process", reject: "refund:process" }),
   admins: Object.freeze({ create: "admin:create", "change-role": "admin:update_role", disable: "admin:disable" }),
   settings: Object.freeze({ update: "system:settings" })
 });
+const CANONICAL_REFUND_STATUSES = new Set([
+  "pending",
+  "processing",
+  "refunded",
+  "partial_refunded",
+  "failed",
+  "rejected",
+  "cancelled"
+]);
 
 class ApiError extends Error {
   constructor(code, message, statusCode = 400, details) {
@@ -247,6 +261,11 @@ function canViewAfterSaleAmount(principal) {
   return hasPermission(principal, "refund:view");
 }
 
+function canViewAfterSaleRequestAmount(principal) {
+  return principal && principal.role === "customer_service"
+    && hasPermission(principal, "after_sale:review");
+}
+
 function productStatus(row) {
   if (row.isActive === false) return "inactive";
   if (row.status === "draft") return "draft";
@@ -335,11 +354,25 @@ function projectResource(resource, row, principal, detail = false) {
       return { id, shipmentNo: cleanString(row.shipmentNo, 100), ordersCount: Array.isArray(row.orderIds) ? row.orderIds.length : finiteInteger(row.orderCount, 0), customerMasked: customerMasked(row), carrier: cleanString(row.shippingCompany || row.expressCompany, 100), trackingMasked: maskTracking(row.trackingNo || row.expressNo), status: cleanString(row.shippingStatus || row.status, 60), updatedAt: dateValue(row.updatedAt), version: finiteInteger(row.version ?? row.dataVersion, 0) };
     case "after-sales": {
       const projected = { id, caseNo: cleanString(row.afterSaleNo || row.caseNo, 100), orderNo: cleanString(row.orderNo, 100), customerMasked: customerMasked(row), type: cleanString(row.afterSaleType || row.type, 60), status: cleanString(row.afterSaleStatus || row.status, 60), createdAt: dateValue(row.createdAt), updatedAt: dateValue(row.updatedAt), version: finiteInteger(row.version ?? row.dataVersion, 0) };
-      if (canViewAfterSaleAmount(principal)) assignCents(projected, "amountCents", row.requestedRefundAmount, row.refundAmount, row.approvedRefundAmount);
+      if (canViewAfterSaleAmount(principal)) {
+        assignCents(projected, "amountCents", row.requestedRefundAmount, row.refundAmount, row.approvedRefundAmount);
+      } else if (canViewAfterSaleRequestAmount(principal)) {
+        assignCents(projected, "amountCents", row.requestedRefundAmount);
+      }
       return projected;
     }
     case "refunds": {
-      const projected = { id, refundNo: cleanString(row.refundNo, 100), orderNo: cleanString(row.orderNo, 100), customerMasked: customerMasked(row), method: cleanString(row.refundMethod, 60), status: cleanString(row.refundStatus || row.status, 60), createdAt: dateValue(row.createdAt), updatedAt: dateValue(row.updatedAt) };
+      const suppliedStatus = cleanString(row.refundStatus || row.status, 60);
+      const projected = {
+        id,
+        refundNo: cleanString(row.refundNo, 100),
+        orderNo: cleanString(row.orderNo, 100),
+        customerMasked: customerMasked(row),
+        method: cleanString(row.refundMethod, 60),
+        status: CANONICAL_REFUND_STATUSES.has(suppliedStatus) ? suppliedStatus : "",
+        version: finiteInteger(row.version ?? row.dataVersion, 0),
+        updatedAt: dateValue(row.updatedAt)
+      };
       return assignCents(projected, "amountCents", row.refundAmount);
     }
     case "admins":
@@ -347,7 +380,7 @@ function projectResource(resource, row, principal, detail = false) {
     case "audit":
       return { id, operator: cleanString(row.operatorName || row.operatorRole || "管理员", 100), action: cleanString(row.action, 100), targetType: cleanString(row.resourceType || row.targetType, 80), summary: cleanString(row.publicSummary || row.safeSummary || `${row.resourceType || row.targetType || "业务记录"}操作已记录`, 240), status: cleanString(row.status || "success", 40), createdAt: dateValue(row.createdAt) };
     case "analytics": {
-      const projected = { id, sku: cleanString(row.sku || row.productCode, 80), name: cleanString(row.name || row.productName, 160), brand: cleanString(row.brand, 100), totalSales: finiteInteger(row.totalSales, 0), stockChangeCount: finiteInteger(row.stockChangeCount, 0), updatedAt: dateValue(row.updatedAt) };
+      const projected = { id, sku: cleanString(row.productIndex || row.skuCode || row.sku || row.productCode, 80), name: cleanString(row.name || row.productName, 160), brand: cleanString(row.brand, 100), totalSales: finiteInteger(row.totalSales, 0), stockChangeCount: finiteInteger(row.stockChangeCount, 0), updatedAt: dateValue(row.updatedAt) };
       return assignCents(projected, "salePriceCents", row.price);
     }
     case "imports":

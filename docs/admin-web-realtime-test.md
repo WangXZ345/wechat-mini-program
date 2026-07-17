@@ -1,5 +1,15 @@
 # 网页后台真实双端同步测试
 
+> **退款同步更新（2026-07-18，local-only）：** canonical `refundMutationService` 在退款业务事务中写两条最小事件：`audience=owner` 使用不可逆 owner key，`audience=admin` 供有权后台补拉；两类事件均不含 OPENID、userId、完整退款账户、凭证 URL、微信交易号或原始 journal。Web `POST /refunds/process|reject` 仅允许 active `finance/super_admin` + `refund:process`，状态固定为 `pending/processing/refunded/partial_refunded/failed/rejected/cancelled`。immutable journal/evidence 与账款重算 owner/version/completion key 用于提交后恢复，不能从当前可变状态反推历史成功。
+>
+> RT-12 仍为“本地实现完成、真实双端未执行”：未在真实 CloudBase 创建/审计五个退款 partial unique 索引，未验证 Cookie/CSRF BFF、Web/小程序收发、断线补拉或 1～3 秒延迟。历史部分退款缺少 `refundQuantityAppliedAfterSaleIds` ownership 时必须先人工对账，不能进入真实 RT-12。当前未上传、未部署、未发布。
+
+> **退货验收更新（2026-07-16）：** Web 和小程序旧入口的退货确认收货/验货已共享 canonical `returnInspectionService`；本地已覆盖状态/version/更新时间、幂等、库存回补约束和角色拒绝。Cloud `558/558`、Web `412/412` 通过，但 Real/CloudBase 与双端同步仍未验证，不能据此宣称 1～3 秒同步完成。
+
+> **2026-07-16 付款审核事件说明：** Web 当前凭证 `confirm/reject` 与小程序 `adminUpdatePayment` 已在本地共用 canonical `paymentMutationService`，事务写最小 `sync_events` 但事件不含金额、客户 PII、凭证 URL 或交易号。Web 只审核订单当前 `latestPaymentRecordId`，使用 `version/updatedAt` 快照和幂等键，active `finance/super_admin` 仍需精确权限。驳回不创建收款流水；旧状态与批次语义保持兼容。
+>
+> **证据状态：** local-only 包 `.codex-cloudfunction-deploy/admin-web-eighteen-functions-guarded-20260716-172745/` 含 18 函数、166 JS、28 JSON、0 禁止项，manifest SHA256 `1DC75B43B2AC4DF5A1AF59788F2B8554912B357E2A15545ED1F509855BEC3026`，售后服务 SHA256 `BFC7B5BCBDFE6204BB62D1604791733F97E65DCA1515B52B07C91A4A7A024685`，`uploadPerformed=false`；fresh Cloud `538/538`、Web `400/400`、TypeScript/ESLint 通过，本地 Mock 浏览器售后通过/驳回、冲突、敏感字段和角色拒绝已通过，Real/CloudBase 浏览器仍未执行。部署前仍需审计而未创建 `account_logs(accountId, afterPaymentMutationVersion)` 与 `sync_events(eventId)` 唯一索引，并配置 `SYNC_OWNER_PEPPER`。未上传、未部署、未连接 CloudBase、未执行真实付款、退款或 RT-07/RT-12；不得把本地 outbox 测试写成 1～3 秒真实双端同步通过。
+
 > **2026-07-13 付款与账款只读切片：** Web `/accounts` 与 `/payments` 列表/详情已通过 canonical `accountQueryService/paymentQueryService` 和 BFF 专用路由具备重新查询路径；Mock/HTTP 状态筛选、严格 DTO、稳定游标和只读详情已本地完成。账款重算、修改、结清、导出、付款确认/驳回及凭证预览继续关闭。当前 16 函数 local-only 保护包 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260713-202500/` 含 149 个 JS、25 个 JSON、0 个禁止目录，`uploadPerformed=false`；未执行真实 CloudBase 查询、索引或双端事件测试。
 
 > **2026-07-13 合并发货单只读说明：** Web 合并发货单列表/详情已通过 canonical `shipmentQueryService` 和 BFF `GET /shipments`、`GET /shipments/:id` 具备重新查询路径，`shipmentGroups` 旧列表/详情 action 使用兼容 adapters；Mock/HTTP cursor 与严格 DTO 已本地完成。该范围不含单订单发货，所有发货写/导出在 Real 模式均保持关闭；`merge/ship/edit` 返回 501，未登记的 `cancel/complete/export` 返回 404。该切片使用 14 函数历史保护包，当前候选已扩展为 16 函数包；未执行真实 CloudBase 查询、索引、上传、部署或双端事件测试，因此 RT-09 仍不得标记通过。
@@ -15,7 +25,7 @@
 ## 1. 环境前置
 
 - 已人工确认环境为隔离测试环境，环境 ID 与 `VITE_CLOUDBASE_ENV_ID` 一致。
-- 若获批执行隔离测试，当前候选范围的十六个目标云函数必须指向同一测试环境（A-Z）：`adminDashboard`、`adminGetCustomerAccountDetail`、`adminListCustomerAccounts`、`adminReviewOrder`、`adminWebApi`、`adminWebAuth`、`batchUpdateProductTags`、`cancelOrder`、`cleanupSyncEvents`、`getOrders`、`getSyncEvents`、`getUnsoldProducts`、`manageProduct`、`shipmentGroups`、`updateProductPrice`、`updateProductWarningStock`。当前仅有 local-only 保护包，尚未上传或部署；最终包为 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260713-202500/`，含 149 个 JS、25 个 JSON。
+- 若获批执行隔离测试，当前候选范围的十七个目标云函数必须指向同一测试环境（A-Z）：`adminDashboard`、`adminGetCustomerAccountDetail`、`adminListCustomerAccounts`、`adminReviewOrder`、`adminUpdatePayment`、`adminWebApi`、`adminWebAuth`、`batchUpdateProductTags`、`cancelOrder`、`cleanupSyncEvents`、`getOrders`、`getSyncEvents`、`getUnsoldProducts`、`manageProduct`、`shipmentGroups`、`updateProductPrice`、`updateProductWarningStock`。当前仅有 local-only 保护包，尚未上传或部署；新包为 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260716-160658/`，含 159 个 JS、27 个 JSON。
 - 测试域名 HTTPS、同源 `/api/admin/v1`、Cookie、Origin、CSRF 和 secret 已验证。
 - 使用虚构测试商品、测试账号和脱敏数据，不使用正式商品或客户数据。
 - 每个写用例记录 `requestId`、`businessKey`、`eventId`、业务提交时间、事件收到时间和 refetch 完成时间。
@@ -63,8 +73,8 @@ Mock、单元测试、静态构建或 collection fallback 只能作为局部证�
 | RT-09 | Web 发货/合并发货，小程序物流更新 | 写操作仍禁用；已登记动作返回 501、未登记动作返回 404；只读列表/详情本地完成 | 待采集 | 不改金额、不重复扣库存 | 待测 | 阻断：发货写未迁移 |
 | RT-09A | 小程序合并发货变化后 Web 列表/详情刷新 | canonical 合并发货单读取、严格 DTO 与 cursor 本地完成；云端待采集 | legacy read adapters 本地兼容，真实写事件待采集 | 仅重新查询，不执行 Web 业务写；单订单发货不在该页面范围 | 待测 | 本地读取完成，真实双端未执行 |
 | RT-10 | 小程序申请售后，Web 客服待办出现 | 待采集 | 待采集 | 售后记录唯一 | 待测 | 未执行 |
-| RT-11 | Web 客服审核售后，小程序状态更新 | 待采集 | 待采集 | 财务没有审核权限 | 待测 | 未执行 |
-| RT-12 | Web 财务处理已审核退款，小程序更新 | 待采集 | 待采集 | 金额上限、流水与库存恢复一次 | 待测 | 未执行 |
+| RT-11 | Web 客服审核售后，小程序状态更新 | 本地 BFF/Mock 通过/驳回已完成；CloudBase 待采集 | `afterSaleReviewService` 事务、版本和幂等本地通过 | 财务/采购拒绝；客服/超级管理员可审核 | 待测 | 本地实现完成，真实双端未执行 |
+| RT-12 | Web 财务处理已审核退款，小程序更新 | 本地严格 DTO、角色/状态门、Mock/Real 合同已实现；云端待采集 | 旧 `afterSales` adapter 本地共享 canonical service；真机待采集 | immutable journal、金额双上限、order-item ownership、账款重算恢复、owner/admin 双 audience 事件；五个唯一索引待云端审计 | 待测 | 本地实现完成，真实双端未执行 |
 
 ## 4. 断线、补拉与循环
 
@@ -91,7 +101,7 @@ Mock、单元测试、静态构建或 collection fallback 只能作为局部证�
 
 - RT-01A、RT-01B、RT-02、RT-02A、RT-02B、RT-02C、RT-02D、RT-02E、RT-03 至 RT-12、RT-03C、RT-N1 至 RT-N6 全部在同一隔离测试环境执行；未迁移的名称编辑先解除阻断，RT-06 的库存恢复缺口也必须先解除。
 - 在线正常网络端到端 P95 达到 1-3 秒目标；超出时保留样本和原因，不隐瞒。
-- 重复点击、重放请求和重复事件不产生重复库存、付款、账款、发货或退款写入。
+- 重复点击、重放请求和重复事件不产生重复库存、付款、账款、发货、售后审核、退货验收或退款写入。
 - 小程序旧入口完整回归通过。
 
 ## 7. 当前结论

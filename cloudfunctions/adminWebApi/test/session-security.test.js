@@ -56,7 +56,7 @@ test("mutation checks permission, then CSRF, before the service boundary", async
   );
   await assert.rejects(
     () => dispatch(mutationRequest(csrfToken), authContext(["payment:confirm"], csrfToken), config),
-    (err) => err.code === "SERVICE_NOT_MIGRATED" && err.statusCode === 501
+    (err) => err.code === "IDEMPOTENCY_KEY_REQUIRED" && err.statusCode === 400
   );
 });
 

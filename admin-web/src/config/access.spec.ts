@@ -36,6 +36,13 @@ describe("role route isolation", () => {
     expect(finance.permissions).not.toContain("inventory:update");
   });
 
+  it("allows only customer service and super admin to inspect returns", () => {
+    expect(profile("customer_service").permissions).toContain("after_sale:inspect");
+    expect(profile("finance").permissions).not.toContain("after_sale:inspect");
+    expect(profile("procurement").permissions).not.toContain("after_sale:inspect");
+    expect(profile("super_admin").permissions).toContain("*");
+  });
+
   it("keeps Web product analytics limited to procurement and super_admin even with injected permission", () => {
     const analyticsAccess = navigationEntries.find((item) => item.path === "/analytics/products")?.access;
     for (const role of ["customer_service", "finance"] as const) {

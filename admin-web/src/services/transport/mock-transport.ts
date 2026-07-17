@@ -53,6 +53,31 @@ import {
   parsePaymentListPage,
   type PaymentSummary
 } from "./payment-query-contract";
+import {
+  normalizePaymentMutationInput,
+  parsePaymentMutationResult,
+  type PaymentMutationAction,
+  type PaymentMutationResult
+} from "./payment-mutation-contract";
+import {
+  normalizeAfterSaleReviewInput,
+  parseAfterSaleReviewResult,
+  type AfterSaleReviewAction,
+  type AfterSaleReviewResult
+} from "./after-sale-review-contract";
+import {
+  normalizeReturnInspectionInput,
+  parseReturnInspectionResult,
+  type ReturnInspectionAction,
+  type ReturnInspectionResult
+} from "./return-inspection-contract";
+import {
+  normalizeRefundMutationInput,
+  parseRefundMutationResult,
+  type RefundMutationAction,
+  type RefundProcessRequest,
+  type RefundMutationResult
+} from "./refund-mutation-contract";
 import { cloneMockRows } from "./mock-data";
 
 type Row = Record<string, unknown> & { id: string; version: number };
@@ -221,10 +246,16 @@ function canViewPayments(profile: AdminProfile): boolean {
     && profileHasPermission(profile, "payment:view_screenshot");
 }
 
+function canViewRefunds(profile: AdminProfile): boolean {
+  return profile.isActive && ["finance", "super_admin"].includes(profile.role)
+    && profileHasPermission(profile, "refund:view");
+}
+
 function mockPaymentSummary(row: Row): PaymentSummary {
   const proofCount = Number.isSafeInteger(row.proofCount) ? Number(row.proofCount) : (row.proofLabel && row.proofLabel !== "无凭证" ? 1 : 0);
   return parsePaymentDetail({
     id: row.id,
+    version: row.version,
     orderNo: typeof row.orderNo === "string" ? row.orderNo : "",
     customerMasked: typeof row.customerMasked === "string" ? row.customerMasked : "客户",
     amountCents: typeof row.amountCents === "number" ? row.amountCents : 0,
@@ -768,6 +799,9 @@ export class MockTransport implements AdminTransport {
     if (resource === "payments" && !canViewPayments(profile)) {
       throw new ApiError("无权查看付款记录", "FORBIDDEN", 403);
     }
+    if (resource === "refunds" && !canViewRefunds(profile)) {
+      throw new ApiError("无权查看退款记录", "FORBIDDEN", 403);
+    }
     await wait();
     if (query.search === "__error__") throw new ApiError("演示请求失败，请重试", "MOCK_REQUEST_FAILED", 503);
     let items = [...(this.rows[resource] || [])];
@@ -890,6 +924,9 @@ export class MockTransport implements AdminTransport {
     if (resource === "payments" && !canViewPayments(profile)) {
       throw new ApiError("无权查看付款记录", "FORBIDDEN", 403);
     }
+    if (resource === "refunds" && !canViewRefunds(profile)) {
+      throw new ApiError("无权查看退款记录", "FORBIDDEN", 403);
+    }
     if (resource === "shipments") return this.getShipmentDetail(id) as unknown as Promise<T>;
     if (resource === "accounts") return this.getAccountDetail(id) as unknown as Promise<T>;
     await wait(120);
@@ -912,7 +949,25 @@ export class MockTransport implements AdminTransport {
       throw new ApiError("账款写入与导出尚未接入", "SERVICE_NOT_MIGRATED", 501);
     }
     if (resource === "payments") {
-      throw new ApiError("付款审核写入尚未接入", "SERVICE_NOT_MIGRATED", 501);
+      if (action !== "confirm" && action !== "reject") {
+        throw new ApiError("该付款写操作尚未接入", "SERVICE_NOT_MIGRATED", 501);
+      }
+      return this.mutatePayment(profile, action, payload, options) as unknown as MutationResult<T>;
+    }
+    if (resource === "after-sales") {
+      if (action === "receive" || action === "inspect") {
+        return this.mutateReturnInspection(profile, action, payload, options) as unknown as MutationResult<T>;
+      }
+      if (action !== "approve" && action !== "reject") {
+        throw new ApiError("after-sale write operation is not migrated", "SERVICE_NOT_MIGRATED", 501);
+      }
+      return this.mutateAfterSaleReview(profile, action, payload, options) as unknown as MutationResult<T>;
+    }
+    if (resource === "refunds") {
+      if (action !== "process" && action !== "reject") {
+        throw new ApiError("该退款写操作尚未接入", "SERVICE_NOT_MIGRATED", 501);
+      }
+      return this.mutateRefund(profile, action, payload, options) as unknown as MutationResult<T>;
     }
     if (resource === "products"
       && action === "batch-tags"
@@ -997,6 +1052,282 @@ export class MockTransport implements AdminTransport {
     this.mutationResults.set(options.idempotencyKey, { fingerprint, result });
     if (affected > 0) this.pushEvent(resource, resultItem?.id || ids[0] || "batch", action, resultItem?.version || 1);
     return structuredClone(result) as MutationResult<T>;
+  }
+
+  private mutatePayment(
+    profile: AdminProfile,
+    action: PaymentMutationAction,
+    payload: Record<string, unknown>,
+    options: MutationOptions
+  ): PaymentMutationResult {
+    const permission = action === "confirm" ? "payment:confirm" : "payment:update_status";
+    if (!profile.isActive
+      || !["finance", "super_admin"].includes(profile.role)
+      || !profileHasPermission(profile, permission)) {
+      throw new ApiError("无权执行付款审核操作", "FORBIDDEN", 403);
+    }
+    const input = normalizePaymentMutationInput(action, payload);
+    if (options.expectedVersion !== input.expectedVersion) {
+      throw new ApiError("付款版本与请求选项不一致", "EXPECTED_VERSION_MISMATCH", 400);
+    }
+    if (!options.idempotencyKey?.trim()) throw new ApiError("缺少幂等键", "IDEMPOTENCY_KEY_REQUIRED", 400);
+
+    const fingerprint = JSON.stringify({ resource: "payments", action, input });
+    const prior = this.mutationResults.get(options.idempotencyKey);
+    if (prior && prior.fingerprint !== fingerprint) {
+      throw new ApiError("请求已被用于其他付款审核，请重新核对后重试", "IDEMPOTENCY_KEY_CONFLICT", 409);
+    }
+    if (prior) {
+      return parsePaymentMutationResult({ ...structuredClone(prior.result), affected: 0, reused: true });
+    }
+
+    const payment = (this.rows.payments || []).find((row) => row.id === input.id);
+    if (!payment) throw new ApiError("付款记录不存在", "PAYMENT_NOT_FOUND", 404);
+    const currentUpdatedAt = typeof payment.updatedAt === "string"
+      ? payment.updatedAt
+      : typeof payment.submittedAt === "string" ? payment.submittedAt : null;
+    if (payment.status !== "pending_confirm") {
+      throw new ApiError("付款记录已变化，请刷新后重新核对", "PAYMENT_STATE_CONFLICT", 409);
+    }
+    if (payment.version !== input.expectedVersion || currentUpdatedAt !== input.expectedUpdatedAt) {
+      throw new ApiError("付款记录已被其他管理员更新", "DATA_VERSION_CONFLICT", 409);
+    }
+
+    const updatedAt = new Date().toISOString();
+    payment.status = action === "confirm" ? "paid" : "rejected";
+    payment.version += 1;
+    payment.updatedAt = updatedAt;
+    const result = parsePaymentMutationResult({
+      item: {
+        id: payment.id,
+        orderNo: typeof payment.orderNo === "string" ? payment.orderNo : "",
+        status: payment.status,
+        version: payment.version,
+        updatedAt
+      },
+      affected: 1,
+      reused: false,
+      decision: action,
+      accountRecalculationPending: false,
+      message: action === "confirm" ? "付款已确认" : "付款已驳回",
+      requestId: `mock-${crypto.randomUUID()}`
+    });
+    this.mutationResults.set(options.idempotencyKey, { fingerprint, result });
+    return structuredClone(result);
+  }
+
+  private mutateAfterSaleReview(
+    profile: AdminProfile,
+    action: AfterSaleReviewAction,
+    payload: Record<string, unknown>,
+    options: MutationOptions
+  ): AfterSaleReviewResult {
+    if (!profile.isActive
+      || !["customer_service", "super_admin"].includes(profile.role)
+      || !profileHasPermission(profile, "after_sale:review")) {
+      throw new ApiError("forbidden after-sale review operation", "FORBIDDEN", 403);
+    }
+    const input = normalizeAfterSaleReviewInput(action, payload);
+    if (options.expectedVersion !== input.expectedVersion) {
+      throw new ApiError("after-sale version does not match request options", "EXPECTED_VERSION_MISMATCH", 400);
+    }
+    if (!options.idempotencyKey?.trim()) throw new ApiError("missing idempotency key", "IDEMPOTENCY_KEY_REQUIRED", 400);
+
+    const fingerprint = JSON.stringify({ resource: "after-sales", action, input });
+    const prior = this.mutationResults.get(options.idempotencyKey);
+    if (prior && prior.fingerprint !== fingerprint) {
+      throw new ApiError("idempotency key was used for another after-sale review", "IDEMPOTENCY_KEY_CONFLICT", 409);
+    }
+    if (prior) {
+      return parseAfterSaleReviewResult({ ...structuredClone(prior.result), affected: 0, reused: true });
+    }
+
+    const row = (this.rows["after-sales"] || []).find((candidate) => candidate.id === input.id);
+    if (!row) throw new ApiError("after-sale record not found", "AFTER_SALE_NOT_FOUND", 404);
+    if (row.status !== "pending_review"
+      || row.version !== input.expectedVersion
+      || row.updatedAt !== input.expectedUpdatedAt) {
+      throw new ApiError("after-sale record changed; refresh and retry", "DATA_VERSION_CONFLICT", 409);
+    }
+    const maxRefundableAmount = typeof row.amountCents === "number" ? row.amountCents : 0;
+    const approvedRefundAmount = input.approvedRefundAmount ?? maxRefundableAmount;
+    if (approvedRefundAmount > maxRefundableAmount) {
+      throw new ApiError("approved refund amount exceeds refundable amount", "REFUND_AMOUNT_EXCEEDED", 409);
+    }
+    const updatedAt = new Date().toISOString();
+    const nextStatus = action === "reject"
+      ? "rejected"
+      : input.returnRequired === true
+        ? "waiting_return"
+        : approvedRefundAmount > 0 ? "refund_pending" : "approved";
+    row.status = nextStatus;
+    row.afterSaleStatus = nextStatus;
+    row.refundStatus = action === "reject" ? "rejected" : approvedRefundAmount > 0 ? "pending" : "none";
+    row.approvedRefundAmount = action === "reject" ? 0 : approvedRefundAmount;
+    row.version += 1;
+    row.updatedAt = updatedAt;
+    row.reviewReason = input.reason;
+    const result = parseAfterSaleReviewResult({
+      item: {
+        id: row.id,
+        caseNo: typeof row.caseNo === "string" ? row.caseNo : "",
+        status: row.status,
+        version: row.version,
+        updatedAt
+      },
+      afterSaleId: row.id,
+      afterSaleStatus: row.status,
+      refundStatus: row.refundStatus,
+      approvedRefundAmount: row.approvedRefundAmount,
+      affected: 1,
+      reused: false,
+      decision: action,
+      message: action === "reject" ? "after-sale request rejected" : "after-sale request approved",
+      requestId: `mock-${crypto.randomUUID()}`
+    });
+    this.mutationResults.set(options.idempotencyKey, { fingerprint, result });
+    this.pushEvent("after-sale", row.id, action, row.version, ["status", "refundStatus", "version", "updatedAt"]);
+    return structuredClone(result);
+  }
+
+  private mutateRefund(
+    profile: AdminProfile,
+    action: RefundMutationAction,
+    payload: Record<string, unknown>,
+    options: MutationOptions
+  ): RefundMutationResult {
+    if (!profile.isActive
+      || !["finance", "super_admin"].includes(profile.role)
+      || !profileHasPermission(profile, "refund:process")) {
+      throw new ApiError("无权执行退款操作", "FORBIDDEN", 403);
+    }
+    const input = normalizeRefundMutationInput(action, payload);
+    if (options.expectedVersion !== input.expectedRefundVersion) {
+      throw new ApiError("退款版本与请求选项不一致", "EXPECTED_VERSION_MISMATCH", 400);
+    }
+    if (!options.idempotencyKey?.trim()) throw new ApiError("缺少幂等键", "IDEMPOTENCY_KEY_REQUIRED", 400);
+
+    const fingerprint = JSON.stringify({ resource: "refunds", action, input });
+    const prior = this.mutationResults.get(options.idempotencyKey);
+    if (prior && prior.fingerprint !== fingerprint) {
+      throw new ApiError("请求已被用于其他退款操作，请刷新后重试", "IDEMPOTENCY_KEY_CONFLICT", 409);
+    }
+    if (prior) {
+      return parseRefundMutationResult({ ...structuredClone(prior.result), affected: 0, reused: true });
+    }
+
+    const refund = (this.rows.refunds || []).find((row) => row.id === input.refundRecordId);
+    if (!refund) throw new ApiError("退款记录不存在", "REFUND_NOT_FOUND", 404);
+    if (!["pending", "processing", "failed"].includes(String(refund.status))) {
+      throw new ApiError("当前退款状态不可处理", "REFUND_STATUS_INVALID", 409);
+    }
+    if (refund.status !== input.expectedRefundStatus
+      || refund.version !== input.expectedRefundVersion
+      || refund.updatedAt !== input.expectedRefundUpdatedAt) {
+      throw new ApiError("退款记录已变化，请刷新后重试", "DATA_VERSION_CONFLICT", 409);
+    }
+
+    const updatedAt = new Date().toISOString();
+    const processInput = action === "process" ? input as RefundProcessRequest : null;
+    if (processInput && processInput.refundAmountCents > Number(refund.amountCents)) {
+      throw new ApiError("退款金额超过可退金额", "REFUND_AMOUNT_EXCEEDED", 409);
+    }
+    if (processInput) refund.amountCents = processInput.refundAmountCents;
+    refund.status = processInput ? "refunded" : "rejected";
+    refund.version += 1;
+    refund.updatedAt = updatedAt;
+    const result = parseRefundMutationResult({
+      item: {
+        id: refund.id,
+        refundNo: typeof refund.refundNo === "string" ? refund.refundNo : "",
+        status: refund.status,
+        version: refund.version,
+        updatedAt,
+        amountCents: refund.amountCents
+      },
+      affected: 1,
+      reused: false,
+      action,
+      accountRecalculationPending: action === "process",
+      message: action === "process" ? "退款已确认" : "退款已驳回",
+      requestId: `mock-${crypto.randomUUID()}`
+    });
+    this.mutationResults.set(options.idempotencyKey, { fingerprint, result });
+    this.pushEvent(
+      "refunds",
+      refund.id,
+      action,
+      refund.version,
+      processInput ? ["status", "amountCents", "version", "updatedAt"] : ["status", "version", "updatedAt"]
+    );
+    return structuredClone(result);
+  }
+
+  private mutateReturnInspection(
+    profile: AdminProfile,
+    action: ReturnInspectionAction,
+    payload: Record<string, unknown>,
+    options: MutationOptions
+  ): ReturnInspectionResult {
+    const permission = action === "receive" ? "after_sale:receive_return" : "after_sale:inspect";
+    if (!profile.isActive
+      || !["customer_service", "super_admin"].includes(profile.role)
+      || !profileHasPermission(profile, permission)) {
+      throw new ApiError("无权执行退货验收操作", "FORBIDDEN", 403);
+    }
+    const input = normalizeReturnInspectionInput(action, payload);
+    if (options.expectedVersion !== input.expectedVersion) {
+      throw new ApiError("退货验收版本与请求选项不一致", "EXPECTED_VERSION_MISMATCH", 400);
+    }
+    if (!options.idempotencyKey?.trim()) throw new ApiError("缺少幂等键", "IDEMPOTENCY_KEY_REQUIRED", 400);
+    const fingerprint = JSON.stringify({ resource: "after-sales", action, input });
+    const prior = this.mutationResults.get(options.idempotencyKey);
+    if (prior && prior.fingerprint !== fingerprint) {
+      throw new ApiError("请求已被用于其他退货验收操作，请刷新后重试", "IDEMPOTENCY_KEY_CONFLICT", 409);
+    }
+    if (prior) {
+      return parseReturnInspectionResult({ ...structuredClone(prior.result), affected: 0, reused: true });
+    }
+    const row = (this.rows["after-sales"] || []).find((candidate) => candidate.id === input.id);
+    if (!row) throw new ApiError("售后单不存在", "AFTER_SALE_NOT_FOUND", 404);
+    const expectedStatuses = action === "receive" ? ["waiting_return", "returned"] : ["received", "inspecting"];
+    if (!expectedStatuses.includes(String(row.status))
+      || row.version !== input.expectedVersion
+      || row.updatedAt !== input.expectedUpdatedAt) {
+      throw new ApiError("售后单已变化，请刷新后重试", "DATA_VERSION_CONFLICT", 409);
+    }
+    const updatedAt = new Date().toISOString();
+    const nextStatus = action === "receive"
+      ? "received"
+      : Number(row.approvedRefundAmount || row.amountCents || 0) > 0 ? "refund_pending" : "approved";
+    const inspectInput = input.action === "inspect" ? input : null;
+    const restoredQuantity = inspectInput ? inspectInput.restockQuantity : 0;
+    row.status = nextStatus;
+    row.afterSaleStatus = nextStatus;
+    row.version += 1;
+    row.updatedAt = updatedAt;
+    if (inspectInput) {
+      row.itemCondition = inspectInput.itemCondition;
+      row.inspectionResult = {
+        itemCondition: inspectInput.itemCondition,
+        canRestock: inspectInput.canRestock,
+        restockQuantity: restoredQuantity,
+        inspectionRemark: inspectInput.inspectionRemark
+      };
+    }
+    const result = parseReturnInspectionResult({
+      item: { id: row.id, status: nextStatus, version: row.version, updatedAt },
+      afterSaleId: row.id,
+      afterSaleStatus: nextStatus,
+      restoredQuantity,
+      affected: 1,
+      reused: false,
+      message: action === "receive" ? "已确认收到退货" : "退货验货已完成",
+      requestId: `mock-${crypto.randomUUID()}`
+    });
+    this.mutationResults.set(options.idempotencyKey, { fingerprint, result });
+    this.pushEvent("after-sale", row.id, action, row.version, ["status", "version", "updatedAt"]);
+    return structuredClone(result);
   }
 
   async catchUp(cursor?: string): Promise<SyncBatch> {

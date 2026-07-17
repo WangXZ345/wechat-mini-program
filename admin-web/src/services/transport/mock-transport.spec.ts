@@ -12,6 +12,144 @@ describe("MockTransport", () => {
     expect(profile.permissions).toContain("inventory:view");
   });
 
+  it("reviews after-sales with strict snapshots, role gates, and idempotent replay", async () => {
+    const transport = new MockTransport();
+    await transport.login({ account: "customer_service.demo", password: "demo-pass" });
+    const list = await transport.list<Record<string, unknown>>("after-sales", { page: 1, pageSize: 20 });
+    const row = list.items.find((item) => item.id === "as-001")!;
+    const version = Number(row.version);
+    const rowUpdatedAt = String(row.updatedAt);
+    const payload = {
+      id: row.id,
+      expectedStatus: row.status,
+      expectedVersion: version,
+      expectedUpdatedAt: rowUpdatedAt,
+      approvedRefundAmount: 12800,
+      returnRequired: true,
+      reason: "符合规则"
+    };
+    const first = await transport.mutate("after-sales", "approve", payload, {
+      idempotencyKey: "after-sale-review:approve:1",
+      expectedVersion: version
+    });
+    const replay = await transport.mutate("after-sales", "approve", payload, {
+      idempotencyKey: "after-sale-review:approve:1",
+      expectedVersion: version
+    });
+
+    expect(first).toMatchObject({ affected: 1, reused: false, decision: "approve" });
+    expect(first.item).toMatchObject({ id: "as-001", status: "waiting_return", version: 2 });
+    expect(replay).toMatchObject({ affected: 0, reused: true, decision: "approve" });
+    await expect(transport.mutate("after-sales", "approve", { ...payload, reason: "different" }, {
+      idempotencyKey: "after-sale-review:approve:1",
+      expectedVersion: version
+    })).rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_CONFLICT", status: 409 });
+
+    const finance = new MockTransport();
+    await finance.login({ account: "finance.demo", password: "demo-pass" });
+    await expect(finance.mutate("after-sales", "approve", payload, {
+      idempotencyKey: "after-sale-review:finance:1",
+      expectedVersion: version
+    })).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+  });
+
+  it("receives and inspects a return with strict snapshots and safe replay results", async () => {
+    const transport = new MockTransport();
+    await transport.login({ account: "customer_service.demo", password: "demo-pass" });
+    const row = (await transport.list<Record<string, unknown>>("after-sales", { page: 1, pageSize: 20 }))
+      .items.find((item) => item.id === "as-001")!;
+
+    const approved = await transport.mutate("after-sales", "approve", {
+      id: row.id,
+      expectedStatus: row.status,
+      expectedVersion: row.version,
+      expectedUpdatedAt: row.updatedAt,
+      approvedRefundAmount: 12_800,
+      returnRequired: true,
+      reason: "eligible return"
+    }, { idempotencyKey: "after-sale-return:approve", expectedVersion: Number(row.version) });
+    const approvedItem = approved.item!;
+
+    const receivePayload = {
+      id: row.id,
+      expectedStatus: "waiting_return",
+      expectedVersion: approvedItem.version,
+      expectedUpdatedAt: approvedItem.updatedAt,
+      remark: "parcel received"
+    };
+    const receiveOptions = {
+      idempotencyKey: "after-sale-return:receive",
+      expectedVersion: Number(approvedItem.version)
+    };
+    const received = await transport.mutate("after-sales", "receive", receivePayload, receiveOptions);
+    const receiveReplay = await transport.mutate("after-sales", "receive", receivePayload, receiveOptions);
+    const receivedItem = received.item!;
+
+    expect(received).toMatchObject({
+      item: { id: row.id, status: "received", version: Number(approvedItem.version) + 1 },
+      afterSaleId: row.id,
+      afterSaleStatus: "received",
+      restoredQuantity: 0,
+      affected: 1,
+      reused: false
+    });
+    expect(receiveReplay).toMatchObject({ item: received.item, affected: 0, reused: true });
+
+    const inspected = await transport.mutate("after-sales", "inspect", {
+      id: row.id,
+      expectedStatus: "received",
+      expectedVersion: receivedItem.version,
+      expectedUpdatedAt: receivedItem.updatedAt,
+      itemCondition: "sellable",
+      canRestock: true,
+      restockQuantity: 2,
+      inspectionRemark: "sellable"
+    }, {
+      idempotencyKey: "after-sale-return:inspect",
+      expectedVersion: Number(receivedItem.version)
+    });
+
+    expect(inspected).toMatchObject({
+      item: { id: row.id, status: "refund_pending", version: Number(receivedItem.version) + 1 },
+      afterSaleId: row.id,
+      afterSaleStatus: "refund_pending",
+      restoredQuantity: 2,
+      affected: 1,
+      reused: false
+    });
+    expect(Object.keys(inspected).sort()).toEqual([
+      "affected",
+      "afterSaleId",
+      "afterSaleStatus",
+      "item",
+      "message",
+      "requestId",
+      "restoredQuantity",
+      "reused"
+    ]);
+    expect(JSON.stringify(inspected)).not.toMatch(/openid|orderId|customer|payment|inventory/i);
+  });
+
+  it.each(["finance", "procurement"])("rejects %s return inspection even with injected permissions", async (role) => {
+    const transport = new MockTransport();
+    const profile = await transport.login({ account: `${role}.demo`, password: "demo-pass" });
+    (transport as unknown as { profile: typeof profile }).profile = {
+      ...profile,
+      permissions: [...profile.permissions, "after_sale:receive_return", "after_sale:inspect"]
+    };
+
+    await expect(transport.mutate("after-sales", "receive", {
+      id: "as-002",
+      expectedStatus: "waiting_return",
+      expectedVersion: 3,
+      expectedUpdatedAt: "2026-07-16T08:00:00.000Z",
+      remark: ""
+    }, {
+      idempotencyKey: `after-sale-return:forbidden:${role}`,
+      expectedVersion: 3
+    })).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+  });
+
   it("sets product status explicitly and replays the same idempotent result", async () => {
     const transport = new MockTransport();
     await transport.login({ account: "procurement.demo", password: "demo-pass" });
@@ -635,6 +773,205 @@ describe("MockTransport", () => {
   });
 });
 
+describe("MockTransport refund mutation", () => {
+  it("protects refund list and get with the same active finance boundary as real mode", async () => {
+    const denied = [
+      { account: "customer_service.demo", mutate: (profile: Awaited<ReturnType<MockTransport["login"]>>) => profile },
+      { account: "procurement.demo", mutate: (profile: Awaited<ReturnType<MockTransport["login"]>>) => profile },
+      { account: "finance.demo", mutate: (profile: Awaited<ReturnType<MockTransport["login"]>>) => ({ ...profile, isActive: false, status: "disabled" as const }) },
+      {
+        account: "finance.demo",
+        mutate: (profile: Awaited<ReturnType<MockTransport["login"]>>) => ({
+          ...profile,
+          permissions: profile.permissions.filter((permission) => permission !== "refund:view")
+        })
+      }
+    ];
+
+    for (const scenario of denied) {
+      const transport = new MockTransport();
+      const profile = await transport.login({ account: scenario.account, password: "demo-pass" });
+      (transport as unknown as { profile: typeof profile }).profile = scenario.mutate(profile);
+      await expect(transport.list("refunds", { page: 1, pageSize: 20 }))
+        .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+      await expect(transport.get("refunds", "ref-001"))
+        .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    }
+
+    for (const role of ["finance", "super_admin"] as const) {
+      const transport = new MockTransport();
+      const profile = await transport.login({ account: `${role}.demo`, password: "demo-pass" });
+      expect(profile.isActive).toBe(true);
+      expect(profile.permissions).toSatisfy((permissions: string[]) => permissions.includes("refund:view") || permissions.includes("*"));
+      await expect(transport.list("refunds", { page: 1, pageSize: 20 }))
+        .resolves.toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ id: "ref-001" })]) });
+      await expect(transport.get("refunds", "ref-001"))
+        .resolves.toMatchObject({ id: "ref-001" });
+    }
+  });
+
+  it.each(["pending", "processing", "failed"])("allows finance to process the canonical %s snapshot and replay it", async (status) => {
+    const transport = new MockTransport();
+    await transport.login({ account: "finance.demo", password: "demo-pass" });
+    const row = (await transport.list("refunds", { page: 1, pageSize: 20, status })).items[0]!;
+    const payload = {
+      refundRecordId: row.id, refundAmountCents: row.amountCents, expectedRefundStatus: row.status,
+      expectedRefundVersion: row.version, expectedRefundUpdatedAt: row.updatedAt, financeRemark: "reconciled", refundProofFileIds: []
+    };
+    const options = { idempotencyKey: `refund-process:${status}`, expectedVersion: Number(row.version) };
+    const first = await transport.mutate("refunds", "process", payload, options);
+    const replay = await transport.mutate("refunds", "process", payload, options);
+    expect(first).toMatchObject({ affected: 1, reused: false, action: "process", item: { id: row.id, status: "refunded" } });
+    expect(replay).toMatchObject({ affected: 0, reused: true, action: "process", item: first.item });
+  });
+
+  it("returns refunded for a legal process amount below the refund record amount", async () => {
+    const transport = new MockTransport();
+    await transport.login({ account: "finance.demo", password: "demo-pass" });
+    const row = (await transport.list<Record<string, unknown>>("refunds", {
+      page: 1,
+      pageSize: 20,
+      status: "pending"
+    })).items[0]!;
+    const requestedAmountCents = Number(row.amountCents) - 1;
+    const payload = {
+      refundRecordId: row.id,
+      refundAmountCents: requestedAmountCents,
+      expectedRefundStatus: row.status,
+      expectedRefundVersion: row.version,
+      expectedRefundUpdatedAt: row.updatedAt,
+      financeRemark: "approved canonical process",
+      refundProofFileIds: []
+    };
+    const options = {
+      idempotencyKey: "refund-process-less-than-row",
+      expectedVersion: Number(row.version)
+    };
+    const result = await transport.mutate("refunds", "process", payload, options);
+    const replay = await transport.mutate("refunds", "process", payload, options);
+    const listed = (await transport.list<Record<string, unknown>>("refunds", {
+      page: 1,
+      pageSize: 20
+    })).items.find((item) => item.id === row.id);
+    const detail = await transport.get<Record<string, unknown>>("refunds", String(row.id));
+
+    expect(result).toMatchObject({
+      action: "process",
+      reused: false,
+      item: { id: row.id, status: "refunded", amountCents: requestedAmountCents }
+    });
+    expect(replay).toMatchObject({
+      action: "process",
+      reused: true,
+      item: { id: row.id, status: "refunded", amountCents: requestedAmountCents }
+    });
+    expect(listed).toMatchObject({ id: row.id, status: "refunded", amountCents: requestedAmountCents });
+    expect(detail).toMatchObject({ id: row.id, status: "refunded", amountCents: requestedAmountCents });
+  });
+
+  it("rejects seven unique refund proofs before mutating mock state", async () => {
+    const transport = new MockTransport();
+    await transport.login({ account: "finance.demo", password: "demo-pass" });
+    const row = (await transport.list<Record<string, unknown>>("refunds", {
+      page: 1,
+      pageSize: 20,
+      status: "pending"
+    })).items[0]!;
+    const payload = {
+      refundRecordId: row.id,
+      refundAmountCents: row.amountCents,
+      expectedRefundStatus: row.status,
+      expectedRefundVersion: row.version,
+      expectedRefundUpdatedAt: row.updatedAt,
+      financeRemark: "",
+      refundProofFileIds: Array.from(
+        { length: 7 },
+        (_, index) => `cloud://env.refund-proof-${index + 1}`
+      )
+    };
+
+    await expect(transport.mutate("refunds", "process", payload, {
+      idempotencyKey: "refund-proof-limit",
+      expectedVersion: Number(row.version)
+    })).rejects.toMatchObject({ code: "INVALID_REFUND_MUTATION", status: 400 });
+    await expect(transport.get("refunds", String(row.id))).resolves.toMatchObject({
+      id: row.id,
+      status: row.status,
+      version: row.version
+    });
+  });
+
+  it("rejects unauthorized roles, terminal snapshots, unknown DTO fields, and changed replays", async () => {
+    const transport = new MockTransport();
+    await transport.login({ account: "customer_service.demo", password: "demo-pass" });
+    await expect(transport.mutate("refunds", "process", {
+      refundRecordId: "ref-001", refundAmountCents: 9_900, expectedRefundStatus: "pending", expectedRefundVersion: 1,
+      expectedRefundUpdatedAt: "2026-07-17T08:00:00.000Z", financeRemark: "", refundProofFileIds: []
+    }, { idempotencyKey: "refund-forbidden", expectedVersion: 1 })).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+
+    const finance = new MockTransport();
+    await finance.login({ account: "finance.demo", password: "demo-pass" });
+    const pending = (await finance.list<Record<string, unknown>>("refunds", { page: 1, pageSize: 20, status: "pending" })).items[0]!;
+    const payload = {
+      refundRecordId: pending.id,
+      refundAmountCents: pending.amountCents,
+      expectedRefundStatus: pending.status,
+      expectedRefundVersion: pending.version,
+      expectedRefundUpdatedAt: pending.updatedAt,
+      financeRemark: "",
+      refundProofFileIds: []
+    };
+    const options = { idempotencyKey: "refund-strict-replay", expectedVersion: Number(pending.version) };
+    await expect(finance.mutate("refunds", "process", {
+      ...payload,
+      refundAmountCents: Number(pending.amountCents) + 1
+    }, { idempotencyKey: "refund-amount-exceeded", expectedVersion: Number(pending.version) }))
+      .rejects.toMatchObject({ code: "REFUND_AMOUNT_EXCEEDED", status: 409 });
+    await expect(finance.mutate("refunds", "process", { ...payload, orderId: "secret" }, options))
+      .rejects.toMatchObject({ code: "INVALID_REFUND_MUTATION", status: 400 });
+    const first = await finance.mutate("refunds", "process", payload, options);
+    await expect(finance.mutate("refunds", "process", { ...payload, financeRemark: "changed" }, options))
+      .rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_CONFLICT", status: 409 });
+    expect(first).toMatchObject({ reused: false, item: { status: "refunded" } });
+
+    const terminal = (await finance.list<Record<string, unknown>>("refunds", {
+      page: 1,
+      pageSize: 20,
+      status: "refunded"
+    })).items[0]!;
+    await expect(finance.mutate("refunds", "reject", {
+      refundRecordId: terminal.id,
+      expectedRefundStatus: terminal.status,
+      expectedRefundVersion: terminal.version,
+      expectedRefundUpdatedAt: terminal.updatedAt,
+      rejectReason: "not allowed"
+    }, { idempotencyKey: "refund-terminal", expectedVersion: Number(terminal.version) }))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  it("allows only active finance and super_admin with refund:process", async () => {
+    for (const role of ["finance", "super_admin"] as const) {
+      const transport = new MockTransport();
+      const profile = await transport.login({ account: `${role}.demo`, password: "demo-pass" });
+      const row = (await transport.list<Record<string, unknown>>("refunds", { page: 1, pageSize: 20, status: "pending" })).items[0]!;
+      (transport as unknown as { profile: typeof profile }).profile = {
+        ...profile,
+        permissions: profile.permissions.filter((permission) => permission !== "refund:process" && permission !== "*")
+      };
+      await expect(transport.mutate("refunds", "process", {
+        refundRecordId: row.id,
+        refundAmountCents: row.amountCents,
+        expectedRefundStatus: row.status,
+        expectedRefundVersion: row.version,
+        expectedRefundUpdatedAt: row.updatedAt,
+        financeRemark: "",
+        refundProofFileIds: []
+      }, { idempotencyKey: `refund-permission-${role}`, expectedVersion: Number(row.version) }))
+        .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    }
+  });
+});
+
 describe("MockTransport inventory adjustment", () => {
   beforeEach(() => window.sessionStorage.clear());
 
@@ -986,14 +1323,113 @@ describe("MockTransport inventory adjustment", () => {
     await expect(transport.getAccountDetail("acct-001")).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
   });
 
-  it.each(["finance", "super_admin"])("allows %s to read masked payment records while keeping writes closed", async (role) => {
+  it.each(["finance", "super_admin"])("allows %s to confirm a current payment and safely replay the same key", async (role) => {
     const transport = new MockTransport();
     await transport.login({ account: `${role}.demo`, password: "demo-pass" });
     const list = await transport.list("payments", { page: 1, pageSize: 20, status: "pending_confirm" });
-    expect(list.items[0]).toEqual(expect.objectContaining({ proofLabel: "已提交凭证", proofCount: expect.any(Number), amountCents: expect.any(Number) }));
+    const row = list.items[0]!;
+    expect(row).toEqual(expect.objectContaining({ proofLabel: "已提交凭证", proofCount: expect.any(Number), amountCents: expect.any(Number), version: expect.any(Number), updatedAt: expect.any(String) }));
     expect(list.items[0]).not.toHaveProperty("paymentScreenshotUrl");
-    await expect(transport.get("payments", String(list.items[0]?.id))).resolves.toEqual(expect.objectContaining({ id: list.items[0]?.id }));
-    await expect(transport.mutate("payments", "confirm", { id: list.items[0]?.id }, { idempotencyKey: "payment-confirm-closed" })).rejects.toMatchObject({ code: "SERVICE_NOT_MIGRATED", status: 501 });
+    await expect(transport.get("payments", String(row.id))).resolves.toEqual(expect.objectContaining({ id: row.id }));
+    const payload = {
+      id: row.id,
+      expectedStatus: "pending_confirm",
+      expectedVersion: row.version,
+      expectedUpdatedAt: row.updatedAt,
+      reason: "已核对到账"
+    };
+    const options = { idempotencyKey: `payment-confirm:${role}`, expectedVersion: Number(row.version) };
+    const first = await transport.mutate("payments", "confirm", {
+      ...payload,
+      id: `  ${String(row.id)}  `,
+      reason: "  已核对到账  "
+    }, options);
+    const replay = await transport.mutate("payments", "confirm", payload, options);
+    const updated = await transport.get("payments", String(row.id));
+
+    expect(first).toMatchObject({ affected: 1, reused: false, decision: "confirm", item: { id: row.id, status: "paid", version: Number(row.version) + 1 } });
+    expect(replay).toMatchObject({ affected: 0, reused: true, decision: "confirm", item: first.item });
+    expect(Object.keys(first).sort()).toEqual(["accountRecalculationPending", "affected", "decision", "item", "message", "requestId", "reused"]);
+    expect(updated).toMatchObject({ id: row.id, status: "paid", version: Number(row.version) + 1 });
+    expect(JSON.stringify(first)).not.toMatch(/amount|proof|openid|orderId|userId|transaction/i);
+  });
+
+  it("rejects a current payment with a trimmed reason and the strict safe result", async () => {
+    const transport = new MockTransport();
+    await transport.login({ account: "finance.demo", password: "demo-pass" });
+    const row = (await transport.list("payments", { page: 1, pageSize: 20, status: "pending_confirm" })).items[0]!;
+
+    const result = await transport.mutate("payments", "reject", {
+      id: row.id,
+      expectedStatus: "pending_confirm",
+      expectedVersion: row.version,
+      expectedUpdatedAt: row.updatedAt,
+      reason: "  凭证不清晰  "
+    }, { idempotencyKey: "payment-reject:test", expectedVersion: Number(row.version) });
+
+    expect(result).toMatchObject({ affected: 1, reused: false, decision: "reject", item: { id: row.id, status: "rejected", version: Number(row.version) + 1 } });
+    await expect(transport.get("payments", String(row.id))).resolves.toMatchObject({ status: "rejected" });
+  });
+
+  it.each([
+    { role: "finance", active: true, permissions: [], action: "confirm" },
+    { role: "finance", active: true, permissions: ["payment:confirm"], action: "reject" },
+    { role: "customer_service", active: true, permissions: ["payment:confirm", "payment:update_status"], action: "confirm" },
+    { role: "procurement", active: true, permissions: ["payment:confirm", "payment:update_status"], action: "reject" },
+    { role: "finance", active: false, permissions: ["payment:confirm", "payment:update_status"], action: "confirm" }
+  ])("rejects an unauthorized payment mutation %#", async ({ role, active, permissions, action }) => {
+    const transport = new MockTransport();
+    const profile = await transport.login({ account: `${role}.demo`, password: "demo-pass" });
+    (transport as unknown as { profile: typeof profile }).profile = { ...profile, isActive: active, permissions };
+    const payload = {
+      id: "pay-001",
+      expectedStatus: "pending_confirm",
+      expectedVersion: 1,
+      expectedUpdatedAt: "2026-07-13T08:05:00.000Z",
+      reason: action === "reject" ? "凭证无效" : ""
+    };
+
+    await expect(transport.mutate("payments", action, payload, {
+      idempotencyKey: `payment-forbidden:${role}:${action}`,
+      expectedVersion: 1
+    })).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+  });
+
+  it("guards payment request fields, snapshot version/time/state, and idempotency payload changes", async () => {
+    const transport = new MockTransport();
+    await transport.login({ account: "finance.demo", password: "demo-pass" });
+    const row = (await transport.list("payments", { page: 1, pageSize: 20, status: "pending_confirm" })).items[0]!;
+    const payload = {
+      id: row.id,
+      expectedStatus: "pending_confirm",
+      expectedVersion: row.version,
+      expectedUpdatedAt: row.updatedAt,
+      reason: "已核对"
+    };
+
+    await expect(transport.mutate("payments", "confirm", { ...payload, orderId: "forbidden" }, {
+      idempotencyKey: "payment-invalid:field", expectedVersion: Number(row.version)
+    })).rejects.toMatchObject({ code: "INVALID_PAYMENT_MUTATION", status: 400 });
+    await expect(transport.mutate("payments", "confirm", { ...payload, expectedVersion: Number(row.version) + 1 }, {
+      idempotencyKey: "payment-invalid:version", expectedVersion: Number(row.version) + 1
+    })).rejects.toMatchObject({ code: "DATA_VERSION_CONFLICT", status: 409 });
+    await expect(transport.mutate("payments", "confirm", { ...payload, expectedUpdatedAt: "2026-07-13T08:05:01.000Z" }, {
+      idempotencyKey: "payment-invalid:time", expectedVersion: Number(row.version)
+    })).rejects.toMatchObject({ code: "DATA_VERSION_CONFLICT", status: 409 });
+
+    const options = { idempotencyKey: "payment-conflict:key", expectedVersion: Number(row.version) };
+    await transport.mutate("payments", "confirm", payload, options);
+    await expect(transport.mutate("payments", "confirm", { ...payload, reason: "changed" }, options))
+      .rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_CONFLICT", status: 409 });
+    await expect(transport.mutate("payments", "confirm", payload, { idempotencyKey: "payment-after-paid", expectedVersion: Number(row.version) }))
+      .rejects.toMatchObject({ code: "PAYMENT_STATE_CONFLICT", status: 409 });
+  });
+
+  it("keeps unrelated payment write actions closed", async () => {
+    const transport = new MockTransport();
+    await transport.login({ account: "finance.demo", password: "demo-pass" });
+    await expect(transport.mutate("payments", "partial", { id: "pay-001" }, { idempotencyKey: "payment-partial:closed" }))
+      .rejects.toMatchObject({ code: "SERVICE_NOT_MIGRATED", status: 501 });
   });
 
   it.each(["customer_service", "procurement"]) ("rejects %s payment reads", async (role) => {

@@ -36,6 +36,10 @@ const orderReviewModule = require("./lib/orderReviewService");
 const shipmentQueryModule = require("./lib/shipmentQueryService");
 const accountQueryModule = require("./lib/accountQueryService");
 const paymentQueryModule = require("./lib/paymentQueryService");
+const paymentMutationModule = require("./lib/paymentMutationService");
+const afterSaleReviewModule = require("./lib/afterSaleReviewService");
+const returnInspectionModule = require("./lib/returnInspectionService");
+const refundMutationModule = require("./lib/refundMutationService");
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
@@ -131,6 +135,38 @@ const defaultOrderQueryService = orderQueryModule.createOrderQueryService({ db, 
 const defaultShipmentQueryService = shipmentQueryModule.createShipmentQueryService({ db, command });
 const defaultAccountQueryService = accountQueryModule.createAccountQueryService({ db, command });
 const defaultPaymentQueryService = paymentQueryModule.createPaymentQueryService({ db, command });
+const defaultPaymentMutationService = paymentMutationModule.createPaymentMutationService({
+  db,
+  idempotency: inventoryWarningIdempotency,
+  ownerKeyFor,
+  syncOwnerPepper: process.env.SYNC_OWNER_PEPPER,
+  recalculateAccount({ userId, userOpenid }) {
+    return cloud.callFunction({ name: "recalculateCustomerAccount", data: { userId, userOpenid } });
+  }
+});
+const defaultAfterSaleReviewService = afterSaleReviewModule.createAfterSaleReviewService({
+  db,
+  idempotency: inventoryWarningIdempotency,
+  ownerKeyFor,
+  syncOwnerPepper: process.env.SYNC_OWNER_PEPPER
+});
+const defaultReturnInspectionService = returnInspectionModule.createReturnInspectionService({
+  db,
+  idempotency: inventoryWarningIdempotency,
+  ownerKeyFor,
+  syncOwnerPepper: process.env.SYNC_OWNER_PEPPER,
+  applyInventoryMutationInTransaction: inventoryMutationModule.applyInventoryMutationInTransaction,
+  stockAlert: inventoryWarningStockAlert
+});
+const defaultRefundMutationService = refundMutationModule.createRefundMutationService({
+  db,
+  idempotency: inventoryWarningIdempotency,
+  ownerKeyFor,
+  syncOwnerPepper: process.env.SYNC_OWNER_PEPPER,
+  recalculateAccount({ accountId }) {
+    return cloud.callFunction({ name: "recalculateCustomerAccount", data: { accountId } });
+  }
+});
 const defaultOrderReviewService = orderReviewModule.createOrderReviewService({
   db,
   command,
@@ -291,6 +327,805 @@ async function readWebPaymentDetail(id, principal, service = defaultPaymentQuery
   } catch (error) {
     throw paymentQueryApiError(error);
   }
+}
+const PAYMENT_MUTATION_BODY_FIELDS = new Set([
+  "paymentId",
+  "expectedStatus",
+  "expectedVersion",
+  "expectedUpdatedAt",
+  "reason"
+]);
+const PAYMENT_MUTATION_INPUT_ERRORS = new Set([
+  "UNKNOWN_FIELD",
+  "PAYMENT_ID_REQUIRED",
+  "PAYMENT_ID_INVALID",
+  "DECISION_INVALID",
+  "EXPECTED_STATUS_REQUIRED",
+  "EXPECTED_STATUS_INVALID",
+  "EXPECTED_VERSION_REQUIRED",
+  "EXPECTED_VERSION_INVALID",
+  "EXPECTED_UPDATED_AT_REQUIRED",
+  "EXPECTED_UPDATED_AT_INVALID",
+  "REASON_REQUIRED",
+  "REASON_INVALID",
+  "IDEMPOTENCY_KEY_REQUIRED",
+  "IDEMPOTENCY_KEY_INVALID"
+]);
+const PAYMENT_MUTATION_CONFLICT_ERRORS = new Set([
+  "DATA_VERSION_CONFLICT",
+  "DATA_VERSION_INVALID",
+  "PAYMENT_STATUS_CONFLICT",
+  "PAYMENT_RECORD_STALE",
+  "ORDER_STATUS_CONFLICT",
+  "ORDER_AMOUNT_INVALID",
+  "ORDER_ALREADY_PAID",
+  "PAYMENT_OVERPAY",
+  "ACCOUNT_DUPLICATE",
+  "ACCOUNT_IDENTITY_CONFLICT",
+  "ACCOUNT_AMOUNT_INVALID",
+  "ACCOUNT_MUTATION_VERSION_INVALID",
+  "ACCOUNT_ID_REQUIRED",
+  "ACCOUNT_LOG_DUPLICATE",
+  "ACCOUNT_LOG_CONFLICT",
+  "ACCOUNT_MUTATION_LOG_DUPLICATE",
+  "ACCOUNT_MUTATION_LOG_CONFLICT",
+  "SYNC_EVENT_DUPLICATE",
+  "SYNC_EVENT_CONFLICT",
+  "BUSINESS_LOG_DUPLICATE",
+  "BUSINESS_LOG_CONFLICT",
+  "DELIVERY_LOG_DUPLICATE",
+  "DELIVERY_LOG_CONFLICT",
+  "PAYMENT_PREFLIGHT_INVALID",
+  "IDEMPOTENCY_KEY_CONFLICT",
+  "IDEMPOTENCY_PROCESSING",
+  "IDEMPOTENCY_NOT_EXECUTABLE"
+]);
+
+function paymentMutationRoute(route = {}) {
+  return route.resource === "payments" && ["confirm", "reject"].includes(route.mutationAction);
+}
+
+function assertWebPaymentMutation(principal, action) {
+  const permission = action === "reject" ? "payment:update_status" : "payment:confirm";
+  if (!principal
+    || principal.status !== "active"
+    || principal.isActive === false
+    || !PAYMENT_WEB_ROLES.has(principal.role)
+    || !Array.isArray(principal.permissions)
+    || (!principal.permissions.includes("*") && !principal.permissions.includes(permission))) {
+    throw new ApiError("FORBIDDEN", "无权执行付款审核操作", 403);
+  }
+}
+
+function normalizePaymentMutation(request = {}) {
+  const body = request.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError("INVALID_REQUEST_BODY", "付款审核请求无效", 400);
+  }
+  if (Object.keys(body).some((key) => !PAYMENT_MUTATION_BODY_FIELDS.has(key))) {
+    throw new ApiError("INVALID_REQUEST_BODY", "付款审核请求包含不允许的字段", 400);
+  }
+  let idempotencyKey;
+  try {
+    idempotencyKey = inventoryWarningIdempotency.assertIdempotencyKey(
+      request.headers && (request.headers["idempotency-key"] || request.headers["Idempotency-Key"])
+    );
+  } catch (error) {
+    throw new ApiError(error.code || "IDEMPOTENCY_KEY_INVALID", "付款审核操作凭证无效", 400);
+  }
+  if (typeof body.paymentId !== "string" || !body.paymentId.trim()) {
+    throw new ApiError("PAYMENT_ID_REQUIRED", "缺少付款记录 ID", 400);
+  }
+  if (body.paymentId.trim().length > 128) {
+    throw new ApiError("PAYMENT_ID_INVALID", "付款记录 ID 格式无效", 400);
+  }
+  if (body.expectedStatus === undefined || body.expectedStatus === null || body.expectedStatus === "") {
+    throw new ApiError("EXPECTED_STATUS_REQUIRED", "缺少付款当前状态，请刷新后重试", 400);
+  }
+  if (body.expectedStatus !== "pending_confirm") {
+    throw new ApiError("EXPECTED_STATUS_INVALID", "付款当前状态无效，请刷新后重试", 400);
+  }
+  if (body.expectedVersion === undefined || body.expectedVersion === null || body.expectedVersion === "") {
+    throw new ApiError("EXPECTED_VERSION_REQUIRED", "缺少付款记录版本，请刷新后重试", 400);
+  }
+  if (typeof body.expectedVersion !== "number" || !Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) {
+    throw new ApiError("EXPECTED_VERSION_INVALID", "付款记录版本无效，请刷新后重试", 400);
+  }
+  if (body.expectedUpdatedAt === undefined || body.expectedUpdatedAt === null || body.expectedUpdatedAt === "") {
+    throw new ApiError("EXPECTED_UPDATED_AT_REQUIRED", "缺少付款记录更新时间，请刷新后重试", 400);
+  }
+  if (typeof body.expectedUpdatedAt !== "string") {
+    throw new ApiError("EXPECTED_UPDATED_AT_INVALID", "付款记录更新时间无效，请刷新后重试", 400);
+  }
+  const parsedUpdatedAt = new Date(body.expectedUpdatedAt);
+  if (Number.isNaN(parsedUpdatedAt.getTime()) || parsedUpdatedAt.toISOString() !== body.expectedUpdatedAt) {
+    throw new ApiError("EXPECTED_UPDATED_AT_INVALID", "付款记录更新时间无效，请刷新后重试", 400);
+  }
+  if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.trim().length > 300)) {
+    throw new ApiError("REASON_INVALID", "付款审核原因格式无效", 400);
+  }
+  const reason = body.reason === undefined ? "" : body.reason.trim();
+  const decision = request.route && request.route.mutationAction === "reject" ? "reject" : "confirm";
+  if (decision === "reject" && !reason) {
+    throw new ApiError("REASON_REQUIRED", "请填写驳回原因", 400);
+  }
+  return {
+    idempotencyKey,
+    input: {
+      paymentId: body.paymentId.trim(),
+      decision,
+      expectedStatus: "pending_confirm",
+      expectedVersion: body.expectedVersion,
+      expectedUpdatedAt: body.expectedUpdatedAt,
+      reason
+    }
+  };
+}
+
+function paymentMutationActor(auth = {}) {
+  return inventoryWarningActor(auth);
+}
+
+function paymentMutationApiError(error) {
+  const code = cleanString(error && error.code, 80);
+  if (PAYMENT_MUTATION_INPUT_ERRORS.has(code)) {
+    const message = code === "REASON_REQUIRED" ? "请填写驳回原因" : "付款审核请求无效";
+    return new ApiError(code, message, 400);
+  }
+  if (code === "FORBIDDEN" || code === "INVALID_ACTOR") {
+    return new ApiError(code, "无权执行付款审核操作", 403);
+  }
+  if (code === "PAYMENT_NOT_FOUND" || code === "ORDER_NOT_FOUND") {
+    return new ApiError(code, "付款记录或关联订单不存在", 404);
+  }
+  if (PAYMENT_MUTATION_CONFLICT_ERRORS.has(code)) {
+    return new ApiError(code, "付款记录或订单状态已变化，请刷新后重试", 409);
+  }
+  if (code === "SYNC_OWNER_CONFIG_REQUIRED" || code === "CLOCK_INVALID") {
+    return new ApiError(code, "付款审核服务暂时不可用，请稍后重试", 503);
+  }
+  return new ApiError("PAYMENT_MUTATION_FAILED", "付款审核服务暂时不可用，请稍后重试", 503);
+}
+
+function paymentMutationResult(result = {}, requestId = "") {
+  const paymentId = cleanString(result.paymentId, 128);
+  const decision = result.decision === "reject" ? "reject" : result.decision === "confirm" ? "confirm" : "";
+  const status = cleanString(result.status, 60);
+  const updatedAt = dateValue(result.updatedAt);
+  if (!paymentId
+    || !decision
+    || !status
+    || !updatedAt
+    || typeof result.version !== "number"
+    || !Number.isSafeInteger(result.version)
+    || result.version < 0) {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "付款审核结果无效", 502);
+  }
+  return {
+    item: {
+      id: paymentId,
+      orderNo: cleanString(result.orderNo, 100),
+      status,
+      version: result.version,
+      updatedAt
+    },
+    affected: result.affected === 1 ? 1 : 0,
+    reused: result.reused === true,
+    decision,
+    accountRecalculationPending: result.accountRecalculationPending === true,
+    message: decision === "reject" ? "付款凭证已驳回" : "付款已确认",
+    requestId
+  };
+}
+
+const REFUND_MUTATION_ROLES = new Set(["finance", "super_admin"]);
+const REFUND_PROCESSABLE_STATUSES = new Set(["pending", "processing", "failed"]);
+const REFUND_MUTATION_BODY_FIELDS = Object.freeze({
+  process: new Set([
+    "refundRecordId",
+    "refundAmountCents",
+    "expectedRefundStatus",
+    "expectedRefundVersion",
+    "expectedRefundUpdatedAt",
+    "financeRemark",
+    "refundProofFileIds"
+  ]),
+  reject: new Set([
+    "refundRecordId",
+    "expectedRefundStatus",
+    "expectedRefundVersion",
+    "expectedRefundUpdatedAt",
+    "rejectReason"
+  ])
+});
+const REFUND_MUTATION_INPUT_ERRORS = new Set([
+  "INVALID_REQUEST_BODY",
+  "UNKNOWN_FIELD",
+  "REFUND_INPUT_INVALID",
+  "REFUND_RECORD_ID_REQUIRED",
+  "INVALID_REFUND_AMOUNT",
+  "EXPECTED_REFUND_STATUS_REQUIRED",
+  "EXPECTED_REFUND_STATUS_INVALID",
+  "EXPECTED_REFUND_VERSION_REQUIRED",
+  "EXPECTED_REFUND_VERSION_INVALID",
+  "EXPECTED_REFUND_UPDATED_AT_REQUIRED",
+  "EXPECTED_REFUND_UPDATED_AT_INVALID",
+  "FINANCE_REMARK_INVALID",
+  "FINANCEREMARK_INVALID",
+  "REJECT_REASON_REQUIRED",
+  "REJECT_REASON_INVALID",
+  "REJECTREASON_REQUIRED",
+  "REJECTREASON_INVALID",
+  "REFUND_PROOF_INVALID",
+  "REFUND_PROOF_LIMIT_EXCEEDED",
+  "IDEMPOTENCY_KEY_REQUIRED",
+  "IDEMPOTENCY_KEY_INVALID"
+]);
+const REFUND_MUTATION_NOT_FOUND_ERRORS = new Set([
+  "REFUND_NOT_FOUND",
+  "AFTER_SALE_NOT_FOUND",
+  "ORDER_NOT_FOUND",
+  "ACCOUNT_NOT_FOUND",
+  "ORDER_ITEM_NOT_FOUND"
+]);
+const REFUND_MUTATION_CONFLICT_ERRORS = new Set([
+  "DATA_VERSION_CONFLICT",
+  "DATA_VERSION_INVALID",
+  "DATA_REFUND_AMOUNT_INVALID",
+  "REFUND_STATUS_CONFLICT",
+  "REFUND_RELATION_CONFLICT",
+  "REFUND_APPROVAL_LIMIT_EXCEEDED",
+  "REFUND_PAID_LIMIT_EXCEEDED",
+  "REFUND_RECORD_AMOUNT_EXCEEDED",
+  "REFUND_HISTORY_LIMIT_EXCEEDED",
+  "RETURN_INSPECTION_REQUIRED",
+  "REFUND_ITEM_QUANTITY_RECONCILIATION_REQUIRED",
+  "ACCOUNT_DUPLICATE",
+  "ACCOUNT_IDENTITY_CONFLICT",
+  "AFTER_SALE_NOT_APPROVED",
+  "IMMUTABLE_EVIDENCE_MISSING",
+  "IMMUTABLE_EVIDENCE_DUPLICATE",
+  "IMMUTABLE_EVIDENCE_CONFLICT",
+  "IDEMPOTENCY_KEY_CONFLICT",
+  "IDEMPOTENCY_PROCESSING",
+  "IDEMPOTENCY_NOT_EXECUTABLE"
+]);
+
+function refundMutationRoute(route = {}) {
+  return route.resource === "refunds" && ["process", "reject"].includes(route.mutationAction);
+}
+
+function assertWebRefundMutation(principal) {
+  if (!principal
+    || principal.status !== "active"
+    || principal.isActive === false
+    || !REFUND_MUTATION_ROLES.has(principal.role)
+    || !Array.isArray(principal.permissions)
+    || (!principal.permissions.includes("*") && !principal.permissions.includes("refund:process"))) {
+    throw new ApiError("FORBIDDEN", "无权执行退款操作", 403);
+  }
+}
+
+function refundMutationIdempotencyKey(request = {}) {
+  try {
+    return inventoryWarningIdempotency.assertIdempotencyKey(
+      request.headers && (request.headers["idempotency-key"] || request.headers["Idempotency-Key"])
+    );
+  } catch (error) {
+    throw new ApiError(error.code || "IDEMPOTENCY_KEY_INVALID", "退款操作凭证无效", 400);
+  }
+}
+
+function refundExpectedSnapshots(body) {
+  if (body.expectedRefundStatus === undefined || body.expectedRefundStatus === null || body.expectedRefundStatus === "") {
+    throw new ApiError("EXPECTED_REFUND_STATUS_REQUIRED", "缺少退款当前状态，请刷新后重试", 400);
+  }
+  if (typeof body.expectedRefundStatus !== "string"
+    || !REFUND_PROCESSABLE_STATUSES.has(body.expectedRefundStatus)) {
+    throw new ApiError("EXPECTED_REFUND_STATUS_INVALID", "退款当前状态无效，请刷新后重试", 400);
+  }
+  if (body.expectedRefundVersion === undefined || body.expectedRefundVersion === null || body.expectedRefundVersion === "") {
+    throw new ApiError("EXPECTED_REFUND_VERSION_REQUIRED", "缺少退款记录版本，请刷新后重试", 400);
+  }
+  if (!Number.isSafeInteger(body.expectedRefundVersion) || body.expectedRefundVersion < 0) {
+    throw new ApiError("EXPECTED_REFUND_VERSION_INVALID", "退款记录版本无效，请刷新后重试", 400);
+  }
+  if (body.expectedRefundUpdatedAt === undefined || body.expectedRefundUpdatedAt === null || body.expectedRefundUpdatedAt === "") {
+    throw new ApiError("EXPECTED_REFUND_UPDATED_AT_REQUIRED", "缺少退款记录更新时间，请刷新后重试", 400);
+  }
+  if (typeof body.expectedRefundUpdatedAt !== "string") {
+    throw new ApiError("EXPECTED_REFUND_UPDATED_AT_INVALID", "退款记录更新时间无效，请刷新后重试", 400);
+  }
+  const parsedUpdatedAt = new Date(body.expectedRefundUpdatedAt);
+  if (Number.isNaN(parsedUpdatedAt.getTime()) || parsedUpdatedAt.toISOString() !== body.expectedRefundUpdatedAt) {
+    throw new ApiError("EXPECTED_REFUND_UPDATED_AT_INVALID", "退款记录更新时间无效，请刷新后重试", 400);
+  }
+  return {
+    expectedRefundStatus: body.expectedRefundStatus,
+    expectedRefundVersion: body.expectedRefundVersion,
+    expectedRefundUpdatedAt: body.expectedRefundUpdatedAt
+  };
+}
+
+function normalizeRefundProofFileIds(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new ApiError("REFUND_PROOF_INVALID", "退款凭证格式无效", 400);
+  }
+  if (value.length > 6) {
+    throw new ApiError("REFUND_PROOF_LIMIT_EXCEEDED", "退款凭证最多 6 个", 400);
+  }
+  const proofs = value.map((item) => {
+    if (typeof item !== "string") {
+      throw new ApiError("REFUND_PROOF_INVALID", "退款凭证格式无效", 400);
+    }
+    const proof = item.trim();
+    if (!/^cloud:\/\/\S{1,492}$/.test(proof) || proof.length > 500) {
+      throw new ApiError("REFUND_PROOF_INVALID", "退款凭证格式无效", 400);
+    }
+    return proof;
+  });
+  if (new Set(proofs).size !== proofs.length) {
+    throw new ApiError("REFUND_PROOF_INVALID", "退款凭证不能重复", 400);
+  }
+  return proofs;
+}
+
+function normalizeRefundMutation(request = {}, action = request.route && request.route.mutationAction) {
+  const fields = REFUND_MUTATION_BODY_FIELDS[action];
+  const body = request.body;
+  if (!fields) {
+    throw new ApiError("MUTATION_NOT_SUPPORTED", "退款操作不存在", 404);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError("INVALID_REQUEST_BODY", "退款请求无效", 400);
+  }
+  if (Object.keys(body).some((key) => !fields.has(key))) {
+    throw new ApiError("INVALID_REQUEST_BODY", "退款请求包含不允许的字段", 400);
+  }
+  if (typeof body.refundRecordId !== "string"
+    || !body.refundRecordId.trim()
+    || body.refundRecordId.trim().length > 128) {
+    throw new ApiError("REFUND_RECORD_ID_REQUIRED", "缺少退款记录", 400);
+  }
+  const input = {
+    refundRecordId: body.refundRecordId.trim(),
+    ...refundExpectedSnapshots(body)
+  };
+  if (action === "process") {
+    if (!Number.isSafeInteger(body.refundAmountCents) || body.refundAmountCents <= 0) {
+      throw new ApiError("INVALID_REFUND_AMOUNT", "退款金额必须是大于 0 的整数分", 400);
+    }
+    input.refundAmountCents = body.refundAmountCents;
+    if (Object.hasOwn(body, "financeRemark")) {
+      if (typeof body.financeRemark !== "string" || body.financeRemark.trim().length > 300) {
+        throw new ApiError("FINANCE_REMARK_INVALID", "退款备注格式无效", 400);
+      }
+      input.financeRemark = body.financeRemark.trim();
+    }
+    if (Object.hasOwn(body, "refundProofFileIds")) {
+      input.refundProofFileIds = normalizeRefundProofFileIds(body.refundProofFileIds);
+    }
+  } else {
+    if (typeof body.rejectReason !== "string" || !body.rejectReason.trim()) {
+      throw new ApiError("REJECT_REASON_REQUIRED", "请填写退款拒绝原因", 400);
+    }
+    if (body.rejectReason.trim().length > 300) {
+      throw new ApiError("REJECT_REASON_INVALID", "退款拒绝原因格式无效", 400);
+    }
+    input.rejectReason = body.rejectReason.trim();
+  }
+  return {
+    idempotencyKey: refundMutationIdempotencyKey(request),
+    input
+  };
+}
+
+function refundMutationActor(auth = {}) {
+  const principal = auth.principal || {};
+  const rawAdmin = auth.rawAdmin || {};
+  return {
+    id: cleanString(principal.id, 128),
+    openid: cleanString(rawAdmin.openid, 128),
+    role: cleanString(principal.role, 50),
+    status: principal.status,
+    isActive: principal.status === "active" && principal.isActive !== false,
+    sourceClient: "admin_web"
+  };
+}
+
+function refundMutationApiError(error) {
+  if (error instanceof ApiError) return error;
+  const code = cleanString(error && error.code, 80);
+  if (REFUND_MUTATION_INPUT_ERRORS.has(code)) {
+    return new ApiError(code, "退款请求无效", 400);
+  }
+  if (code === "FORBIDDEN" || code === "INVALID_ACTOR") {
+    return new ApiError(code, "无权执行退款操作", 403);
+  }
+  if (REFUND_MUTATION_NOT_FOUND_ERRORS.has(code)) {
+    return new ApiError(code, "退款记录或关联业务记录不存在", 404);
+  }
+  if (REFUND_MUTATION_CONFLICT_ERRORS.has(code)) {
+    return new ApiError(code, "退款记录或关联业务状态已变化，请刷新后重试", 409);
+  }
+  if (code === "SYNC_OWNER_CONFIG_REQUIRED" || code === "CLOCK_INVALID") {
+    return new ApiError(code, "退款服务暂时不可用，请稍后重试", 503);
+  }
+  return new ApiError("REFUND_MUTATION_FAILED", "退款服务暂时不可用，请稍后重试", 503);
+}
+
+function refundMutationResult(result = {}, requestId = "", expectedAction = "") {
+  const item = result.item && typeof result.item === "object" && !Array.isArray(result.item)
+    ? result.item
+    : {};
+  const id = cleanString(item.id, 128);
+  const refundNo = cleanString(item.refundNo, 100);
+  const status = cleanString(item.status, 40);
+  const updatedAt = dateValue(item.updatedAt);
+  const action = result.action === "process" || result.action === "reject" ? result.action : "";
+  const expectedStatus = action === "process" ? "refunded" : action === "reject" ? "rejected" : "";
+  if (!id
+    || !refundNo
+    || !expectedStatus
+    || action !== expectedAction
+    || status !== expectedStatus
+    || !Number.isSafeInteger(item.version)
+    || item.version < 0
+    || !updatedAt
+    || !Number.isSafeInteger(item.amountCents)
+    || item.amountCents < 0
+    || (result.affected !== 0 && result.affected !== 1)
+    || typeof result.reused !== "boolean"
+    || typeof result.accountRecalculationPending !== "boolean") {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "退款结果无效", 502);
+  }
+  return {
+    item: {
+      id,
+      refundNo,
+      status,
+      version: item.version,
+      updatedAt,
+      amountCents: item.amountCents
+    },
+    affected: result.affected,
+    reused: result.reused,
+    action,
+    accountRecalculationPending: result.accountRecalculationPending,
+    message: action === "reject" ? "退款已拒绝" : "退款已确认",
+    requestId
+  };
+}
+
+const AFTER_SALE_REVIEW_BODY_FIELDS = new Set([
+  "afterSaleId",
+  "expectedStatus",
+  "expectedVersion",
+  "expectedUpdatedAt",
+  "approvedRefundAmount",
+  "returnRequired",
+  "reason"
+]);
+const AFTER_SALE_REVIEW_ROLES = new Set(["customer_service", "super_admin"]);
+const RETURN_INSPECTION_ROLES = new Set(["customer_service", "super_admin"]);
+const RETURN_INSPECTION_BODY_FIELDS = Object.freeze({
+  receive: new Set(["afterSaleId", "expectedStatus", "expectedVersion", "expectedUpdatedAt", "remark"]),
+  inspect: new Set(["afterSaleId", "expectedStatus", "expectedVersion", "expectedUpdatedAt", "itemCondition", "canRestock", "restockQuantity", "inspectionRemark"])
+});
+const RETURN_INSPECTION_INPUT_ERRORS = new Set([
+  "UNKNOWN_FIELD",
+  "ACTION_INVALID",
+  "AFTER_SALE_ID_REQUIRED",
+  "EXPECTED_STATUS_REQUIRED",
+  "EXPECTED_STATUS_INVALID",
+  "EXPECTED_VERSION_REQUIRED",
+  "EXPECTED_VERSION_INVALID",
+  "EXPECTED_UPDATED_AT_REQUIRED",
+  "EXPECTED_UPDATED_AT_INVALID",
+  "ITEM_CONDITION_REQUIRED",
+  "ITEM_CONDITION_INVALID",
+  "RESTOCK_FLAG_INVALID",
+  "RESTOCK_QUANTITY_INVALID",
+  "RESTOCK_CONDITION_INVALID",
+  "IDEMPOTENCY_KEY_REQUIRED",
+  "IDEMPOTENCY_KEY_INVALID"
+]);
+const RETURN_INSPECTION_CONFLICT_ERRORS = new Set([
+  "DATA_VERSION_CONFLICT",
+  "DATA_VERSION_INVALID",
+  "AFTER_SALE_STATUS_INVALID",
+  "DATA_REFUND_AMOUNT_INVALID",
+  "RETURN_ITEM_DATA_INVALID",
+  "RESTOCK_QUANTITY_EXCEEDED",
+  "INVENTORY_LOG_DUPLICATE",
+  "INVENTORY_LOG_CONFLICT",
+  "PRODUCT_NOT_FOUND",
+  "IDEMPOTENCY_KEY_CONFLICT",
+  "IDEMPOTENCY_PROCESSING",
+  "IDEMPOTENCY_NOT_EXECUTABLE"
+]);
+const AFTER_SALE_REVIEW_INPUT_ERRORS = new Set([
+  "UNKNOWN_FIELD",
+  "AFTER_SALE_ID_REQUIRED",
+  "DECISION_INVALID",
+  "EXPECTED_STATUS_REQUIRED",
+  "EXPECTED_STATUS_INVALID",
+  "EXPECTED_VERSION_REQUIRED",
+  "EXPECTED_VERSION_INVALID",
+  "EXPECTED_UPDATED_AT_REQUIRED",
+  "EXPECTED_UPDATED_AT_INVALID",
+  "REFUND_AMOUNT_INVALID",
+  "RETURN_REQUIRED_INVALID",
+  "REASON_REQUIRED",
+  "REASON_INVALID",
+  "REJECT_FIELDS_INVALID",
+  "IDEMPOTENCY_KEY_REQUIRED",
+  "IDEMPOTENCY_KEY_INVALID"
+]);
+const AFTER_SALE_REVIEW_CONFLICT_ERRORS = new Set([
+  "DATA_VERSION_CONFLICT",
+  "DATA_VERSION_INVALID",
+  "AFTER_SALE_STATUS_INVALID",
+  "REFUND_AMOUNT_EXCEEDED",
+  "IDEMPOTENCY_KEY_CONFLICT",
+  "IDEMPOTENCY_PROCESSING",
+  "IDEMPOTENCY_NOT_EXECUTABLE",
+  "SYNC_EVENT_DUPLICATE",
+  "SYNC_EVENT_CONFLICT"
+]);
+
+function afterSaleReviewRoute(route = {}) {
+  return route.resource === "after-sales" && ["approve", "reject"].includes(route.mutationAction);
+}
+
+function returnInspectionRoute(route = {}) {
+  return route.resource === "after-sales" && ["receive", "inspect"].includes(route.mutationAction);
+}
+
+function assertWebReturnInspection(principal, action) {
+  const permission = action === "inspect" ? "after_sale:inspect" : "after_sale:receive_return";
+  if (!principal
+    || principal.status !== "active"
+    || principal.isActive === false
+    || !RETURN_INSPECTION_ROLES.has(principal.role)
+    || !Array.isArray(principal.permissions)
+    || (!principal.permissions.includes("*") && !principal.permissions.includes(permission))) {
+    throw new ApiError("FORBIDDEN", "无权执行退货验收操作", 403);
+  }
+}
+
+function normalizeReturnInspectionMutation(request = {}) {
+  const action = request.route && request.route.mutationAction;
+  const body = request.body;
+  if (!RETURN_INSPECTION_BODY_FIELDS[action]) {
+    throw new ApiError("MUTATION_NOT_SUPPORTED", "退货验收操作不存在", 404);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError("INVALID_REQUEST_BODY", "退货验收请求无效", 400);
+  }
+  if (Object.keys(body).some((key) => !RETURN_INSPECTION_BODY_FIELDS[action].has(key))) {
+    throw new ApiError("INVALID_REQUEST_BODY", "退货验收请求包含不允许的字段", 400);
+  }
+  let idempotencyKey;
+  try {
+    idempotencyKey = inventoryWarningIdempotency.assertIdempotencyKey(
+      request.headers && (request.headers["idempotency-key"] || request.headers["Idempotency-Key"])
+    );
+  } catch (error) {
+    throw new ApiError(error.code || "IDEMPOTENCY_KEY_INVALID", "退货验收操作凭证无效", 400);
+  }
+  try {
+    return {
+      idempotencyKey,
+      input: returnInspectionModule.normalizeInspectionInput({ action, ...body }, { strict: true })
+    };
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const code = cleanString(error && error.code, 80) || "INVALID_REQUEST_BODY";
+    throw new ApiError(code, "退货验收请求无效", 400);
+  }
+}
+
+function returnInspectionActor(auth = {}) {
+  return { ...inventoryWarningActor(auth), sourceClient: "admin_web" };
+}
+
+function returnInspectionApiError(error) {
+  if (error instanceof ApiError) return error;
+  const code = cleanString(error && error.code, 80);
+  if (RETURN_INSPECTION_INPUT_ERRORS.has(code)) {
+    return new ApiError(code, "退货验收请求无效", 400);
+  }
+  if (code === "FORBIDDEN" || code === "INVALID_ACTOR") {
+    return new ApiError(code, "无权执行退货验收操作", 403);
+  }
+  if (code === "AFTER_SALE_NOT_FOUND") {
+    return new ApiError(code, "售后单不存在", 404);
+  }
+  if (RETURN_INSPECTION_CONFLICT_ERRORS.has(code)) {
+    return new ApiError(code, "售后单或库存已变化，请刷新后重试", 409);
+  }
+  if (["CLOCK_INVALID", "SYNC_OWNER_CONFIG_REQUIRED", "INVENTORY_LOG_READ_FAILED"].includes(code)) {
+    return new ApiError(code, "退货验收服务暂时不可用", 503);
+  }
+  return new ApiError("RETURN_INSPECTION_FAILED", "退货验收服务暂时不可用", 503);
+}
+
+function returnInspectionMutationResult(result = {}, requestId = "", action = "") {
+  const id = cleanString(result.afterSaleId, 128);
+  const status = cleanString(result.afterSaleStatus, 60);
+  const updatedAt = dateValue(result.updatedAt);
+  const restoredQuantity = result.restoredQuantity;
+  if (!id
+    || !updatedAt
+    || !Number.isSafeInteger(result.version)
+    || result.version < 0
+    || !["received", "approved", "refund_pending"].includes(status)
+    || !Number.isSafeInteger(restoredQuantity)
+    || restoredQuantity < 0
+    || (result.affected !== 0 && result.affected !== 1)) {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "退货验收结果无效", 502);
+  }
+  return {
+    item: { id, status, version: result.version, updatedAt },
+    afterSaleId: id,
+    afterSaleStatus: status,
+    restoredQuantity,
+    affected: result.affected,
+    reused: result.reused === true,
+    message: action === "receive" ? "已确认收到退货" : "退货验货已完成",
+    requestId
+  };
+}
+
+function assertWebAfterSaleReview(principal) {
+  if (!principal
+    || principal.status !== "active"
+    || principal.isActive === false
+    || !AFTER_SALE_REVIEW_ROLES.has(principal.role)
+    || !Array.isArray(principal.permissions)
+    || (!principal.permissions.includes("*") && !principal.permissions.includes("after_sale:review"))) {
+    throw new ApiError("FORBIDDEN", "无权执行售后审核操作", 403);
+  }
+}
+
+function normalizeAfterSaleReview(request = {}) {
+  const body = request.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError("INVALID_REQUEST_BODY", "售后审核请求无效", 400);
+  }
+  if (Object.keys(body).some((key) => !AFTER_SALE_REVIEW_BODY_FIELDS.has(key))) {
+    throw new ApiError("INVALID_REQUEST_BODY", "售后审核请求包含不允许的字段", 400);
+  }
+  let idempotencyKey;
+  try {
+    idempotencyKey = inventoryWarningIdempotency.assertIdempotencyKey(
+      request.headers && (request.headers["idempotency-key"] || request.headers["Idempotency-Key"])
+    );
+  } catch (error) {
+    throw new ApiError(error.code || "IDEMPOTENCY_KEY_INVALID", "售后审核操作凭证无效", 400);
+  }
+  if (typeof body.afterSaleId !== "string" || !body.afterSaleId.trim()) {
+    throw new ApiError("AFTER_SALE_ID_REQUIRED", "缺少售后单号 ID", 400);
+  }
+  if (body.afterSaleId.trim().length > 128) {
+    throw new ApiError("AFTER_SALE_ID_REQUIRED", "售后单号 ID 格式无效", 400);
+  }
+  if (body.expectedStatus !== "pending_review") {
+    throw new ApiError(
+      body.expectedStatus === undefined || body.expectedStatus === null || body.expectedStatus === ""
+        ? "EXPECTED_STATUS_REQUIRED"
+        : "EXPECTED_STATUS_INVALID",
+      "售后单当前状态无效，请刷新后重试",
+      400
+    );
+  }
+  if (typeof body.expectedVersion !== "number" || !Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) {
+    throw new ApiError(
+      body.expectedVersion === undefined ? "EXPECTED_VERSION_REQUIRED" : "EXPECTED_VERSION_INVALID",
+      "售后单版本无效，请刷新后重试",
+      400
+    );
+  }
+  if (typeof body.expectedUpdatedAt !== "string") {
+    throw new ApiError(
+      body.expectedUpdatedAt === undefined ? "EXPECTED_UPDATED_AT_REQUIRED" : "EXPECTED_UPDATED_AT_INVALID",
+      "售后单更新时间无效，请刷新后重试",
+      400
+    );
+  }
+  const parsedUpdatedAt = new Date(body.expectedUpdatedAt);
+  if (Number.isNaN(parsedUpdatedAt.getTime()) || parsedUpdatedAt.toISOString() !== body.expectedUpdatedAt) {
+    throw new ApiError("EXPECTED_UPDATED_AT_INVALID", "售后单更新时间无效，请刷新后重试", 400);
+  }
+  if (body.approvedRefundAmount !== undefined
+    && (typeof body.approvedRefundAmount !== "number"
+      || !Number.isSafeInteger(body.approvedRefundAmount)
+      || body.approvedRefundAmount < 0)) {
+    throw new ApiError("REFUND_AMOUNT_INVALID", "审批退款金额无效，必须是整数分", 400);
+  }
+  if (body.returnRequired !== undefined && typeof body.returnRequired !== "boolean") {
+    throw new ApiError("RETURN_REQUIRED_INVALID", "returnRequired must be boolean", 400);
+  }
+  if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.trim().length > 300)) {
+    throw new ApiError("REASON_INVALID", "审核说明格式无效", 400);
+  }
+  const reason = body.reason === undefined ? "" : body.reason.trim();
+  const decision = request.route && request.route.mutationAction === "reject" ? "reject" : "approve";
+  if (decision === "reject" && !reason) {
+    throw new ApiError("REASON_REQUIRED", "rejection reason is required", 400);
+  }
+  return {
+    idempotencyKey,
+    input: {
+      id: body.afterSaleId.trim(),
+      decision,
+      expectedStatus: "pending_review",
+      expectedVersion: body.expectedVersion,
+      expectedUpdatedAt: body.expectedUpdatedAt,
+      approvedRefundAmount: body.approvedRefundAmount,
+      returnRequired: body.returnRequired,
+      reason
+    }
+  };
+}
+
+function afterSaleReviewActor(auth = {}) {
+  return inventoryWarningActor(auth);
+}
+
+function afterSaleReviewApiError(error) {
+  if (error instanceof ApiError) return error;
+  const code = cleanString(error && error.code, 80);
+  if (AFTER_SALE_REVIEW_INPUT_ERRORS.has(code)) {
+    return new ApiError(code, code === "REASON_REQUIRED" ? "rejection reason is required" : "after-sale review request is invalid", 400);
+  }
+  if (code === "FORBIDDEN" || code === "INVALID_ACTOR") {
+    return new ApiError(code, "forbidden after-sale review operation", 403);
+  }
+  if (code === "AFTER_SALE_NOT_FOUND") {
+    return new ApiError(code, "after-sale record not found", 404);
+  }
+  if (AFTER_SALE_REVIEW_CONFLICT_ERRORS.has(code)) {
+    return new ApiError(code, "售后单状态或版本已变化，请刷新后重试", 409);
+  }
+  if (code === "CLOCK_INVALID" || code === "SYNC_OWNER_CONFIG_REQUIRED") {
+    return new ApiError(code, "after-sale review service is temporarily unavailable", 503);
+  }
+  return new ApiError("AFTER_SALE_REVIEW_FAILED", "after-sale review service is temporarily unavailable", 503);
+}
+
+function afterSaleReviewMutationResult(result = {}, requestId = "") {
+  const item = result.item && typeof result.item === "object" ? result.item : {};
+  const id = cleanString(item.id || result.afterSaleId, 128);
+  const caseNo = cleanString(item.caseNo, 100);
+  const status = cleanString(item.status || result.afterSaleStatus, 60);
+  const decision = result.decision === "reject" ? "reject" : result.decision === "approve" ? "approve" : "";
+  const updatedAt = dateValue(item.updatedAt);
+  if (!id || !status || !decision || !updatedAt
+    || !Number.isSafeInteger(item.version) || item.version < 0
+    || !["approved", "waiting_return", "refund_pending", "rejected"].includes(status)
+    || (decision === "reject" && status !== "rejected")
+    || (decision === "approve" && !["approved", "waiting_return", "refund_pending"].includes(status))) {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "售后审核结果无效", 502);
+  }
+  const approvedRefundAmount = result.approvedRefundAmount === undefined ? 0 : result.approvedRefundAmount;
+  if (!Number.isSafeInteger(approvedRefundAmount) || approvedRefundAmount < 0) {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "售后审核结果无效", 502);
+  }
+  return {
+    item: { id, caseNo, status, version: item.version, updatedAt },
+    afterSaleId: id,
+    afterSaleStatus: status,
+    refundStatus: cleanString(result.refundStatus, 40) || "none",
+    approvedRefundAmount,
+    affected: result.affected === 1 ? 1 : 0,
+    reused: result.reused === true,
+    decision,
+    message: decision === "reject" ? "after-sale request rejected" : "after-sale request approved",
+    requestId
+  };
 }
 const INVENTORY_WARNING_BODY_FIELDS = new Set([
   "id",
@@ -1893,6 +2728,79 @@ async function dispatch(request, auth, config, dependencies = {}) {
     const permission = getMutationPermission(route.resource, route.mutationAction);
     assertPermission(auth.principal, permission);
     assertSessionCsrf({ session: auth.session, request, config });
+    if (paymentMutationRoute(route)) {
+      assertWebPaymentMutation(auth.principal, route.mutationAction);
+      const normalized = normalizePaymentMutation(request);
+      const service = dependencies.paymentMutationService || defaultPaymentMutationService;
+      let result;
+      try {
+        result = await service.reviewWebPayment({
+          actor: paymentMutationActor(auth),
+          input: normalized.input,
+          idempotencyKey: normalized.idempotencyKey
+        });
+      } catch (error) {
+        throw paymentMutationApiError(error);
+      }
+      return paymentMutationResult(result, request.requestId);
+    }
+    if (refundMutationRoute(route)) {
+      assertWebRefundMutation(auth.principal);
+      const normalized = normalizeRefundMutation(request, route.mutationAction);
+      const service = dependencies.refundMutationService || defaultRefundMutationService;
+      let result;
+      try {
+        const command = {
+          actor: refundMutationActor(auth),
+          input: normalized.input,
+          idempotencyKey: normalized.idempotencyKey,
+          strict: true
+        };
+        result = route.mutationAction === "process"
+          ? await service.processOfflineRefund(command)
+          : await service.rejectRefund(command);
+      } catch (error) {
+        throw refundMutationApiError(error);
+      }
+      return refundMutationResult(result, request.requestId, route.mutationAction);
+    }
+    if (returnInspectionRoute(route)) {
+      assertWebReturnInspection(auth.principal, route.mutationAction);
+      const normalized = normalizeReturnInspectionMutation(request);
+      const service = dependencies.returnInspectionService || defaultReturnInspectionService;
+      let result;
+      try {
+        const command = {
+          actor: returnInspectionActor(auth),
+          input: normalized.input,
+          idempotencyKey: normalized.idempotencyKey,
+          strict: true
+        };
+        result = route.mutationAction === "receive"
+          ? await service.confirmReturnReceived(command)
+          : await service.inspectReturnItems(command);
+      } catch (error) {
+        throw returnInspectionApiError(error);
+      }
+      return returnInspectionMutationResult(result, request.requestId, route.mutationAction);
+    }
+    if (afterSaleReviewRoute(route)) {
+      assertWebAfterSaleReview(auth.principal);
+      const normalized = normalizeAfterSaleReview(request);
+      const service = dependencies.afterSaleReviewService || defaultAfterSaleReviewService;
+      let result;
+      try {
+        result = await service.reviewAfterSale({
+          actor: afterSaleReviewActor(auth),
+          input: normalized.input,
+          idempotencyKey: normalized.idempotencyKey,
+          strict: true
+        });
+      } catch (error) {
+        throw afterSaleReviewApiError(error);
+      }
+      return afterSaleReviewMutationResult(result, request.requestId);
+    }
     if (orderReviewRoute(route)) {
       const normalized = normalizeOrderReviewMutation(request);
       const service = dependencies.orderReviewService || defaultOrderReviewService;
@@ -2139,6 +3047,34 @@ exports._test = {
   readWebPaymentList,
   readWebPaymentDetail,
   defaultPaymentQueryService,
+  paymentMutationRoute,
+  assertWebPaymentMutation,
+  normalizePaymentMutation,
+  paymentMutationActor,
+  paymentMutationApiError,
+  paymentMutationResult,
+  defaultPaymentMutationService,
+  refundMutationRoute,
+  assertWebRefundMutation,
+  normalizeRefundMutation,
+  refundMutationActor,
+  refundMutationApiError,
+  refundMutationResult,
+  defaultRefundMutationService,
+  afterSaleReviewRoute,
+  assertWebAfterSaleReview,
+  normalizeAfterSaleReview,
+  afterSaleReviewActor,
+  afterSaleReviewApiError,
+  afterSaleReviewMutationResult,
+  defaultAfterSaleReviewService,
+  returnInspectionRoute,
+  assertWebReturnInspection,
+  normalizeReturnInspectionMutation,
+  returnInspectionActor,
+  returnInspectionApiError,
+  returnInspectionMutationResult,
+  defaultReturnInspectionService,
   orderReviewRoute,
   normalizeOrderReviewMutation,
   orderReviewActor,

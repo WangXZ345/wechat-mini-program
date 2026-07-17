@@ -205,7 +205,7 @@ test("account lookup falls back to userOpenid, preserves unrelated fields, and u
     products: [{ _id: "p-account", stock: 5, isActive: true, warningStock: 1, version: 1 }],
     customer_accounts: [{ _id: "a-account", userId: "u-old", userOpenid: "openid-existing", nickname: "保留昵称", phone: "13900000000", adminNote: "保留备注", adminTags: ["重点"], riskLevel: "important", totalOrderAmount: 100, totalReceivableAmount: 100, totalUnpaidAmount: 80, unpaidAmount: 80, todayOrderAmount: 100, todayDate: "2026-07-13", orderCount: 2, unpaidOrderCount: 1 }]
   });
-  await createReview(current).reviewOrder({ actor: actor(), input: { id: "o-account", decision: "approve", expectedVersion: 1, expectedStatus: "pending_admin" }, idempotencyKey: "account-fallback", strict: true });
+  await createReview(current, { now: () => new Date("2026-07-14T00:00:00.000Z") }).reviewOrder({ actor: actor(), input: { id: "o-account", decision: "approve", expectedVersion: 1, expectedStatus: "pending_admin" }, idempotencyKey: "account-fallback", strict: true });
   const account = current.db.snapshot().customer_accounts[0];
   assert.equal(current.db.snapshot().customer_accounts.length, 1);
   assert.equal(account.adminNote, "保留备注");

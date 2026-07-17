@@ -121,9 +121,19 @@ function expiresAtFor(actionType, ttlSeconds) {
 }
 
 function processingTimedOut(record, timeoutSeconds) {
-  if (!record || record.status !== "processing" || !record.lockedAt) return false;
-  const lockedAt = record.lockedAt instanceof Date ? record.lockedAt.getTime() : new Date(record.lockedAt).getTime();
-  return Number.isFinite(lockedAt) && Date.now() - lockedAt > Math.max(60, Number(timeoutSeconds || PROCESSING_TIMEOUT_SECONDS)) * 1000;
+  if (!record || record.status !== "processing") return false;
+  const candidates = [record.lockedAt, record.updatedAt, record.createdAt];
+  let startedAt = NaN;
+  for (const value of candidates) {
+    if (!value) continue;
+    const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+    if (Number.isFinite(time)) {
+      startedAt = time;
+      break;
+    }
+  }
+  if (!Number.isFinite(startedAt)) return true;
+  return Date.now() - startedAt > Math.max(60, Number(timeoutSeconds || PROCESSING_TIMEOUT_SECONDS)) * 1000;
 }
 
 async function beginIdempotentAction(options = {}) {
@@ -188,14 +198,6 @@ async function beginIdempotentAction(options = {}) {
     return { canExecute: true, recordId, record: baseRecord, requestHash, idempotencyKey };
   }
   if (existing.requestHash !== requestHash) {
-    await db.collection("idempotency_records").doc(recordId).update({
-      data: {
-        status: "conflict",
-        errorCode: "IDEMPOTENCY_KEY_CONFLICT",
-        errorMessage: "请求已被用于其他操作，请刷新后重试",
-        updatedAt: now
-      }
-    }).catch(() => null);
     return { canExecute: false, recordId, status: "conflict", record: existing };
   }
   if (existing.status === "success") {
@@ -204,7 +206,8 @@ async function beginIdempotentAction(options = {}) {
   if (existing.status === "processing" && !processingTimedOut(existing, processingTimeoutSeconds)) {
     return { canExecute: false, recordId, status: "processing", record: existing };
   }
-  if ((existing.status === "failed" && allowRetryOnFailed) || processingTimedOut(existing, processingTimeoutSeconds) || existing.status === "expired") {
+  const staleProcessing = processingTimedOut(existing, processingTimeoutSeconds);
+  if ((existing.status === "failed" && allowRetryOnFailed) || staleProcessing || existing.status === "expired") {
     await db.collection("idempotency_records").doc(recordId).update({
       data: {
         status: "processing",
@@ -220,6 +223,8 @@ async function beginIdempotentAction(options = {}) {
       canExecute: true,
       recordId,
       record: { ...existing, status: "processing", retryCount: Number(existing.retryCount || 0) + 1 },
+      previousStatus: existing.status || "",
+      staleProcessing,
       requestHash,
       idempotencyKey
     };
@@ -294,6 +299,7 @@ function firstSuccessData(data = {}) {
 }
 
 function idempotencyEarlyReturn(beginResult) {
+  if (!beginResult || beginResult.canExecute) return null;
   const status = beginResult && (beginResult.status || beginResult.record && beginResult.record.status);
   if (status === "success") return { ok: true, data: duplicateSuccessData(beginResult.record) };
   if (status === "conflict") {
@@ -312,7 +318,12 @@ function idempotencyEarlyReturn(beginResult) {
       data: { duplicate: true, idempotencyStatus: "processing" }
     };
   }
-  return null;
+  return {
+    ok: false,
+    code: "IDEMPOTENCY_NOT_EXECUTABLE",
+    message: "IDEMPOTENCY_NOT_EXECUTABLE",
+    data: { duplicate: true, idempotencyStatus: status || "failed" }
+  };
 }
 
 function idempotencyErrorResponse(error) {
@@ -328,15 +339,48 @@ function idempotencyErrorResponse(error) {
   };
 }
 
+async function recoverProcessingEarlyReturn(options = {}, beginResult) {
+  const status = beginResult && (beginResult.status || beginResult.record && beginResult.record.status);
+  const previousStatus = beginResult && (beginResult.previousStatus || beginResult.record && beginResult.record.previousStatus) || "";
+  if (typeof options.recoverProcessingResult !== "function") return null;
+  if (beginResult && beginResult.canExecute && !beginResult.staleProcessing && previousStatus !== "failed") return null;
+  if (status !== "processing" && status !== "failed" && previousStatus !== "failed") return null;
+  let recovered = null;
+  try {
+    recovered = await options.recoverProcessingResult(beginResult.record, beginResult);
+  } catch (err) {
+    recovered = null;
+  }
+  if (!recovered) return null;
+  const data = {
+    ...recovered,
+    duplicate: true,
+    idempotencyStatus: "success"
+  };
+  await finishIdempotentAction(options.db, beginResult.recordId, { data }).catch(() => null);
+  return { ok: true, data };
+}
+
 async function runIdempotentAction(options, executor) {
   let begin = null;
   try {
     begin = await beginIdempotentAction(options);
+    const recovered = await recoverProcessingEarlyReturn(options, begin);
+    if (recovered) return recovered;
     const early = idempotencyEarlyReturn(begin);
     if (early) return early;
     const data = await executor(begin);
     const successData = firstSuccessData(data || {});
-    await finishIdempotentAction(options.db, begin.recordId, { data: successData });
+    try {
+      await finishIdempotentAction(options.db, begin.recordId, { data: successData });
+    } catch (finishErr) {
+      console.warn("[idempotency] finish failed", {
+        actionType: options && options.actionType || "",
+        recordId: begin.recordId,
+        errorCode: finishErr && (finishErr.code || finishErr.errCode) || "",
+        message: String(finishErr && finishErr.message || finishErr || "").slice(0, 120)
+      });
+    }
     return { ok: true, data: successData };
   } catch (err) {
     if (begin && begin.recordId) await failIdempotentAction(options.db, begin.recordId, err);

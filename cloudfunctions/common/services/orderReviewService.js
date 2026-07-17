@@ -283,7 +283,7 @@ function createOrderReviewService({
     const afterTotalOrder = beforeTotalOrder + amount;
     const afterTotalUnpaid = beforeTotalUnpaid + amount;
     if (!Number.isSafeInteger(afterTotalOrder) || !Number.isSafeInteger(afterTotalUnpaid)) throw new OrderReviewError("ACCOUNT_AMOUNT_INVALID", "客户账款数据异常，暂不能审核", 409);
-    const todayDate = localDateKey(now());
+    const todayDate = localDateKey(timestamp);
     if (account) {
       const sameDay = cleanString(account.todayDate, 20) === todayDate;
       const todayOrderAmount = (sameDay ? accountAmount(account, "todayOrderAmount", "todayOrderAmount") : 0) + amount;

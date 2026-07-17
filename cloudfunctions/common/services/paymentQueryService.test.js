@@ -63,9 +63,17 @@ const record = (id, minute, overrides = {}) => ({
   updatedAt: new Date("2026-07-13T00:" + String(minute).padStart(2, "0") + ":00Z"),
   ...overrides
 });
+const pendingOrder = (paymentId, overrides = {}) => ({
+  _id: `order-${paymentId}`,
+  orderNo: `ORDER-${paymentId}`,
+  latestPaymentRecordId: paymentId,
+  paymentStatus: "pending_confirm",
+  status: "pending_payment_confirm",
+  ...overrides
+});
 
 test("payment Web reads are role guarded and project a safe DTO", async () => {
-  const service = createPaymentQueryService(fakeDatabase({ payment_records: [record("1", 1)] }));
+  const service = createPaymentQueryService(fakeDatabase({ payment_records: [record("1", 1)], orders: [pendingOrder("1")] }));
   await assert.rejects(() => service.listWebPayments({ actor: { ...finance, role: "procurement" }, query: {} }), (error) => error.code === "FORBIDDEN");
   const result = await service.listWebPayments({ actor: finance, query: {} });
   assert.equal(result.items[0].proofLabel, "已提交凭证");
@@ -74,7 +82,10 @@ test("payment Web reads are role guarded and project a safe DTO", async () => {
 });
 
 test("payment reads validate status, search and filter-bound cursors", async () => {
-  const service = createPaymentQueryService(fakeDatabase({ payment_records: [record("1", 1), record("2", 2, { paymentStatus: "paid", orderNo: "HIT" }), record("3", 3)] }));
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [record("1", 1), record("2", 2, { paymentStatus: "paid", orderNo: "HIT" }), record("3", 3)],
+    orders: [pendingOrder("1"), pendingOrder("3")]
+  }));
   const first = await service.listWebPayments({ actor: finance, query: { pageSize: 2 } });
   assert.equal(first.hasMore, true);
   const second = await service.listWebPayments({ actor: finance, query: { pageSize: 2, cursor: first.nextCursor } });
@@ -85,8 +96,158 @@ test("payment reads validate status, search and filter-bound cursors", async () 
 });
 
 test("payment reads fail closed on malformed money or dates", async () => {
-  for (const bad of [{ amount: 1.5 }, { amount: -1 }, { updatedAt: "invalid" }]) {
-    const service = createPaymentQueryService(fakeDatabase({ payment_records: [record("bad", 1, bad)] }));
+  for (const bad of [{ amount: 1.5 }, { amount: -1 }, { updatedAt: "invalid" }, { updatedAt: undefined }]) {
+    const service = createPaymentQueryService(fakeDatabase({ payment_records: [record("bad", 1, bad)], orders: [pendingOrder("bad")] }));
     await assert.rejects(() => service.listWebPayments({ actor: finance, query: {} }), (error) => error.code === "PAYMENT_DATA_INVALID" && error.statusCode === 503);
   }
+});
+
+test("payment projection exposes only a non-negative safe-integer version with legacy zero fallback", async () => {
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [record("legacy", 1), record("versioned", 2, { version: 4 })],
+    orders: [pendingOrder("legacy"), pendingOrder("versioned")]
+  }));
+  const result = await service.listWebPayments({ actor: finance, query: {} });
+  assert.deepEqual(result.items.map((item) => [item.id, item.version]), [["versioned", 4], ["legacy", 0]]);
+  assert.deepEqual(Object.keys(result.items[0]).sort(), ["amountCents", "customerMasked", "id", "orderNo", "proofCount", "proofLabel", "status", "submittedAt", "updatedAt", "version"].sort());
+
+  const invalid = createPaymentQueryService(fakeDatabase({
+    payment_records: [record("bad-version", 3, { version: -1 })],
+    orders: [pendingOrder("bad-version")]
+  }));
+  await assert.rejects(
+    () => invalid.getWebPayment({ actor: finance, id: "bad-version" }),
+    (error) => error.code === "PAYMENT_DATA_INVALID" && error.statusCode === 503
+  );
+});
+
+test("pending confirmation list skips stale credentials without ending a page or advancing an unsafe cursor", async () => {
+  const payments = [
+    record("stale-new", 5),
+    record("current-new", 4),
+    record("stale-middle", 3),
+    record("current-middle", 2),
+    record("current-old", 1)
+  ];
+  const orders = [
+    pendingOrder("stale-new", { latestPaymentRecordId: "replacement-new" }),
+    pendingOrder("current-new"),
+    pendingOrder("stale-middle", { status: "paid", paymentStatus: "paid" }),
+    pendingOrder("current-middle"),
+    pendingOrder("current-old")
+  ];
+  const service = createPaymentQueryService(fakeDatabase({ payment_records: payments, orders }));
+
+  const first = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm", pageSize: 2 } });
+  assert.deepEqual(first.items.map((item) => item.id), ["current-new", "current-middle"]);
+  assert.equal(first.hasMore, true);
+  assert.ok(first.nextCursor);
+
+  const second = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm", pageSize: 2, cursor: first.nextCursor } });
+  assert.deepEqual(second.items.map((item) => item.id), ["current-old"]);
+  assert.equal(second.hasMore, false);
+  assert.equal(second.nextCursor, null);
+});
+
+test("stale pending detail is hidden while current pending and closed history remain readable", async () => {
+  const payments = [
+    record("stale", 3),
+    record("current", 2),
+    record("closed", 1, { paymentStatus: "paid", status: "paid", version: 2 })
+  ];
+  const orders = [
+    pendingOrder("stale", { latestPaymentRecordId: "replacement" }),
+    pendingOrder("current"),
+    pendingOrder("closed", { latestPaymentRecordId: "closed", paymentStatus: "paid", status: "paid" })
+  ];
+  const service = createPaymentQueryService(fakeDatabase({ payment_records: payments, orders }));
+
+  await assert.rejects(
+    () => service.getWebPayment({ actor: finance, id: "stale" }),
+    (error) => error.code === "PAYMENT_NOT_FOUND" && error.statusCode === 404
+  );
+  assert.equal((await service.getWebPayment({ actor: finance, id: "current" })).status, "pending_confirm");
+  assert.equal((await service.getWebPayment({ actor: finance, id: "closed" })).status, "paid");
+});
+
+test("unfiltered lists fail closed for missing, non-current, or no-longer-pending order authority", async () => {
+  const payments = [
+    record("missing-order", 5),
+    record("non-current", 4),
+    record("closed-order", 3),
+    record("current", 2),
+    record("history", 1, { paymentStatus: "rejected", status: "rejected" })
+  ];
+  const orders = [
+    pendingOrder("non-current", { latestPaymentRecordId: "replacement" }),
+    pendingOrder("closed-order", { paymentStatus: "paid", status: "paid" }),
+    pendingOrder("current"),
+    pendingOrder("history", { paymentStatus: "unpaid", status: "approved_pending_payment" })
+  ];
+  const service = createPaymentQueryService(fakeDatabase({ payment_records: payments, orders }));
+  const result = await service.listWebPayments({ actor: finance, query: { pageSize: 10 } });
+  assert.deepEqual(result.items.map((item) => [item.id, item.status]), [["current", "pending_confirm"], ["history", "rejected"]]);
+});
+
+test("authority scanning fails closed when a raw row cannot produce a stable scan cursor", async () => {
+  const rows = Array.from({ length: 99 }, (_, index) => record(`stale-${String(index).padStart(3, "0")}`, 1, {
+    updatedAt: new Date("2026-07-13T00:01:00.001Z")
+  }));
+  rows.push(record("", 1, { updatedAt: new Date("2026-07-13T00:01:00.000Z") }));
+  const service = createPaymentQueryService(fakeDatabase({ payment_records: rows }));
+  await assert.rejects(
+    () => service.listWebPayments({ actor: finance, query: { pageSize: 2 } }),
+    (error) => error.code === "PAYMENT_DATA_INVALID" && error.statusCode === 503
+  );
+});
+
+test("scan-cap cursor advances only past rows already proven stale", async () => {
+  const base = Date.parse("2026-07-13T01:00:00.000Z");
+  const stale = Array.from({ length: 500 }, (_, index) => record(`stale-${String(index).padStart(3, "0")}`, 1, {
+    updatedAt: new Date(base - index)
+  }));
+  const current = record("current-after-cap", 1, { updatedAt: new Date(base - 500) });
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [...stale, current],
+    orders: [pendingOrder("current-after-cap")]
+  }));
+  const first = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm", pageSize: 2 } });
+  assert.deepEqual(first.items, []);
+  assert.equal(first.hasMore, true);
+  assert.ok(first.nextCursor);
+  const second = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm", pageSize: 2, cursor: first.nextCursor } });
+  assert.deepEqual(second.items.map((item) => item.id), ["current-after-cap"]);
+  assert.equal(second.hasMore, false);
+});
+
+test("pending filter excludes a paid primary status even when the legacy status still says pending", async () => {
+  const conflict = record("paid-primary", 2, { paymentStatus: "paid", status: "pending_confirm" });
+  const current = record("current-pending", 1, { status: "pending_confirm" });
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [conflict, current],
+    orders: [pendingOrder("current-pending")]
+  }));
+  const result = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm" } });
+  assert.deepEqual(result.items.map((item) => [item.id, item.status]), [["current-pending", "pending_confirm"]]);
+});
+
+test("pending filter excludes a rejected primary status even when the legacy status still says pending", async () => {
+  const conflict = record("rejected-primary", 2, { paymentStatus: "rejected", status: "pending_confirm" });
+  const current = record("current-pending", 1, { status: "pending_confirm" });
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [conflict, current],
+    orders: [pendingOrder("current-pending")]
+  }));
+  const result = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm" } });
+  assert.deepEqual(result.items.map((item) => [item.id, item.status]), [["current-pending", "pending_confirm"]]);
+});
+
+test("status filter keeps legacy records that have no paymentStatus field", async () => {
+  const legacy = record("legacy-status-only", 1, { paymentStatus: undefined, status: "pending_confirm" });
+  const service = createPaymentQueryService(fakeDatabase({
+    payment_records: [legacy],
+    orders: [pendingOrder("legacy-status-only")]
+  }));
+  const result = await service.listWebPayments({ actor: finance, query: { status: "pending_confirm" } });
+  assert.deepEqual(result.items.map((item) => [item.id, item.status]), [["legacy-status-only", "pending_confirm"]]);
 });

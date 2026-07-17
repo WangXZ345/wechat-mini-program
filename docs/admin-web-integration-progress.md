@@ -1,17 +1,29 @@
 # 网页后台真实数据接入进度
 
-> **2026-07-13 付款与账款只读切片：** canonical `accountQueryService`/`paymentQueryService`、账款旧入口兼容 adapters、BFF `GET /accounts`/`GET /accounts/:id`/`GET /payments`/`GET /payments/:id`、严格 Web DTO、Mock/HTTP 状态筛选和两个只读详情页已本地完成。账款重算、修改、结清、导出、付款确认/驳回及凭证预览继续关闭。当前 16 函数 local-only 保护包 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260713-202500/` 含 149 个 JS、25 个 JSON、0 个禁止目录，manifest 为 `uploadPerformed=false`；真实 CloudBase、索引、上传、部署和双端验证仍未执行。
+> **退款 Task 4 本地交付（2026-07-18）：** Web `POST /refunds/process|reject` 与小程序旧 `afterSales` actions 已共享 canonical `refundMutationService`；active `finance/super_admin` + `refund:process`（或 `*`）为硬门禁，canonical 状态固定为 `pending/processing/refunded/partial_refunded/failed/rejected/cancelled`。业务事务保留 immutable journal/evidence、账款重算 owner/version 恢复与 compare-before-clear，并写 owner/admin 双 audience 的最小 outbox。历史部分退款数量缺少当前售后 ownership marker 时必须先人工对账，服务零写拒绝。
+>
+> 当前唯一 local-only 候选 `.codex-cloudfunction-deploy/admin-web-nineteen-functions-guarded-20260718-030709/` 含 19 个 A-Z 函数、175 JS、30 JSON、0 禁止项；canonical refund SHA256 `98D4DE9C376F7883747789151F0B27C4C2820D4B0A552C5E48176D58C9615583`，manifest SHA256 `7A733436FEBB6C24C8E88BC3D5747F73E56850EEC5D2BFB340E554D8686AC7C4`，五项 required unique-index metadata 完整包含 `partialFilterExpression` 与 `migrationNote`，`uploadPerformed=false`。`022011` 及更早 19 函数包和失败包均已过期，不是可部署候选。真实 CloudBase 事务/索引、Cookie/CSRF、双端、1～3 秒延迟、上传、部署和发布均未验证。
 
-> **最新状态（2026-07-13 合并发货单只读切片）：** canonical `shipmentQueryService` 已供 Web BFF 和 `shipmentGroups` legacy read actions 复用；BFF `GET /shipments`、`GET /shipments/:id`、严格 Web DTO、Mock/HTTP cursor、合并发货单列表与专用只读详情页已本地完成。该范围不含单订单发货；所有发货写操作与导出在 Real 模式均保持关闭，`merge/ship/edit` 返回 501，未登记的 `cancel/complete/export` 返回 404。该切片使用 14 函数历史保护包；当前候选已扩展为上方 16 函数包。未连接 CloudBase、未创建或验证索引、未上传、未部署、未发布，真实双端测试仍未执行。
+> **本轮本地回归（2026-07-17）：** Cloud 全量 `63` 个文件、`582/582` 通过；Web Vitest `31` 个文件、`414/414` 通过，`vue-tsc`、ESLint、test-real build、Real 资产扫描和 Mock build 均通过。设置页新增组件回归，明确覆盖 Real/http 响应缺少 `sessionIdleMinutes` 时不展示假默认 `30`，以及 Mock 响应含字段时正常展示；临时恢复旧默认值后用例按预期 `1/2` 失败，恢复正确实现后 `2/2` 通过。`http://127.0.0.1:4173/` 已由本工作树的 `vite --mode test` 恢复，根页返回 HTTP `200`；未配置测试 BFF 时 profile 接口返回 HTTP `503 BFF_PROXY_NOT_CONFIGURED`，登录页显示真实错误且不回退 Mock，浏览器控制台无 warn/error。未连接真实 CloudBase/BFF、未上传云函数、未部署 Web、未发布小程序。
+
+> **退货验收更新（2026-07-17）：** Web `POST /after-sales/receive|inspect`、小程序旧 `confirmReturnReceived/inspectReturnItems` 已共享 canonical `returnInspectionService`。只允许 active `customer_service/super_admin` 加精确权限执行，`finance/procurement` 即使注入权限也拒绝；请求必须包含状态、version、updatedAt 和幂等键，可售退货才允许回补库存。库存回补会验证唯一 `businessKey`、商品/订单/售后归属、数量、canonical 库存适配器结果以及严格 `versionBefore + 1 === versionAfter`。`after_sale_logs.resultData` 只保存 `afterSaleId/action/businessKey/operatorId/afterSaleStatus/version/updatedAt/restoredQuantity` 八个不可变字段；processing/finalize 恢复只使用与当前管理员绑定且 `version >= 1` 的日志证据，不读取当前可变 `after_sales` 快照。定向 Cloud/BFF/Web/小程序回归分别为 `40/40` 和 `208/208`，全量结果见上方；Real/CloudBase、双端同步、上传和发布仍未验证。
+
+> **最新状态（2026-07-16 付款审核写切片）：** Web `confirm/reject`、`adminUpdatePayment` 已共享 canonical `paymentMutationService`；只允许 active `finance/super_admin` 加精确权限审核订单当前权威 `pending_confirm` 凭证。Web 请求只含付款记录 ID、固定状态、`version/updatedAt` 快照、原因和 header 幂等键，不含金额、订单 ID、actor/openid、凭证 URL、交易号或账款值。canonical 事务统一处理付款、订单、账款/唯一流水、配送日志、不可变 journal 和最小 outbox；驳回不创建收款流水，旧状态/别名/同客户最多 100 单批次语义保持兼容。
+>
+> **历史候选证据（2026-07-17，已过期）：** 当时 local-only 包 `.codex-cloudfunction-deploy/admin-web-eighteen-functions-guarded-20260717-180255/` 含 18 函数、172 JS、28 JSON、0 禁止项；该包仅保留退货验收阶段证据，不再是当前候选且不得部署。
+
+> **2026-07-13 付款与账款只读切片（历史证据）：** canonical `accountQueryService`/`paymentQueryService`、账款旧入口兼容 adapters、BFF `GET /accounts`/`GET /accounts/:id`/`GET /payments`/`GET /payments/:id`、严格 Web DTO、Mock/HTTP 状态筛选和两个只读详情页已本地完成。当时 16 函数包仅保留为历史证据，不再是当前候选。
+
+> **历史状态（2026-07-13 合并发货单只读切片）：** canonical `shipmentQueryService` 已供 Web BFF 和 `shipmentGroups` legacy read actions 复用；该切片使用 14 函数历史保护包，已被顶部 19 函数候选替代。未连接 CloudBase、未创建或验证索引、未上传、未部署、未发布，真实双端测试仍未执行。
 
 > **订单状态补充：** canonical `orderQueryService` 和 `orderReviewService` 已分别承载订单列表/详情与审核/驳回，旧入口保持兼容；不能再写成“订单全部写操作仍 501”。订单备注、Web 取消、发货等剩余动作仍未完整迁移。
 
-> **历史状态（2026-07-12 20:28）：** 商品与库存写切片当时完成 Web `215/215`、后端 `180/180` 等本地验证；对应十一函数包及后续十二/十三函数包均已被当前 16 函数候选范围替代。未连接 CloudBase、未上传、未部署、未发布，真实双端 1-3 秒验证仍未执行。
+> **历史状态（2026-07-12 20:28）：** 商品与库存写切片当时完成 Web `215/215`、后端 `180/180` 等本地验证；对应十一至十六函数包均已被顶部 19 函数候选替代。未连接 CloudBase、未上传、未部署、未发布，真实双端 1-3 秒验证仍未执行。
 
 > **历史状态（2026-07-12 19:13）：** 商品写切片的功能结论仍有效；`188/188` 和 `191343` 十函数包已被上方 20:28 库存写状态替代。未预建 `system_counters`、未验证唯一索引和未做真实双端测试的边界仍有效。
 
 > 创建：2026-07-11  
-> 当前阶段：第一、二轮本地基础设施完成；第三轮受控商品/库存写、商品分析、订单列表/详情与审核/驳回、合并发货单列表/只读详情已完成；第四轮付款记录与客户账款只读已完成本地实现，付款审核写入、售后退款和各类财务写入仍未完成。  
+> 当前阶段：第一、二轮本地基础设施完成；第三轮受控商品/库存写、商品分析、订单列表/详情与审核/驳回、合并发货单列表/只读详情已完成；第四轮付款记录/客户账款只读、付款凭证确认/驳回、售后审核、退货验收及线下退款处理/驳回已完成本地实现，账款结清/导出、凭证预览、微信退款和其他财务写入仍未完成。
 > 环境边界：只允许确认后的 `cloud1-d7g4mbc5r2fac4a77` 测试环境；当前未上传云函数、未部署 Web、未发布小程序、未写真实数据。
 
 ## 1. 完成条件
@@ -33,8 +45,8 @@
 - `admin-web` 默认使用 `test + real`；只有显式 `dev:mock` / `build:mock` 才包含 `MockTransport` 和虚构演示数据。
 - `HttpBffTransport` 已实现登录、profile、refresh、退出、通用读取/写入和 sync 契约；login/logout/refresh 串行化，旧代 401 和迟到 refresh 不会覆盖新会话。
 - `adminWebAuth` 已完成内部网关 secret、严格 Origin、凭证唯一性、凭证与 `authVersion` 事务、会话撤销确认和密码轮换并发保护的本地实现。
-- `adminWebApi` 已完成严格路由、固定设置文档、角色字段投影、客户字段二次脱敏和安全 OPTIONS 边界；客服订单/售后 DTO 不含金额。
-- `adminWebApi` 已能按角色读取真实集合并做 DTO 投影；受控商品写、库存预警/人工调整和订单审核/驳回已接入共享 service，付款记录与账款安全只读也已接入 canonical query service。付款确认/驳回、账款重算/结清/导出、售后、退款等 mutation 继续返回 `501 SERVICE_NOT_MIGRATED`；发货已登记的 `merge/ship/edit` 返回 501，未登记的 `cancel/complete/export` 返回 `404 MUTATION_NOT_SUPPORTED`。
+- `adminWebApi` 已完成严格路由、固定设置文档、角色字段投影、客户字段二次脱敏和安全 OPTIONS 边界；客服订单 DTO 不含金额，具备 `after_sale:review` 时售后 DTO 仅返回申请金额，不返回退款结果或付款敏感字段；真实设置接口未返回 `sessionIdleMinutes` 时 Web 不再补默认值。
+- `adminWebApi` 已能按角色读取真实集合并做 DTO 投影；受控商品写、库存预警/人工调整、订单审核/驳回、当前付款凭证确认/驳回、售后审核、退货验收及线下退款处理/驳回已接入共享 service，付款记录与账款安全只读也已接入 canonical query service。售后审核与退货验收仅允许 `customer_service/super_admin`；退款处理仅允许 active `finance/super_admin` 且需要 `refund:process`。账款结清/导出和凭证预览等 mutation 继续返回 `501 SERVICE_NOT_MIGRATED`；Web 退款 create/WeChat 保持 `404 MUTATION_NOT_SUPPORTED`，发货依既有登记边界返回 501/404。
 - `updateProductWarningStock` 已改为旧小程序薄适配器，与 Web BFF 共用 `cloudfunctions/common/services/inventoryWarningService.js`；旧 event 和 `{ok,data}` / `{ok:false}` 返回保持兼容。
 - `updateProductPrice` 已改为旧小程序薄适配器，与 Web BFF 共用 `cloudfunctions/common/services/productPriceService.js`；Web 使用严格 version/旧价格/幂等合同，旧入口只保持旧参数和返回兼容。
 - `manageProduct.create/update` 已改为 `productWriteService` 兼容适配器；`delete/bulkActivate` 与 `getUnsoldProducts/deactivate` 继续共用 `productStatusService`。legacy create/update 不强制版本/幂等，缺货自动下架仍未统一。
@@ -61,9 +73,9 @@
 | 商品分析 | 完成 | canonical 查询本地接通；真实 CloudBase 未验证 | 不适用 | 未执行 |
 | 订单 | 本地完成列表/详情与审核/驳回 UI | canonical 查询关联订单、明细、客户上下文并按角色脱敏 | 审核/驳回本地完成；备注、Web 取消等仍未迁移 | Mock 浏览器通过；CloudBase/双端未执行 |
 | 发货 | 本地完成合并发货单列表/专用只读详情 | canonical 查询关联 groups/items/orders/logs，严格 DTO 和稳定游标 | 所有发货写/导出均关闭；已登记动作 501、未登记动作 404；单订单发货未接 | 本地契约/UI 完成；CloudBase/双端未执行 |
-| 付款 | 未完成 | 仍为通用 `payment_records` 投影，未解决当前付款状态归并 | 确认/驳回/导出关闭 | 未执行 |
+| 付款 | 本地写切片完成 | canonical `paymentQueryService/paymentMutationService`，只审核当前权威凭证 | 确认/驳回开放；导出/凭证预览关闭 | 真实环境未执行 |
 | 账款 | 本地完成只读列表/详情 | canonical `accountQueryService`、稳定游标、严格 DTO、订单/流水受限关联 | 重算、修改、结清、导出关闭 | CloudBase/双端未执行 |
-| 售后/退款 | 完成 | BFF 代码可读真实集合 | 501 | 未执行 |
+| 售后/退款 | 完成 | BFF 可读真实集合；审核、退货验收和退款线下确认/驳回已接 canonical service | 审核、确认收货、验货、退款处理/驳回本地完成；微信退款 fail closed | fresh Cloud `636/636`、Web `455/455`、typecheck/ESLint/Real build 通过；CloudBase/双端未执行 |
 | 管理员/日志/设置 | 完成 | 管理员/日志部分可读；设置固定文档已修正 | 501 | 未执行 |
 | 实时同步 | 完成基础层 | 未部署 | outbox 未覆盖全部写入口 | 未执行 |
 
@@ -170,7 +182,8 @@
 - [x] 小程序旧 `batchUpdateProductTags` 已改为薄适配器，保留公开/内部标签和原返回结构；旧 200 项上限恢复为按清洗去重后的唯一商品数计算，Web 仍按去重前原始最多 100 项计算。独立 `updateProductTags`、导入与推荐区函数未迁移；`manageProduct.update` 已由后续 `productWriteService` 收口。
 - [x] Mock `batch-tags` 使用后端式权限门禁：`super_admin` 可用，`procurement` 还必须具备 `product:tag:batch_update`，`finance/customer_service` 禁止；Mock list/get 商品 DTO 与真实 BFF 对齐，Web failure code 和嵌套字段严格验证。
 - [x] 该标签切片当时的 Web `215/215`、后端定向 `180/180`、TypeScript、ESLint、构建和资产扫描均通过；这些是历史证据，不是合并发货单切片的最终数字。
-- [x] 2026-07-13 付款与账款只读切片保护包已生成：16 个函数 local-only 包 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260713-202500/`，149 个 JS、25 个 JSON、0 个禁止目录，`uploadPerformed=false`；此前十六函数包不再是当前候选。
+- [x] 2026-07-13 付款与账款只读切片历史保护包已生成：16 个函数 local-only 包 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260713-202500/`，149 个 JS、25 个 JSON、0 个禁止目录，`uploadPerformed=false`；该包已过期且不得部署。
+- [x] 2026-07-16 付款审核与商品分析保护包已生成：17 个函数 local-only 包 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260716-160658/`，159 个 JS、27 个 JSON、0 个禁止目录/文件，`uploadPerformed=false`；2026-07-13 十六函数包降为历史证据。
 
 本切片仍没有连接 CloudBase、执行真实数据写入、上传云函数、部署 Web 或发布小程序。Web create/edit 后小程序刷新、小程序 `manageProduct` 写后 Web 刷新及在线 1-3 秒延迟均为“未执行”；独立 `updateProductTags` 和其他业务模块仍保持既有边界。
 
@@ -181,6 +194,6 @@
 - 未迁移写服务的页面按钮继续禁用或明确提示，不得显示伪成功；当前本地例外是单商品改价、显式上下架、显式批量上架、批量公开标签和两个单商品预警值入口。
 - 真实双端用例未完成前，不得写“实时同步已通过”。
 - 本轮 canonical 幂等冲突修复只随 guarded 包进入 `adminWebApi`、`batchUpdateProductTags`、`getUnsoldProducts`、`manageProduct`、`updateProductPrice`、`updateProductWarningStock`；其他旧云函数仍有独立 helper 副本，部分保留冲突持久化旧行为，未逐函数审计前不得宣称全仓统一。
-- 当前 16 函数候选部署清单按 A-Z 为：`adminDashboard`、`adminGetCustomerAccountDetail`、`adminListCustomerAccounts`、`adminReviewOrder`、`adminWebApi`、`adminWebAuth`、`batchUpdateProductTags`、`cancelOrder`、`cleanupSyncEvents`、`getOrders`、`getSyncEvents`、`getUnsoldProducts`、`manageProduct`、`shipmentGroups`、`updateProductPrice`、`updateProductWarningStock`。当前 local-only 保护包 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260713-202500/` 的 manifest 为 `uploadPerformed=false`；尚未上传云函数、尚未部署 Web、尚未发布小程序。
+- 当前 19 函数候选部署清单按 A-Z 为：`adminDashboard`、`adminGetCustomerAccountDetail`、`adminListCustomerAccounts`、`adminReviewOrder`、`adminUpdatePayment`、`adminWebApi`、`adminWebAuth`、`afterSales`、`batchUpdateProductTags`、`cancelOrder`、`cleanupSyncEvents`、`getOrders`、`getSyncEvents`、`getUnsoldProducts`、`manageProduct`、`recalculateCustomerAccount`、`shipmentGroups`、`updateProductPrice`、`updateProductWarningStock`。当前唯一 local-only 保护包为 `.codex-cloudfunction-deploy/admin-web-nineteen-functions-guarded-20260718-030709/`，manifest `uploadPerformed=false`；`022011` 及更早候选已过期且不可部署。完整包包含此前累计集成函数且不构成部署证明。尚未上传云函数、尚未部署 Web、尚未发布小程序。
 - 独立 `cloudfunctions/getProductAnalytics` 仍是 legacy 旧实现，会合成 `source: current_product` 报价点；当前小程序源码不走该入口，本轮不部署也未迁移。
 - `cancelOrder` 已完成本地事务回补、付款/发货保护和账款重算可重试修复；真实 CloudBase 与双端验收仍保持阻断。

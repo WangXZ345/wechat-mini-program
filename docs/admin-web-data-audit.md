@@ -1,5 +1,11 @@
 # 网页后台 Mock 与硬编码业务数据审计
 
+> **退货验收更新（2026-07-16）：** 售后确认收货/验货已通过 canonical `returnInspectionService` 接入 Web 和小程序旧入口；客服/超级管理员允许，财务/采购拒绝。最新本地证据为 Cloud `558/558`、Web `412/412`、TypeScript、ESLint、Mock/Real build 和 Real 资产扫描通过；Real/CloudBase 与双端仍未验证。
+
+> **2026-07-16 付款审核写切片更新：** Web `POST /payments/confirm`、`POST /payments/reject` 与旧小程序 `adminUpdatePayment` 已在本地共用 canonical `paymentMutationService`。Web 只提交付款记录 `id`、`pending_confirm` 状态、`version/updatedAt` 并发快照、原因和 header 幂等键，不提交金额、订单 ID、actor/openid、凭证 URL、交易号或账款值；服务端只允许 active `finance/super_admin` 并校验确认/驳回各自精确权限。只有仍是订单 `latestPaymentRecordId` 且订单仍待确认的当前凭证可审核，DTO 返回安全的 `version/updatedAt` 快照。canonical 事务统一拥有付款记录、订单、账款/流水、配送日志、管理员不可变 journal 和不含金额/PII/凭证 URL 的最小 `sync_events`；驳回不创建收款流水，旧 `paid/partial_paid/partial/abnormal/unpaid` 与最多 100 单的同客户批次语义保持兼容。
+>
+> **本地保护包与边界：** 新包 `.codex-cloudfunction-deploy/admin-web-eighteen-functions-guarded-20260716-172745/` 含 18 个 A-Z 函数、166 个 JS、28 个 JSON、0 个禁止目录/文件；manifest SHA256 `1DC75B43B2AC4DF5A1AF59788F2B8554912B357E2A15545ED1F509855BEC3026`，canonical 售后服务 SHA256 `BFC7B5BCBDFE6204BB62D1604791733F97E65DCA1515B52B07C91A4A7A024685`，`uploadPerformed=false`。fresh 本地回归现为 Cloud `538/538`、Web `400/400`，TypeScript、ESLint、Mock/Real build 和 Real 资产扫描通过；本地 Mock 浏览器已通过售后通过/驳回、冲突、敏感字段和角色拒绝验收，Real/CloudBase 浏览器仍未执行。部署前必须审计但本轮未创建唯一索引：`account_logs(accountId, afterPaymentMutationVersion)`、`sync_events(eventId)`，并配置 `SYNC_OWNER_PEPPER`。本轮未上传/部署、未连接 CloudBase、未建索引、未执行真实付款、退款或 RT-07/RT-12，不能宣称 1～3 秒实时同步。
+
 > **2026-07-13 付款与账款只读切片更新：** `/accounts` 已由 canonical `accountQueryService` 提供真实 `customer_accounts` 列表、受限 `account_logs/orders` 详情；`/payments` 已由 canonical `paymentQueryService` 提供 `payment_records` 严格安全列表/详情 DTO。BFF 专用路由、Mock/HTTP 状态筛选、稳定游标和付款只读详情已本地完成；账款重算、修改、结清、导出、付款确认/驳回及凭证预览继续关闭。最终 16 函数 local-only 保护包 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260713-202500/` 包含 149 个 JS、25 个 JSON、0 个禁止目录，`uploadPerformed=false`；真实 CloudBase、索引、上传、部署和双端验证均未执行。
 
 > **2026-07-13 合并发货单只读切片更新：** Web 已通过 canonical `shipmentQueryService` 和 `shipmentGroups` legacy read adapters 复用现有 `shipment_groups`、`shipment_group_items`、`shipment_logs`、`orders`；BFF 已提供专用 `GET /shipments`、`GET /shipments/:id`，Web 使用严格 DTO、稳定游标，并完成 Mock/HTTP cursor 对齐、合并发货单列表和专用只读详情页。该范围不包含单订单发货；所有发货写操作与导出在 Real 模式均保持关闭，其中已登记的 `merge/ship/edit` 返回 `501 SERVICE_NOT_MIGRATED`，未登记的 `cancel/complete/export` 返回 `404 MUTATION_NOT_SUPPORTED`。该切片使用 14 函数历史保护包，当前候选已扩展为 16 函数包；真实 CloudBase 查询、索引、上传、部署和双端验证均未执行。
@@ -20,7 +26,7 @@
 
 1. 初始审计发现的“缺省配置下全站使用 `MockTransport`”已修复。当前默认命令固定使用 `test + real` 和 `HttpBffTransport`；只有显式 `dev:mock` / `build:mock` 才启用 Mock。本文第 3、5 节仍保留部分初始风险链作为历史证据，不能再当作当前运行结论。
 2. HTTP 模式已有统一 BFF transport，登录、profile、工作台、商品、库存、库存预警、订单、付款、账款、发货、售后、退款、管理员、操作日志、设置和同步的读取路由已存在。证据：`admin-web/src/services/transport/http-transport.ts:24-91`、`cloudfunctions/adminWebApi/lib/core.js:1-16`。
-3. HTTP 模式已本地接通受控的商品新增/metadata 编辑、改价、状态、公开标签、库存预警、人工库存调整，以及订单审核/驳回；相关入口使用 canonical service 和严格 DTO。付款与账款目前只接通安全只读，确认/驳回、重算、结清、导出等业务 mutation 继续返回 `501 SERVICE_NOT_MIGRATED`；售后、退款仍未迁移；发货已登记的 `merge/ship/edit` 返回 501，未登记的 `cancel/complete/export` 返回 `404 MUTATION_NOT_SUPPORTED`。
+3. HTTP 模式已本地接通受控的商品新增/metadata 编辑、改价、状态、公开标签、库存预警、人工库存调整、订单审核/驳回、当前付款凭证确认/驳回、售后审核和退货验收；相关入口使用 canonical service 和严格 DTO。退款处理、账款重算、结清、导出、付款凭证预览等 mutation 继续返回 `501 SERVICE_NOT_MIGRATED`；发货已登记的 `merge/ship/edit` 返回 501，未登记的 `cancel/complete/export` 返回 `404 MUTATION_NOT_SUPPORTED`。
 4. 商品分析的 Mock 仍是演示数据；HTTP 模式已接入 canonical `productAnalyticsQueryService`，只使用真实订单快照和 `price_logs` / `inventory_logs`，不再返回固定空数组，也不合成假历史。该能力仍未连接真实 CloudBase 验证。
 5. 两个导入页没有读取文件内容。当前仅根据文件名是否包含 `invalid/error` 决定是否追加一条错误行，并用 `650ms setTimeout` 模拟解析；HTTP 模式直接禁用。证据：`admin-web/src/modules/imports/mock-import-preview.ts:13-33`、`admin-web/src/modules/imports/ImportView.vue:38-68`。
 6. 未发现 `localStorage`、IndexedDB、Cache Storage 或前端 JSON 业务库。`sessionStorage` 仅存 Mock 角色、CSRF token、同步 cursor 和界面密度；Mock 业务行、幂等结果和假事件只保存在当前 JS 内存，刷新页面即重置。
@@ -164,9 +170,9 @@
 | `/orders/:id` 订单详情 | 合同一致的本地演示 DTO（仅显式 Mock） | `GET /orders/:id` -> canonical `orderQueryService` | 已 join `order_items` 并提供受权限控制的客户、地址、金额、备注、风险字段；付款/履约日志尚未并入详情 | `OrderDetailView.vue`; `order-query-contract.ts`; `orderQueryService.js` |
 | `/shipments` 合并发货单 | 合同一致的本地演示 DTO（仅显式 Mock） | `GET /shipments` -> canonical `shipmentQueryService` | 已按 `updatedAt + _id` 稳定游标读取合并发货单，并以严格 DTO 投影状态、计数、脱敏客户和物流摘要；不代表单订单发货已接入 | `shipment-query-contract.ts`; `shipmentQueryService.js`; `http-transport.ts`; `OperationsView.vue` |
 | `/shipments/:id` 合并发货单详情 | 合同一致的本地演示 DTO（仅显式 Mock） | `GET /shipments/:id` -> canonical `shipmentQueryService` | 已关联 group items、orders 与受限日志，按权限投影地址、运单和运营备注；页面只读，所有发货写/导出均保持关闭，已登记动作返回 501、未登记动作返回 404 | `ShipmentDetailView.vue`; `shipment-query-contract.ts`; `shipmentQueryService.js` |
-| `/payments` 付款审核 | `mockRows.payments` | canonical `paymentQueryService` 读取 `payment_records`，仅返回状态、金额、凭证有无/数量和掩码客户 | 列表/详情只读已接通；不返回凭证 URL，确认/驳回未迁移 | `resources.ts:160-188`; `paymentQueryService.js`; `core.js` |
+| `/payments` 付款审核 | `mockRows.payments` | canonical `paymentQueryService` 读取当前权威凭证并投影安全 DTO；canonical `paymentMutationService` 承担确认/驳回 | 列表/详情与当前凭证确认/驳回已本地接通；Web 不发送金额、订单 ID、actor/openid 或凭证 URL | `resources.ts`; `paymentQueryService.js`; `paymentMutationService.js`; `core.js` |
 | `/accounts` 客户账款 | `mockRows.accounts`（仅显式 Mock） | `GET /accounts` -> canonical `accountQueryService` | 列表使用稳定游标和四种权威状态；金额按分投影；详情受限关联 `account_logs/orders` 并有 partial/上限；重算、修改、结清、导出保持关闭 | `accountQueryService.js`; `account-query-contract.ts`; `AccountDetailView.vue` |
-| `/after-sales` 售后 | `mockRows.after-sales` | `after_sales` 安全投影 | 列表可读；详情、审核、退货验收和日志未迁移 | `resources.ts:246-277`; `core.js:10,206-207` |
+| `/after-sales` 售后 | `mockRows.after-sales` | `after_sales` 安全投影 | 列表可读；审核、确认收货和验货已接 canonical service；专用详情、流程日志和退款处理仍未迁移 | `resources.ts`; `returnInspectionService.js`; `afterSaleReviewService.js`; `OperationsView.vue` |
 | `/refunds` 退款 | `mockRows.refunds` | `refund_records` 安全投影 | 列表可读；审核金额上限、账户详情和处理写服务未迁移 | `resources.ts:278-308`; `core.js:11,208-209` |
 | `/admins` 管理员 | `mockRows.admins` | `admin_users` 最小投影 | 列表可读；新增、改角色、停用必须联动真实认证会话撤销 | `resources.ts:309-337`; `core.js:12,210-211` |
 | `/audit` 操作日志 | `mockRows.audit` | `admin_operation_logs` 安全摘要 | 列表可读；当前不返回 raw description/targetId/operatorId；详情尚无专用 DTO | `resources.ts:338-361`; `core.js:13,212-213` |

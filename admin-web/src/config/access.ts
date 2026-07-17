@@ -24,6 +24,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, string[]> = {
     "after_sale:view",
     "after_sale:review",
     "after_sale:receive_return",
+    "after_sale:inspect",
     "after_sale:update",
     "after_sale:complete",
     "customer:view_basic",

@@ -1,13 +1,17 @@
 [CmdletBinding()]
 param(
   [Parameter()]
-  [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+  [string]$RepositoryRoot = "",
 
-  [Parameter(Mandatory = $true)]
-  [string]$OutputDirectory
+  [Parameter()]
+  [string]$OutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+  $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+}
 
 function Assert-File([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -43,7 +47,50 @@ function Copy-SourceTree([string]$Source, [string]$Destination) {
   }
 }
 
+function Assert-NoForbiddenPackageFiles([string]$PackageRoot) {
+  $forbidden = @()
+  $packagePrefix = $PackageRoot.TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
+  Get-ChildItem -LiteralPath $PackageRoot -File -Recurse -Force | ForEach-Object {
+    $relative = $_.FullName.Substring($packagePrefix.Length).Replace("\", "/")
+    $name = $_.Name
+    $forbiddenByName = (
+      $name -match '(?i)^\.env(?:\.|$)' -or
+      $name -match '(?i)credentials?' -or
+      $name -match '(?i)(?:customer.*export|export.*customer)' -or
+      $name -match '(?i)\.(?:pem|key|p12|pfx)$' -or
+      $name -match '(?i)^(?:id_rsa|id_ed25519)$' -or
+      $relative -match '(?i)(^|/)\.superpowers(/|$)' -or
+      $name -match '(?i)^review[-_.].*\.(?:diff|patch|txt|md)$'
+    )
+    $containsPrivateKey = $false
+    if (-not $forbiddenByName -and $_.Length -le 5MB) {
+      try {
+        $containsPrivateKey = (Get-Content -Raw -Encoding UTF8 -LiteralPath $_.FullName) -match 'BEGIN .*PRIVATE KEY'
+      } catch {
+        $containsPrivateKey = $false
+      }
+    }
+    if ($forbiddenByName -or $containsPrivateKey) {
+      $forbidden += $relative
+    }
+  }
+  if ($forbidden.Count -gt 0) {
+    throw "Forbidden files found in deployment candidate: $($forbidden -join ', ')"
+  }
+}
+
 $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+  $candidateRoot = Join-Path $root ".codex-cloudfunction-deploy"
+  New-Item -ItemType Directory -Force -Path $candidateRoot | Out-Null
+  $candidateName = "admin-web-nineteen-functions-guarded-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
+  $OutputDirectory = Join-Path $candidateRoot $candidateName
+  $suffix = 1
+  while (Test-Path -LiteralPath $OutputDirectory) {
+    $OutputDirectory = Join-Path $candidateRoot "$candidateName-$suffix"
+    $suffix += 1
+  }
+}
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 $dashboardSource = Join-Path $root "cloudfunctions\adminDashboard"
 $apiSource = Join-Path $root "cloudfunctions\adminWebApi"
@@ -58,6 +105,9 @@ $manageProductSource = Join-Path $root "cloudfunctions\manageProduct"
 $priceSource = Join-Path $root "cloudfunctions\updateProductPrice"
 $warningSource = Join-Path $root "cloudfunctions\updateProductWarningStock"
 $reviewSource = Join-Path $root "cloudfunctions\adminReviewOrder"
+$paymentUpdateSource = Join-Path $root "cloudfunctions\adminUpdatePayment"
+$afterSalesSource = Join-Path $root "cloudfunctions\afterSales"
+$recalculateAccountSource = Join-Path $root "cloudfunctions\recalculateCustomerAccount"
 $shipmentGroupsSource = Join-Path $root "cloudfunctions\shipmentGroups"
 $adminListAccountsSource = Join-Path $root "cloudfunctions\adminListCustomerAccounts"
 $adminAccountDetailSource = Join-Path $root "cloudfunctions\adminGetCustomerAccountDetail"
@@ -77,6 +127,11 @@ $canonicalOrderReviewService = Join-Path $root "cloudfunctions\common\services\o
 $canonicalShipmentQueryService = Join-Path $root "cloudfunctions\common\services\shipmentQueryService.js"
 $canonicalAccountQueryService = Join-Path $root "cloudfunctions\common\services\accountQueryService.js"
 $canonicalPaymentQueryService = Join-Path $root "cloudfunctions\common\services\paymentQueryService.js"
+$canonicalPaymentMutationService = Join-Path $root "cloudfunctions\common\services\paymentMutationService.js"
+$canonicalAfterSaleReviewService = Join-Path $root "cloudfunctions\common\services\afterSaleReviewService.js"
+$canonicalReturnSnapshot = Join-Path $root "cloudfunctions\common\services\returnSnapshot.js"
+$canonicalReturnInspectionService = Join-Path $root "cloudfunctions\common\services\returnInspectionService.js"
+$canonicalRefundMutationService = Join-Path $root "cloudfunctions\common\services\refundMutationService.js"
 $canonicalIdempotency = Join-Path $root "cloudfunctions\common\idempotency.js"
 $canonicalRecommend = Join-Path $root "cloudfunctions\common\recommend.js"
 $canonicalStockAlert = Join-Path $root "cloudfunctions\_utils\stockAlert.js"
@@ -95,6 +150,9 @@ Assert-File (Join-Path $manageProductSource "index.js")
 Assert-File (Join-Path $priceSource "index.js")
 Assert-File (Join-Path $warningSource "index.js")
 Assert-File (Join-Path $reviewSource "index.js")
+Assert-File (Join-Path $paymentUpdateSource "index.js")
+Assert-File (Join-Path $afterSalesSource "index.js")
+Assert-File (Join-Path $recalculateAccountSource "index.js")
 Assert-File (Join-Path $shipmentGroupsSource "index.js")
 Assert-File (Join-Path $adminListAccountsSource "index.js")
 Assert-File (Join-Path $adminAccountDetailSource "index.js")
@@ -115,6 +173,11 @@ Assert-File $canonicalOrderReviewService
 Assert-File $canonicalShipmentQueryService
 Assert-File $canonicalAccountQueryService
 Assert-File $canonicalPaymentQueryService
+Assert-File $canonicalPaymentMutationService
+Assert-File $canonicalAfterSaleReviewService
+Assert-File $canonicalReturnSnapshot
+Assert-File $canonicalReturnInspectionService
+Assert-File $canonicalRefundMutationService
 Assert-File $canonicalIdempotency
 Assert-File $canonicalRecommend
 Assert-File $canonicalStockAlert
@@ -141,6 +204,9 @@ $manageProductTarget = Join-Path $output "manageProduct"
 $priceTarget = Join-Path $output "updateProductPrice"
 $warningTarget = Join-Path $output "updateProductWarningStock"
 $reviewTarget = Join-Path $output "adminReviewOrder"
+$paymentUpdateTarget = Join-Path $output "adminUpdatePayment"
+$afterSalesTarget = Join-Path $output "afterSales"
+$recalculateAccountTarget = Join-Path $output "recalculateCustomerAccount"
 $shipmentGroupsTarget = Join-Path $output "shipmentGroups"
 $adminListAccountsTarget = Join-Path $output "adminListCustomerAccounts"
 $adminAccountDetailTarget = Join-Path $output "adminGetCustomerAccountDetail"
@@ -157,6 +223,9 @@ Copy-SourceTree $manageProductSource $manageProductTarget
 Copy-SourceTree $priceSource $priceTarget
 Copy-SourceTree $warningSource $warningTarget
 Copy-SourceTree $reviewSource $reviewTarget
+Copy-SourceTree $paymentUpdateSource $paymentUpdateTarget
+Copy-SourceTree $afterSalesSource $afterSalesTarget
+Copy-SourceTree $recalculateAccountSource $recalculateAccountTarget
 Copy-SourceTree $shipmentGroupsSource $shipmentGroupsTarget
 Copy-SourceTree $adminListAccountsSource $adminListAccountsTarget
 Copy-SourceTree $adminAccountDetailSource $adminAccountDetailTarget
@@ -199,7 +268,23 @@ Copy-Item -LiteralPath $canonicalAccountQueryService -Destination (Join-Path $ap
 Copy-Item -LiteralPath $canonicalAccountQueryService -Destination (Join-Path $adminListAccountsTarget "accountQueryService.js") -Force
 Copy-Item -LiteralPath $canonicalAccountQueryService -Destination (Join-Path $adminAccountDetailTarget "accountQueryService.js") -Force
 Copy-Item -LiteralPath $canonicalPaymentQueryService -Destination (Join-Path $apiTarget "lib\paymentQueryService.js") -Force
+Copy-Item -LiteralPath $canonicalPaymentMutationService -Destination (Join-Path $apiTarget "lib\paymentMutationService.js") -Force
+Copy-Item -LiteralPath $canonicalPaymentMutationService -Destination (Join-Path $paymentUpdateTarget "paymentMutationService.js") -Force
+Copy-Item -LiteralPath $canonicalAfterSaleReviewService -Destination (Join-Path $apiTarget "lib\afterSaleReviewService.js") -Force
+Copy-Item -LiteralPath $canonicalReturnInspectionService -Destination (Join-Path $apiTarget "lib\returnInspectionService.js") -Force
+Copy-Item -LiteralPath $canonicalRefundMutationService -Destination (Join-Path $apiTarget "lib\refundMutationService.js") -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $afterSalesTarget "common\services") | Out-Null
+Copy-Item -LiteralPath $canonicalAfterSaleReviewService -Destination (Join-Path $afterSalesTarget "common\services\afterSaleReviewService.js") -Force
+Copy-Item -LiteralPath $canonicalReturnSnapshot -Destination (Join-Path $afterSalesTarget "common\services\returnSnapshot.js") -Force
+Copy-Item -LiteralPath $canonicalReturnInspectionService -Destination (Join-Path $afterSalesTarget "common\services\returnInspectionService.js") -Force
+Copy-Item -LiteralPath $canonicalRefundMutationService -Destination (Join-Path $afterSalesTarget "common\services\refundMutationService.js") -Force
+Copy-Item -LiteralPath $canonicalInventoryMutationService -Destination (Join-Path $afterSalesTarget "common\services\inventoryMutationService.js") -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $afterSalesTarget "_utils") | Out-Null
+Copy-Item -LiteralPath $canonicalStockAlert -Destination (Join-Path $afterSalesTarget "_utils\stockAlert.js") -Force
+Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $afterSalesTarget "common\idempotency.js") -Force
+Copy-Item -LiteralPath $canonicalSyncEvents -Destination (Join-Path $afterSalesTarget "common\syncEvents.js") -Force
 Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $apiTarget "lib\idempotency.js") -Force
+Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $paymentUpdateTarget "common\idempotency.js") -Force
 Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $batchTagsTarget "idempotency.js") -Force
 Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $unsoldTarget "idempotency.js") -Force
 Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $manageProductTarget "idempotency.js") -Force
@@ -216,6 +301,7 @@ Copy-Item -LiteralPath $canonicalStockAlert -Destination (Join-Path $warningTarg
 Copy-Item -LiteralPath $canonicalRecommend -Destination (Join-Path $manageProductTarget "recommend.js") -Force
 Copy-Item -LiteralPath $canonicalRecommend -Destination (Join-Path $manageProductTarget "common\recommend.js") -Force
 Copy-Item -LiteralPath $canonicalSyncEvents -Destination (Join-Path $apiTarget "lib\syncEvents.js") -Force
+Copy-Item -LiteralPath $canonicalSyncEvents -Destination (Join-Path $paymentUpdateTarget "common\syncEvents.js") -Force
 Copy-Item -LiteralPath $canonicalSyncEvents -Destination (Join-Path $syncReaderTarget "common\syncEvents.js") -Force
 Copy-Item -LiteralPath $canonicalSyncEvents -Destination (Join-Path $reviewTarget "common\syncEvents.js") -Force
 
@@ -274,14 +360,32 @@ $accountQueryServiceListHash = (Get-FileHash -LiteralPath (Join-Path $adminListA
 $accountQueryServiceDetailHash = (Get-FileHash -LiteralPath (Join-Path $adminAccountDetailTarget "accountQueryService.js") -Algorithm SHA256).Hash
 $paymentQueryServiceSourceHash = (Get-FileHash -LiteralPath $canonicalPaymentQueryService -Algorithm SHA256).Hash
 $paymentQueryServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\paymentQueryService.js") -Algorithm SHA256).Hash
+$paymentMutationServiceSourceHash = (Get-FileHash -LiteralPath $canonicalPaymentMutationService -Algorithm SHA256).Hash
+$paymentMutationServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\paymentMutationService.js") -Algorithm SHA256).Hash
+$paymentMutationServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $paymentUpdateTarget "paymentMutationService.js") -Algorithm SHA256).Hash
+$afterSaleReviewServiceSourceHash = (Get-FileHash -LiteralPath $canonicalAfterSaleReviewService -Algorithm SHA256).Hash
+$afterSaleReviewServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\afterSaleReviewService.js") -Algorithm SHA256).Hash
+$afterSaleReviewServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\services\afterSaleReviewService.js") -Algorithm SHA256).Hash
+$returnSnapshotSourceHash = (Get-FileHash -LiteralPath $canonicalReturnSnapshot -Algorithm SHA256).Hash
+$returnSnapshotLegacyHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\services\returnSnapshot.js") -Algorithm SHA256).Hash
+$returnInspectionServiceSourceHash = (Get-FileHash -LiteralPath $canonicalReturnInspectionService -Algorithm SHA256).Hash
+$returnInspectionServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\returnInspectionService.js") -Algorithm SHA256).Hash
+$returnInspectionServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\services\returnInspectionService.js") -Algorithm SHA256).Hash
+$refundMutationServiceSourceHash = (Get-FileHash -LiteralPath $canonicalRefundMutationService -Algorithm SHA256).Hash
+$refundMutationServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\refundMutationService.js") -Algorithm SHA256).Hash
+$refundMutationServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\services\refundMutationService.js") -Algorithm SHA256).Hash
+$inventoryMutationServiceAfterSalesHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\services\inventoryMutationService.js") -Algorithm SHA256).Hash
+$stockAlertAfterSalesHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "_utils\stockAlert.js") -Algorithm SHA256).Hash
 $idempotencySourceHash = (Get-FileHash -LiteralPath $canonicalIdempotency -Algorithm SHA256).Hash
 $idempotencyApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\idempotency.js") -Algorithm SHA256).Hash
+$idempotencyPaymentUpdateHash = (Get-FileHash -LiteralPath (Join-Path $paymentUpdateTarget "common\idempotency.js") -Algorithm SHA256).Hash
 $idempotencyBatchTagsHash = (Get-FileHash -LiteralPath (Join-Path $batchTagsTarget "idempotency.js") -Algorithm SHA256).Hash
 $idempotencyUnsoldHash = (Get-FileHash -LiteralPath (Join-Path $unsoldTarget "idempotency.js") -Algorithm SHA256).Hash
 $idempotencyManageProductHash = (Get-FileHash -LiteralPath (Join-Path $manageProductTarget "idempotency.js") -Algorithm SHA256).Hash
 $idempotencyPriceHash = (Get-FileHash -LiteralPath (Join-Path $priceTarget "idempotency.js") -Algorithm SHA256).Hash
 $idempotencyLegacyHash = (Get-FileHash -LiteralPath (Join-Path $warningTarget "idempotency.js") -Algorithm SHA256).Hash
 $idempotencyReviewHash = (Get-FileHash -LiteralPath (Join-Path $reviewTarget "common\idempotency.js") -Algorithm SHA256).Hash
+$idempotencyAfterSalesHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\idempotency.js") -Algorithm SHA256).Hash
 $stockAlertSourceHash = (Get-FileHash -LiteralPath $canonicalStockAlert -Algorithm SHA256).Hash
 $stockAlertApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\stockAlert.js") -Algorithm SHA256).Hash
 $stockAlertManageProductHash = (Get-FileHash -LiteralPath (Join-Path $manageProductTarget "stockAlert.js") -Algorithm SHA256).Hash
@@ -293,8 +397,10 @@ $recommendManageProductHash = (Get-FileHash -LiteralPath (Join-Path $manageProdu
 $recommendManageProductCommonHash = (Get-FileHash -LiteralPath (Join-Path $manageProductTarget "common\recommend.js") -Algorithm SHA256).Hash
 $syncEventsSourceHash = (Get-FileHash -LiteralPath $canonicalSyncEvents -Algorithm SHA256).Hash
 $syncEventsApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\syncEvents.js") -Algorithm SHA256).Hash
+$syncEventsPaymentUpdateHash = (Get-FileHash -LiteralPath (Join-Path $paymentUpdateTarget "common\syncEvents.js") -Algorithm SHA256).Hash
 $syncEventsReaderHash = (Get-FileHash -LiteralPath (Join-Path $syncReaderTarget "common\syncEvents.js") -Algorithm SHA256).Hash
 $syncEventsReviewHash = (Get-FileHash -LiteralPath (Join-Path $reviewTarget "common\syncEvents.js") -Algorithm SHA256).Hash
+$syncEventsAfterSalesHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\syncEvents.js") -Algorithm SHA256).Hash
 $dashboardConfigHash = (Get-FileHash -LiteralPath $dashboardConfig -Algorithm SHA256).Hash
 $apiConfigHash = (Get-FileHash -LiteralPath $apiConfig -Algorithm SHA256).Hash
 
@@ -340,7 +446,25 @@ if ($accountQueryServiceSourceHash -ne $accountQueryServiceApiHash -or $accountQ
 if ($paymentQueryServiceSourceHash -ne $paymentQueryServiceApiHash) {
   throw "Canonical payment query service hash verification failed"
 }
-if ($idempotencySourceHash -ne $idempotencyApiHash -or $idempotencySourceHash -ne $idempotencyBatchTagsHash -or $idempotencySourceHash -ne $idempotencyUnsoldHash -or $idempotencySourceHash -ne $idempotencyManageProductHash -or $idempotencySourceHash -ne $idempotencyPriceHash -or $idempotencySourceHash -ne $idempotencyLegacyHash -or $idempotencySourceHash -ne $idempotencyReviewHash) {
+if ($paymentMutationServiceSourceHash -ne $paymentMutationServiceApiHash -or $paymentMutationServiceSourceHash -ne $paymentMutationServiceLegacyHash) {
+  throw "Canonical payment mutation service hash verification failed"
+}
+if ($afterSaleReviewServiceSourceHash -ne $afterSaleReviewServiceApiHash -or $afterSaleReviewServiceSourceHash -ne $afterSaleReviewServiceLegacyHash) {
+  throw "Canonical after-sale review service hash verification failed"
+}
+if ($returnSnapshotSourceHash -ne $returnSnapshotLegacyHash) {
+  throw "Canonical return snapshot helper hash verification failed"
+}
+if ($returnInspectionServiceSourceHash -ne $returnInspectionServiceApiHash -or $returnInspectionServiceSourceHash -ne $returnInspectionServiceLegacyHash) {
+  throw "Canonical return inspection service hash verification failed"
+}
+if ($refundMutationServiceSourceHash -ne $refundMutationServiceApiHash -or $refundMutationServiceSourceHash -ne $refundMutationServiceLegacyHash) {
+  throw "Canonical refund mutation service hash verification failed"
+}
+if ($inventoryMutationSourceHash -ne $inventoryMutationServiceAfterSalesHash -or $stockAlertSourceHash -ne $stockAlertAfterSalesHash) {
+  throw "Canonical after-sales inventory adapter hash verification failed"
+}
+if ($idempotencySourceHash -ne $idempotencyApiHash -or $idempotencySourceHash -ne $idempotencyPaymentUpdateHash -or $idempotencySourceHash -ne $idempotencyBatchTagsHash -or $idempotencySourceHash -ne $idempotencyUnsoldHash -or $idempotencySourceHash -ne $idempotencyManageProductHash -or $idempotencySourceHash -ne $idempotencyPriceHash -or $idempotencySourceHash -ne $idempotencyLegacyHash -or $idempotencySourceHash -ne $idempotencyReviewHash -or $idempotencySourceHash -ne $idempotencyAfterSalesHash) {
   throw "Canonical idempotency helper hash verification failed"
 }
 if ($stockAlertSourceHash -ne $stockAlertApiHash -or $stockAlertSourceHash -ne $stockAlertManageProductHash -or $stockAlertSourceHash -ne $stockAlertCancelHash -or $stockAlertSourceHash -ne $stockAlertUnsoldHash -or $stockAlertSourceHash -ne $stockAlertLegacyHash) {
@@ -349,14 +473,117 @@ if ($stockAlertSourceHash -ne $stockAlertApiHash -or $stockAlertSourceHash -ne $
 if ($recommendSourceHash -ne $recommendManageProductHash -or $recommendSourceHash -ne $recommendManageProductCommonHash) {
   throw "Canonical product recommendation helper hash verification failed"
 }
-if ($syncEventsSourceHash -ne $syncEventsApiHash -or $syncEventsSourceHash -ne $syncEventsReaderHash -or $syncEventsSourceHash -ne $syncEventsReviewHash) {
+if ($syncEventsSourceHash -ne $syncEventsApiHash -or $syncEventsSourceHash -ne $syncEventsPaymentUpdateHash -or $syncEventsSourceHash -ne $syncEventsReaderHash -or $syncEventsSourceHash -ne $syncEventsReviewHash -or $syncEventsSourceHash -ne $syncEventsAfterSalesHash) {
   throw "Canonical sync events helper hash verification failed"
 }
+
+$refundBusinessKeyMigrationNote = "Legacy rows without the indexed business key are excluded by the partial filter; backfill keys and resolve duplicates before replacing this with a full unique index."
+$refundEventIdMigrationNote = "Legacy rows without eventId are excluded by the partial filter; backfill eventId values and resolve duplicates before replacing this with a full unique index."
+$refundMutationRequiredUniqueIndexes = @(
+  [ordered]@{
+    collection = "admin_operation_logs"
+    indexName = "uniq_refund_admin_operation_business_key"
+    unique = $true
+    fields = @("businessKey")
+    sparse = $false
+    partialFilterExpression = [ordered]@{
+      businessKey = [ordered]@{
+        '$exists' = $true
+        '$type' = "string"
+      }
+    }
+    migrationNote = $refundBusinessKeyMigrationNote
+  },
+  [ordered]@{
+    collection = "account_logs"
+    indexName = "uniq_refund_account_log_business_key"
+    unique = $true
+    fields = @("businessKey")
+    sparse = $false
+    partialFilterExpression = [ordered]@{
+      businessKey = [ordered]@{
+        '$exists' = $true
+        '$type' = "string"
+      }
+    }
+    migrationNote = $refundBusinessKeyMigrationNote
+  },
+  [ordered]@{
+    collection = "refund_logs"
+    indexName = "uniq_refund_log_business_key"
+    unique = $true
+    fields = @("businessKey")
+    sparse = $false
+    partialFilterExpression = [ordered]@{
+      businessKey = [ordered]@{
+        '$exists' = $true
+        '$type' = "string"
+      }
+    }
+    migrationNote = $refundBusinessKeyMigrationNote
+  },
+  [ordered]@{
+    collection = "after_sale_logs"
+    indexName = "uniq_refund_after_sale_log_business_key"
+    unique = $true
+    fields = @("businessKey")
+    sparse = $false
+    partialFilterExpression = [ordered]@{
+      businessKey = [ordered]@{
+        '$exists' = $true
+        '$type' = "string"
+      }
+    }
+    migrationNote = $refundBusinessKeyMigrationNote
+  },
+  [ordered]@{
+    collection = "sync_events"
+    indexName = "uniq_refund_sync_event_id"
+    unique = $true
+    fields = @("eventId")
+    sparse = $false
+    partialFilterExpression = [ordered]@{
+      eventId = [ordered]@{
+        '$exists' = $true
+        '$type' = "string"
+      }
+    }
+    migrationNote = $refundEventIdMigrationNote
+  }
+)
+$refundServiceSource = Get-Content -Raw -Encoding UTF8 -LiteralPath $canonicalRefundMutationService
+foreach ($requiredIndex in $refundMutationRequiredUniqueIndexes) {
+  $field = [string]$requiredIndex.fields[0]
+  $partialFields = @($requiredIndex.partialFilterExpression.Keys)
+  $partialCondition = $requiredIndex.partialFilterExpression[$field]
+  if ($requiredIndex.unique -ne $true -or
+      $requiredIndex.sparse -ne $false -or
+      $requiredIndex.fields.Count -ne 1 -or
+      $partialFields.Count -ne 1 -or
+      $partialFields[0] -ne $field -or
+      $partialCondition['$exists'] -ne $true -or
+      $partialCondition['$type'] -ne "string" -or
+      [string]::IsNullOrWhiteSpace([string]$requiredIndex.migrationNote)) {
+    throw "Invalid refund mutation unique-index metadata: $($requiredIndex.indexName)"
+  }
+  $pattern = 'requiredUniqueIndex\(\s*"' +
+    [regex]::Escape($requiredIndex.collection) + '"\s*,\s*"' +
+    [regex]::Escape($requiredIndex.indexName) + '"\s*,\s*"' +
+    [regex]::Escape($field) + '"'
+  if ($refundServiceSource -notmatch $pattern) {
+    throw "Canonical refund mutation unique-index metadata mismatch: $($requiredIndex.indexName)"
+  }
+}
+if ([regex]::Matches($refundServiceSource, 'requiredUniqueIndex\(\s*"').Count -ne 5) {
+  throw "Canonical refund mutation unique-index metadata must contain exactly five entries"
+}
+
+Assert-NoForbiddenPackageFiles $output
 
 $manifest = [ordered]@{
   createdAt = (Get-Date).ToUniversalTime().ToString("o")
   sourceRoot = $root
-  functions = @("adminDashboard", "adminGetCustomerAccountDetail", "adminListCustomerAccounts", "adminReviewOrder", "adminWebApi", "adminWebAuth", "batchUpdateProductTags", "cancelOrder", "cleanupSyncEvents", "getOrders", "getSyncEvents", "getUnsoldProducts", "manageProduct", "shipmentGroups", "updateProductPrice", "updateProductWarningStock")
+  functions = @("adminDashboard", "adminGetCustomerAccountDetail", "adminListCustomerAccounts", "adminReviewOrder", "adminUpdatePayment", "adminWebApi", "adminWebAuth", "afterSales", "batchUpdateProductTags", "cancelOrder", "cleanupSyncEvents", "getOrders", "getSyncEvents", "getUnsoldProducts", "manageProduct", "recalculateCustomerAccount", "shipmentGroups", "updateProductPrice", "updateProductWarningStock")
   canonicalSecuritySha256 = $securitySourceHash
   canonicalPermissionsSha256 = $permissionsSourceHash
   canonicalInventoryWarningServiceSha256 = $inventoryWarningSourceHash
@@ -371,6 +598,12 @@ $manifest = [ordered]@{
   canonicalShipmentQueryServiceSha256 = $shipmentQueryServiceSourceHash
   canonicalAccountQueryServiceSha256 = $accountQueryServiceSourceHash
   canonicalPaymentQueryServiceSha256 = $paymentQueryServiceSourceHash
+  canonicalPaymentMutationServiceSha256 = $paymentMutationServiceSourceHash
+  canonicalAfterSaleReviewServiceSha256 = $afterSaleReviewServiceSourceHash
+  canonicalReturnSnapshotSha256 = $returnSnapshotSourceHash
+  canonicalReturnInspectionServiceSha256 = $returnInspectionServiceSourceHash
+  canonicalRefundMutationServiceSha256 = $refundMutationServiceSourceHash
+  refundMutationRequiredUniqueIndexes = $refundMutationRequiredUniqueIndexes
   canonicalIdempotencySha256 = $idempotencySourceHash
   canonicalRecommendSha256 = $recommendSourceHash
   canonicalStockAlertSha256 = $stockAlertSourceHash
@@ -378,6 +611,7 @@ $manifest = [ordered]@{
   analyticsTimeoutSeconds = 60
   adminDashboardConfigSha256 = $dashboardConfigHash
   adminWebApiConfigSha256 = $apiConfigHash
+  forbiddenFileCount = 0
   uploadPerformed = $false
 }
 $manifestPath = Join-Path $output "package-manifest.json"
@@ -399,10 +633,14 @@ $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -En
   ShipmentQueryServiceHashVerified = $true
   AccountQueryServiceHashVerified = $true
   PaymentQueryServiceHashVerified = $true
+  PaymentMutationServiceHashVerified = $true
+  AfterSaleReviewServiceHashVerified = $true
+  RefundMutationServiceHashVerified = $true
   IdempotencyHashVerified = $true
   RecommendHashVerified = $true
   StockAlertHashVerified = $true
   SyncEventsHashVerified = $true
   AnalyticsTimeoutVerified = $true
+  ForbiddenFileCount = 0
   UploadPerformed = $false
 }

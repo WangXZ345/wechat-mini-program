@@ -19,6 +19,29 @@ const {
   sanitizeRefundForRole,
   sanitizeLogsForRole
 } = require("./sanitize");
+const { createAfterSaleReviewService } = require("./common/services/afterSaleReviewService");
+const { assertAfterSaleSnapshot, canCompleteAfterSale } = require("./common/services/returnSnapshot");
+const commonIdempotency = require("./common/idempotency");
+const { ownerKeyFor } = require("./common/syncEvents");
+const {
+  applyInventoryMutationInTransaction
+} = require("./common/services/inventoryMutationService");
+const stockAlert = require("./_utils/stockAlert");
+const { createReturnInspectionService } = require("./common/services/returnInspectionService");
+const { createRefundMutationService } = require("./common/services/refundMutationService");
+
+const refundMutationService = createRefundMutationService({
+  db,
+  idempotency: commonIdempotency,
+  ownerKeyFor,
+  syncOwnerPepper: process.env.SYNC_OWNER_PEPPER || "",
+  recalculateAccount({ accountId }) {
+    return cloud.callFunction({
+      name: "recalculateCustomerAccount",
+      data: { accountId }
+    });
+  }
+});
 
 const AFTER_SALE_TYPES = ["refund_only", "return_refund", "exchange", "resend", "price_adjustment_refund"];
 const AFTER_SALE_REASONS = [
@@ -76,6 +99,7 @@ const ROLE_PERMISSION_FALLBACKS = {
     "after_sale:view",
     "after_sale:review",
     "after_sale:receive_return",
+    "after_sale:inspect",
     "after_sale:update",
     "after_sale:complete",
     "refund:view"
@@ -353,7 +377,27 @@ function refundLogSnapshot(row = {}) {
   };
 }
 
-async function writeAfterSaleLog(store, { afterSale, action, beforeData, afterData, operatorType, operator, remark }) {
+async function writeAfterSaleLog(store, {
+  afterSale,
+  action,
+  beforeData,
+  afterData,
+  operatorType = "admin",
+  operator,
+  remark,
+  businessKey,
+  resultData = {}
+}) {
+  const resultEvidence = resultData.afterSaleId ? {
+    afterSaleId: resultData.afterSaleId,
+    action: resultData.action,
+    businessKey: resultData.businessKey,
+    operatorId: resultData.operatorId,
+    afterSaleStatus: resultData.afterSaleStatus,
+    version: resultData.version,
+    updatedAt: resultData.updatedAt,
+    restoredQuantity: resultData.restoredQuantity
+  } : null;
   await store.collection("after_sale_logs").add({
     data: {
       afterSaleId: afterSale._id || afterSale.afterSaleId || "",
@@ -367,7 +411,9 @@ async function writeAfterSaleLog(store, { afterSale, action, beforeData, afterDa
       operatorId: operator && (operator._id || operator.id) || "",
       operatorOpenid: operator && operator.openid || (operatorType === "user" ? getOpenid() : ""),
       operatorRole: operator && operator.role || "",
+      businessKey: cleanText(businessKey, 180),
       remark: cleanText(remark, 300),
+      ...(resultEvidence ? { resultData: resultEvidence } : {}),
       createdAt: db.serverDate()
     }
   });
@@ -392,7 +438,7 @@ async function writeRefundLog(store, { refundRecord, action, beforeData, afterDa
   });
 }
 
-async function writeAdminOperation(store, { admin, action, resourceType, resourceId, beforeData, afterData, description }) {
+async function writeAdminOperation(store, { admin, action, resourceType, resourceId, beforeData, afterData, description, businessKey }) {
   await store.collection("admin_operation_logs").add({
     data: {
       operatorId: admin && (admin._id || admin.id) || "",
@@ -401,6 +447,7 @@ async function writeAdminOperation(store, { admin, action, resourceType, resourc
       action,
       resourceType,
       resourceId: resourceId || "",
+      businessKey: cleanText(businessKey, 180),
       beforeData: beforeData || null,
       afterData: afterData || null,
       description: cleanText(description, 300),
@@ -1064,15 +1111,70 @@ async function reviewAfterSale(event = {}) {
   });
 }
 
-async function confirmReturnReceived(event = {}) {
+async function reviewAfterSaleCanonical(event = {}) {
+  await ensureCollections();
+  const admin = await requireReviewAdmin(event);
+  const service = createAfterSaleReviewService({
+    db,
+    idempotency: commonIdempotency,
+    refundTypes: REFUND_TYPES,
+    getAfterSaleById,
+    writeAfterSaleLog,
+    writeAdminOperation,
+    afterSaleLogSnapshot
+  });
+  const result = await service.reviewAfterSale({
+    actor: admin,
+    strict: false,
+    idempotencyKey: event.idempotencyKey,
+    input: {
+      id: event.afterSaleId,
+      decision: cleanText(event.reviewAction || event.action, 20),
+      approvedRefundAmount: event.approvedRefundAmount,
+      returnRequired: event.returnRequired,
+      reason: event.rejectReason || event.adminReviewRemark || ""
+    }
+  });
+  return {
+    afterSaleId: result.afterSaleId,
+    afterSaleStatus: result.afterSaleStatus,
+    refundStatus: result.refundStatus,
+    approvedRefundAmount: result.approvedRefundAmount,
+    duplicate: result.reused === true
+  };
+}
+
+async function legacyConfirmReturnReceived(event = {}) {
   await ensureCollections();
   const admin = await requireAnyPermission(["after_sale:receive_return"], event);
-  return db.runTransaction(async (tx) => {
+  const begin = await beginIdempotentAction({
+    db,
+    actionType: "confirm_return_received",
+    idempotencyKey: event.idempotencyKey,
+    operatorIdentity: admin._id || admin.id || admin.openid,
+    operatorType: "admin",
+    scope: "after_sale",
+    scopeId: event.afterSaleId,
+    openid: admin.openid || "",
+    adminId: admin._id || admin.id || "",
+    payload: { afterSaleId: event.afterSaleId, expectedVersion: event.expectedVersion, expectedUpdatedAt: event.expectedUpdatedAt }
+  });
+  const early = idempotencyEarlyReturn(begin);
+  if (early) {
+    if (early.ok) return early.data;
+    const err = new Error(early.message);
+    err.code = early.code;
+    throw err;
+  }
+  try {
+    const result = await db.runTransaction(async (tx) => {
     const afterSale = await getAfterSaleById(tx, event.afterSaleId);
+    const version = assertAfterSaleSnapshot(afterSale, event, ["waiting_return", "returned"]);
     if (!["waiting_return", "returned"].includes(afterSale.afterSaleStatus)) throw new Error("当前售后状态不能确认收货");
     const next = {
       ...afterSale,
       afterSaleStatus: "received",
+      version: version + 1,
       returnLogistics: {
         ...(afterSale.returnLogistics || {}),
         receivedAt: db.serverDate()
@@ -1082,6 +1184,7 @@ async function confirmReturnReceived(event = {}) {
     await tx.collection("after_sales").doc(afterSale._id).update({
       data: {
         afterSaleStatus: "received",
+        version: version + 1,
         returnLogistics: next.returnLogistics,
         updatedAt: db.serverDate()
       }
@@ -1106,10 +1209,17 @@ async function confirmReturnReceived(event = {}) {
       description: "确认收到退货"
     });
     return { afterSaleId: afterSale._id, afterSaleStatus: "received" };
-  });
+    });
+    const finalResult = firstSuccessData(result);
+    await finishIdempotentAction(db, begin.recordId, { data: finalResult });
+    return finalResult;
+  } catch (err) {
+    await failIdempotentAction(db, begin.recordId, err);
+    throw err;
+  }
 }
 
-async function inspectReturnItems(event = {}) {
+async function legacyInspectReturnItems(event = {}) {
   await ensureCollections();
   const admin = await requireAnyPermission(["after_sale:inspect"], event);
   const itemCondition = cleanText(event.itemCondition || event.inspectionResult && event.inspectionResult.itemCondition || "unknown", 40);
@@ -1126,9 +1236,18 @@ async function inspectReturnItems(event = {}) {
     scopeId: event.afterSaleId,
     openid: admin.openid,
     adminId: admin._id || admin.id || "",
-    payload: { afterSaleId: event.afterSaleId, itemCondition, canRestock, restockQuantity }
+    payload: {
+      afterSaleId: event.afterSaleId,
+      itemCondition,
+      canRestock,
+      restockQuantity,
+      expectedStatus: event.expectedStatus,
+      expectedVersion: event.expectedVersion,
+      expectedUpdatedAt: event.expectedUpdatedAt
+    }
   }, async () => db.runTransaction(async (tx) => {
     const afterSale = await getAfterSaleById(tx, event.afterSaleId);
+    const version = assertAfterSaleSnapshot(afterSale, event, ["received", "inspecting"]);
     if (!["received", "inspecting"].includes(afterSale.afterSaleStatus)) throw new Error("退货未收货，不能验货");
     let restored = 0;
     if (canRestock && restockQuantity > 0) {
@@ -1180,12 +1299,14 @@ async function inspectReturnItems(event = {}) {
     const next = {
       ...afterSale,
       afterSaleStatus: nextStatus,
+      version: version + 1,
       inspectionResult,
       updatedAt: db.serverDate()
     };
     await tx.collection("after_sales").doc(afterSale._id).update({
       data: {
         afterSaleStatus: nextStatus,
+        version: version + 1,
         inspectionResult,
         updatedAt: db.serverDate()
       }
@@ -1217,6 +1338,69 @@ async function inspectReturnItems(event = {}) {
       throw err;
     }
     return res.data;
+  });
+}
+
+function createReturnInspectionCanonicalService() {
+  return createReturnInspectionService({
+    db,
+    idempotency: commonIdempotency,
+    getAfterSaleById,
+    writeAfterSaleLog,
+    writeAdminOperation,
+    snapshot: afterSaleLogSnapshot,
+    ownerKeyFor: process.env.SYNC_OWNER_PEPPER ? ownerKeyFor : undefined,
+    syncOwnerPepper: process.env.SYNC_OWNER_PEPPER || "",
+    applyInventoryMutationInTransaction,
+    stockAlert
+  });
+}
+
+async function confirmReturnReceived(event = {}) {
+  await ensureCollections();
+  const admin = await requireAnyPermission(["after_sale:receive_return"], event);
+  return createReturnInspectionCanonicalService().confirmReturnReceived({
+    actor: { ...admin, sourceClient: "miniprogram" },
+    strict: false,
+    idempotencyKey: event.idempotencyKey || `legacy_confirm_return:${cleanText(event.afterSaleId, 128)}`,
+    input: {
+      action: "receive",
+      afterSaleId: event.afterSaleId,
+      expectedStatus: event.expectedStatus,
+      expectedVersion: event.expectedVersion,
+      expectedUpdatedAt: event.expectedUpdatedAt,
+      remark: event.remark
+    }
+  });
+}
+
+async function inspectReturnItems(event = {}) {
+  await ensureCollections();
+  const admin = await requireAnyPermission(["after_sale:inspect"], event);
+  const itemCondition = cleanText(
+    event.itemCondition || event.inspectionResult && event.inspectionResult.itemCondition || "unknown",
+    40
+  );
+  const canRestock = event.canRestock === true || event.inspectionResult && event.inspectionResult.canRestock === true;
+  const restockQuantity = Math.max(0, Math.round(Number(
+    event.restockQuantity || event.inspectionResult && event.inspectionResult.restockQuantity || 0
+  )));
+  return createReturnInspectionCanonicalService().inspectReturnItems({
+    actor: { ...admin, sourceClient: "miniprogram" },
+    strict: false,
+    idempotencyKey: event.idempotencyKey
+      || `legacy_inspect_return:${cleanText(event.afterSaleId, 96)}:${itemCondition}:${restockQuantity}`,
+    input: {
+      action: "inspect",
+      afterSaleId: event.afterSaleId,
+      expectedStatus: event.expectedStatus,
+      expectedVersion: event.expectedVersion,
+      expectedUpdatedAt: event.expectedUpdatedAt,
+      itemCondition,
+      canRestock,
+      restockQuantity,
+      inspectionRemark: event.inspectionRemark || event.remark
+    }
   });
 }
 
@@ -1379,7 +1563,7 @@ async function incrementOrderItemRefunds(tx, afterSale, amount) {
       updatedAt: db.serverDate()
     };
     if (afterSale.returnRequired) patch.returnedQuantity = _.inc(Number(item.returnQuantity || 0));
-    await tx.collection("order_items").doc(item.orderItemId).update({ data: patch }).catch(() => null);
+    await tx.collection("order_items").doc(item.orderItemId).update({ data: patch });
   }
 }
 
@@ -1646,7 +1830,6 @@ async function rejectRefund(event = {}) {
 }
 
 async function createWechatPayRefund(event = {}) {
-  await ensureCollections();
   await requireRefundAdmin("refund:wechat_pay", event);
   const settings = await getSystemSettings();
   if (settings.enableWechatPayRefund !== true) {
@@ -1660,7 +1843,6 @@ async function createWechatPayRefund(event = {}) {
 }
 
 async function handleWechatRefundNotify() {
-  await ensureCollections();
   return { code: "WECHAT_REFUND_NOTIFY_NOT_IMPLEMENTED", message: "微信支付退款回调验签尚未接入，未更新退款状态" };
 }
 
@@ -1696,10 +1878,12 @@ async function completeAfterSale(event = {}) {
       if (afterSale.afterSaleStatus === "completed") {
         return { afterSaleId: afterSale._id, afterSaleStatus: "completed", reused: true };
       }
-      if (["pending_review", "waiting_return", "returned", "received", "inspecting"].includes(afterSale.afterSaleStatus)) {
+      if (!canCompleteAfterSale(afterSale.afterSaleStatus)) {
+        if (["rejected", "cancelled"].includes(afterSale.afterSaleStatus)) {
+          throw new Error("已拒绝或已取消的售后不能标记完成");
+        }
         throw new Error("当前售后流程尚未完成，不能标记完成");
       }
-      if (["rejected", "cancelled"].includes(afterSale.afterSaleStatus)) throw new Error("已拒绝或已取消的售后不能标记完成");
       const next = { ...afterSale, afterSaleStatus: "completed", completedAt: db.serverDate(), updatedAt: db.serverDate() };
       await tx.collection("after_sales").doc(afterSale._id).update({
         data: { afterSaleStatus: "completed", completedAt: db.serverDate(), updatedAt: db.serverDate() }
@@ -1853,6 +2037,86 @@ async function exportAfterSalesExcel(event = {}) {
   return { ...file, totalRows: rows.length };
 }
 
+function legacyRefundMutationResult(result) {
+  const item = result && result.item || {};
+  return {
+    refundRecordId: item.id || "",
+    refundNo: item.refundNo || "",
+    refundStatus: item.status || "",
+    refundAmount: Number(item.amountCents || 0),
+    version: item.version,
+    updatedAt: item.updatedAt,
+    affected: Number(result && result.affected || 0),
+    reused: result && result.reused === true,
+    accountRecalculationPending: result && result.accountRecalculationPending === true
+  };
+}
+
+async function createRefundRecordCanonical(event = {}) {
+  const admin = await requireAnyPermission(["refund:create", "refund:process"], event);
+  const result = await refundMutationService.createRefundRecord({
+    actor: admin,
+    input: {
+      afterSaleId: event.afterSaleId,
+      refundAmountCents: event.refundAmountCents,
+      refundAmount: event.refundAmount,
+      refundMethod: event.refundMethod,
+      refundChannel: event.refundChannel || "offline",
+      financeRemark: event.financeRemark || event.remark || "",
+      offlineRefundAccount: refundSensitivePatch(event)
+    },
+    idempotencyKey: event.idempotencyKey,
+    strict: false
+  });
+  return legacyRefundMutationResult(result);
+}
+
+async function processOfflineRefundCanonical(event = {}) {
+  const admin = await requireRefundAdmin("refund:process", event);
+  const remarkInput = event.financeRemark !== undefined || event.remark !== undefined
+    ? { financeRemark: event.financeRemark || event.remark || "" }
+    : {};
+  const result = await refundMutationService.processOfflineRefund({
+    actor: admin,
+    input: {
+      refundRecordId: event.refundRecordId || event.id,
+      refundAmountCents: event.refundAmountCents,
+      refundAmount: event.refundAmount,
+      expectedRefundStatus: event.expectedRefundStatus,
+      expectedRefundVersion: event.expectedRefundVersion,
+      expectedRefundUpdatedAt: event.expectedRefundUpdatedAt,
+      refundProofFileIds: event.refundProofFileIds,
+      refundProofImages: event.refundProofImages,
+      ...remarkInput
+    },
+    idempotencyKey: event.idempotencyKey,
+    strict: false
+  });
+  return legacyRefundMutationResult(result);
+}
+
+async function rejectRefundCanonical(event = {}) {
+  const admin = await requireRefundAdmin("refund:process", event);
+  const rejectReason = event.rejectReason || event.failedReason || event.reason || "";
+  const idempotencyKey = event.idempotencyKey || `legacy_refund_reject_${commonIdempotency.hashPayload({
+    refundRecordId: event.refundRecordId || event.id || "",
+    rejectReason: cleanText(rejectReason, 300)
+  }).slice(0, 40)}`;
+  const result = await refundMutationService.rejectRefund({
+    actor: admin,
+    input: {
+      refundRecordId: event.refundRecordId || event.id,
+      expectedRefundStatus: event.expectedRefundStatus,
+      expectedRefundVersion: event.expectedRefundVersion,
+      expectedRefundUpdatedAt: event.expectedRefundUpdatedAt,
+      rejectReason
+    },
+    idempotencyKey,
+    strict: false
+  });
+  return legacyRefundMutationResult(result);
+}
+
 const handlers = {
   createAfterSaleRequest,
   getMyAfterSales,
@@ -1860,14 +2124,14 @@ const handlers = {
   submitReturnLogistics,
   getAdminAfterSales,
   getAdminAfterSaleDetail,
-  reviewAfterSale,
+  reviewAfterSale: reviewAfterSaleCanonical,
   confirmReturnReceived,
   inspectReturnItems,
-  createRefundRecord,
-  processOfflineRefund,
+  createRefundRecord: createRefundRecordCanonical,
+  processOfflineRefund: processOfflineRefundCanonical,
   createWechatPayRefund,
   handleWechatRefundNotify,
-  rejectRefund,
+  rejectRefund: rejectRefundCanonical,
   completeAfterSale,
   getAdminRefunds,
   getAdminRefundDetail,

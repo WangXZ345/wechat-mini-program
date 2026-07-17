@@ -20,12 +20,21 @@ export const statusLabels: Record<string, string> = {
   abnormal: "付款异常",
   rejected: "已驳回",
   cancelled: "已取消",
+  pending: "待处理",
   pending_shipment: "待发货",
   shipped: "已发货",
   completed: "已完成",
   pending_review: "待审核",
   approved: "已通过",
+  waiting_return: "待退货",
+  returned: "已寄回",
+  received: "已收货",
+  inspecting: "验货中",
+  refund_pending: "待退款",
   processing: "处理中",
+  refunded: "已退款",
+  partial_refunded: "部分退款",
+  failed: "失败",
   pending_refund: "待退款",
   overdue: "逾期",
   warning: "关注",
@@ -223,8 +232,8 @@ export const resourceDefinitions: Record<string, ResourceDefinition> = {
       { key: "submittedAt", label: "提交时间", kind: "date", width: 150 }
     ],
     rowActions: [
-      { key: "confirm", label: "确认付款", permission: "payment:confirm", type: "success", confirmText: "请确认付款记录已核对无误。" },
-      { key: "reject", label: "驳回", permission: "payment:update_status", type: "danger" }
+      { key: "confirm", label: "确认付款", permission: "payment:confirm", realEnabled: true, type: "success", confirmText: "请确认付款记录已核对无误。" },
+      { key: "reject", label: "驳回", permission: "payment:update_status", realEnabled: true, type: "danger" }
     ],
     bulkActions: []
   },
@@ -306,7 +315,13 @@ export const resourceDefinitions: Record<string, ResourceDefinition> = {
       { label: "全部状态", value: "" },
       { label: "待审核", value: "pending_review" },
       { label: "已通过", value: "approved" },
+      { label: "待退货", value: "waiting_return" },
+      { label: "已寄回", value: "returned" },
+      { label: "已收货", value: "received" },
+      { label: "验货中", value: "inspecting" },
+      { label: "待退款", value: "refund_pending" },
       { label: "处理中", value: "processing" },
+      { label: "已驳回", value: "rejected" },
       { label: "已完成", value: "completed" }
     ],
     columns: [
@@ -319,9 +334,10 @@ export const resourceDefinitions: Record<string, ResourceDefinition> = {
       { key: "createdAt", label: "申请时间", kind: "date", width: 150 }
     ],
     rowActions: [
-      { key: "approve", label: "通过", permission: "after_sale:review", type: "success" },
-      { key: "reject", label: "驳回", permission: "after_sale:review", type: "danger" },
-      { key: "receive", label: "退货验收", permission: "after_sale:receive_return" }
+      { key: "approve", label: "通过", permission: "after_sale:review", realEnabled: true, type: "success" },
+      { key: "reject", label: "驳回", permission: "after_sale:review", realEnabled: true, type: "danger" },
+      { key: "receive", label: "确认收货", permission: "after_sale:receive_return", realEnabled: true, type: "primary" },
+      { key: "inspect", label: "退货验货", permission: "after_sale:inspect", realEnabled: true, type: "warning" }
     ],
     bulkActions: []
   },
@@ -336,10 +352,13 @@ export const resourceDefinitions: Record<string, ResourceDefinition> = {
     emptyText: "当前没有待处理退款",
     statusOptions: [
       { label: "全部状态", value: "" },
-      { label: "待退款", value: "pending_refund" },
+      { label: "待处理", value: "pending" },
       { label: "处理中", value: "processing" },
-      { label: "已完成", value: "completed" },
-      { label: "已驳回", value: "rejected" }
+      { label: "失败", value: "failed" },
+      { label: "已退款", value: "refunded" },
+      { label: "部分退款", value: "partial_refunded" },
+      { label: "已驳回", value: "rejected" },
+      { label: "已取消", value: "cancelled" }
     ],
     columns: [
       { key: "refundNo", label: "退款单", width: 165 },
@@ -351,8 +370,8 @@ export const resourceDefinitions: Record<string, ResourceDefinition> = {
       { key: "updatedAt", label: "更新时间", kind: "date", width: 150 }
     ],
     rowActions: [
-      { key: "process", label: "处理退款", permission: "refund:process", type: "primary", confirmText: "请确认退款信息已核对无误。" },
-      { key: "reject", label: "驳回", permission: "refund:process", type: "danger" }
+      { key: "process", label: "处理退款", permission: "refund:process", realEnabled: true, type: "primary", confirmText: "请确认退款信息已核对无误。" },
+      { key: "reject", label: "驳回", permission: "refund:process", realEnabled: true, type: "danger" }
     ],
     bulkActions: []
   },

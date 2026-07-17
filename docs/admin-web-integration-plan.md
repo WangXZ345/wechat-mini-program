@@ -1,5 +1,11 @@
 # 网页后台真实数据接入计划
 
+> **退货验收更新（2026-07-16）：** Web `receive/inspect` 与小程序旧入口已共享 canonical `returnInspectionService`；客服/超级管理员允许，财务/采购拒绝。最新本地证据为 Cloud `558/558`、Web `412/412`、TypeScript、ESLint、Mock/Real build 和 Real 资产扫描通过；Real/CloudBase 与双端仍未验证。
+
+> **2026-07-16 付款审核进度：** 第四批已在本地开放当前付款凭证 `confirm/reject`，Web BFF 与旧 `adminUpdatePayment` 共享 canonical `paymentMutationService`。Web 只传付款记录 ID、固定 `pending_confirm`、`version/updatedAt` 快照、原因和 header 幂等键；金额、订单 ID、actor/openid、凭证 URL、交易号、账款值与未知字段一律禁止。只有订单当前权威凭证可审核，active `finance/super_admin` 仍需各自精确权限。canonical 事务统一处理付款、订单、账款/流水、配送日志、管理员 journal 和最小 outbox；驳回不创建收款流水，legacy 状态/别名/批次保持兼容。
+>
+> **验证与部署边界：** 新 local-only 包 `.codex-cloudfunction-deploy/admin-web-eighteen-functions-guarded-20260716-172745/` 含 18 函数、166 JS、28 JSON、0 禁止项；manifest SHA256 `1DC75B43B2AC4DF5A1AF59788F2B8554912B357E2A15545ED1F509855BEC3026`、售后服务 SHA256 `BFC7B5BCBDFE6204BB62D1604791733F97E65DCA1515B52B07C91A4A7A024685`，`uploadPerformed=false`。fresh Cloud `538/538`、Web `400/400`、TypeScript 和 ESLint 通过；本地 Mock 浏览器已验证售后通过/驳回、金额/版本/幂等冲突、敏感字段不泄露和客服/财务/采购角色边界，Real/CloudBase 浏览器验证仍未执行。部署前必须审计唯一索引 `account_logs(accountId, afterPaymentMutationVersion)`、`sync_events(eventId)` 并配置 `SYNC_OWNER_PEPPER`，但本轮未建索引、未上传/部署、未连接 CloudBase、未执行真实付款、退款或 RT-07/RT-12。
+
 > **2026-07-13 付款与账款只读进度：** 第四批已本地完成 canonical `accountQueryService`/`paymentQueryService`、账款旧入口兼容 adapters、BFF `GET /accounts`、`GET /accounts/:id`、`GET /payments` 与 `GET /payments/:id`、严格 Web DTO、Mock/HTTP 筛选和只读详情页。账款重算、修改、结清、导出、付款确认/驳回及凭证预览继续关闭。当前 16 函数 local-only 保护包 `.codex-cloudfunction-deploy/admin-web-seventeen-functions-guarded-20260713-202500/` 包含 16 个函数、149 个 JS、25 个 JSON、0 个禁止目录，`uploadPerformed=false`；真实 CloudBase 查询、索引、上传、部署和双端验证均未执行。
 
 > **2026-07-13 合并发货单只读进度：** 第三批已本地完成 canonical `shipmentQueryService`、`shipmentGroups` legacy read adapters、BFF `GET /shipments` 与 `GET /shipments/:id`、严格 Web DTO、Mock/HTTP cursor、合并发货单列表和专用只读详情页。该范围不含单订单发货；所有发货写操作和导出在 Real 模式均保持关闭，`merge/ship/edit` 返回 501，未登记的 `cancel/complete/export` 返回 404。该切片使用 14 函数历史保护包，当前候选已扩展为上方 16 函数包；真实 CloudBase 查询、索引、上传、部署与双端验证均未执行。
@@ -11,7 +17,7 @@
 > **2026-07-12 商品写切片历史：** 第二批已在本地增加商品详情、新建和 metadata-only 编辑，并把 `manageProduct.create/update` 收口到同一 `productWriteService`。Web 编辑不拥有售价、库存、预警、上下架或标签字段；当前小程序商品页已传 `expectedVersion` 和稳定 `Idempotency-Key`，adapter 仍允许真正旧客户端缺失以保持兼容。新增部署前置为 `system_counters/product_index` 的审批、预置和 `products.productIndex` 唯一性审计。当时的 `admin-web-ten-functions-guarded-20260712-191343` 已过期，不能作为当前部署候选。
 
 > 创建：2026-07-11  
-> 当前阶段：第一、二轮本地基础设施完成；第三轮已完成受控商品/库存写、商品分析、订单列表/详情与审核/驳回、合并发货单列表/只读详情；第四轮已完成付款记录与客户账款安全只读本地实现，付款写入、售后退款和财务写入仍未完成。本文不代表云函数已上传、Web 已部署或真实双端测试已通过。
+> 当前阶段：第一、二轮本地基础设施完成；第三轮已完成受控商品/库存写、商品分析、订单列表/详情与审核/驳回、合并发货单列表/只读详情；第四轮已完成付款/账款安全只读、当前付款凭证确认/驳回、售后审核和退货验收本地实现。账款重算/结清/导出、凭证预览、退款处理和其他财务写入仍未完成。本文不代表云函数已上传、Web 已部署或真实双端测试已通过。
 
 ## 1. 目标与环境结论
 
@@ -60,7 +66,7 @@ VITE_REALTIME_MODE=polling
 | 付款 | `payment_records`/付款详情投影 | `adminUpdatePayment`/`confirmPayment`/驳回服务 |
 | 账款 | `adminListCustomerAccounts`、detail/summary | 仅复用既有账款聚合与受控操作 |
 | 发货 | `getAdminShipmentGroups`/detail | `shipmentGroups`、确认/合并/取消/完成服务 |
-| 售后退款 | `afterSales` 聚合 action | review/验收/refund 既有事务与幂等服务 |
+| 售后退款 | `afterSales` 聚合 action | `approve/reject` 已接 `afterSaleReviewService`；验收/refund 仍复用旧事务与幂等服务，待后续迁移 |
 | 分析 | Web `GET /analytics/products -> adminWebApi -> getOverview()`；小程序 `adminDashboard:getProductAnalytics -> getProductDetail()` | 共用 canonical 查询服务，只返回聚合/商品投影，不返回订单、客户、操作者或原始日志 |
 | 管理员/日志 | `getAdminUsers/getAdminOperationLogs` | 既有角色/禁用服务，仍以 `admin_users` 为权威 |
 | 设置 | `settings` 集合固定文档 `_id=system_settings` | `getSettings/updateSettings`；BFF 固定文档映射已修正，写入仍未迁移 |
@@ -116,7 +122,7 @@ VITE_REALTIME_MODE=polling
 
 ### 第四批：付款、账款、售后退款
 
-最后迁移财务和退款入口。财务不能审核售后，退款不能超过已付款金额和 `approvedRefundAmount`，重复请求不能重复入账或恢复库存。
+付款确认/驳回、售后审核和退货验收已完成本地迁移。售后审核请求严格限制为整数分金额、状态/version/更新时间快照和幂等键；退货验收同样要求严格快照和幂等键，只有可售商品允许回补库存。客服/超级管理员可执行，财务/采购拒绝。退款处理、账款重算/结清/导出和凭证预览仍保持关闭。后续迁移财务和退款入口时，仍须保证退款不能超过已付款金额和 `approvedRefundAmount`，重复请求不能重复入账或恢复库存。
 
 ## 5. 权限要求
 
