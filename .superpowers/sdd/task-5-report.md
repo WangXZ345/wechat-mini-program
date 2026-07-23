@@ -27,3 +27,15 @@
 - 未运行 `docker compose ... config`、未构建镜像、未检查 image history 或容器文件系统；本机未安装 Docker。
 - 未在极空间执行 Compose UI 导入、镜像构建、启动、healthcheck、secret bind mount 或多架构运行时验证。以上应由 Task 7 在目标极空间环境完成。
 - 未创建真实 secret、`.env` 或任何生产连接；未上传、未发布、未 push/merge。
+
+## Fix Review: RED / GREEN
+
+- RED command: `node --test server/container-contract.test.mjs`（使用 bundled Node）。输出为 `pass 1`、`fail 2`：Dockerfile 仍整目录复制 `/app/server` 且采用 `wget`，Compose 仍使用普通 `volumes` bind mount，未声明 top-level secret。
+- GREEN command: `node --test server/container-contract.test.mjs`。输出为 `pass 3`、`fail 0`。契约现强制：构建阶段 `package-lock.json` + `npm ci`、`.env.*` 排除且显式 `!.env.test`、运行阶段仅复制五个生产模块且禁止任何 `*.test.mjs`、non-root `USER node`、Node 20 `fetch` healthcheck、Compose hardening、top-level secret 的 source/target/mode/file 层级与唯一 BFF target。
+- 运行时镜像现在只包含 `dist/` 和五个 gateway 生产模块（`config.mjs`、`static-handler.mjs`、`proxy-handler.mjs`、`server.mjs`、`index.mjs`）；不复制 `server/` 目录、测试或容器契约测试。
+- Compose 使用 top-level `admin_web_action_secret`，来源为相对 Compose 目录的 `./secrets/admin_web_action_secret`，服务采用 long syntax 以 `/run/secrets/admin_web_action_secret` 的默认 target 文件名挂载并设置 mode `0444`；保留 `ADMIN_WEB_ACTION_SECRET_FILE` 文件路径，不传入 secret 值。
+- Task 6 文档交接要求：必须明确宿主 `secrets/admin_web_action_secret` 文件只应由管理员读取，且上述相对路径以 Compose 文件目录为基准。
+
+## Fix Review: 验证边界
+
+- 完整 gateway 测试与真实模式构建/扫描仍在本机以 bundled Node 执行；Docker 仍不可用，因此未运行镜像 build、`docker compose config`、image history 或容器文件系统检查。

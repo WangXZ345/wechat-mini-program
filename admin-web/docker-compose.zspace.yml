@@ -16,8 +16,10 @@ services:
       ADMIN_WEB_BFF_TARGET: ${ADMIN_WEB_BFF_TARGET}
       ADMIN_WEB_ACTION_SECRET_FILE: /run/secrets/admin_web_action_secret
       ADMIN_WEB_UPSTREAM_TIMEOUT_MS: "55000"
-    volumes:
-      - ./secrets/admin_web_action_secret:/run/secrets/admin_web_action_secret:ro
+    secrets:
+      - source: admin_web_action_secret
+        target: admin_web_action_secret
+        mode: 0444
     read_only: true
     tmpfs:
       - /tmp
@@ -26,8 +28,12 @@ services:
     cap_drop:
       - ALL
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+secrets:
+  admin_web_action_secret:
+    file: ./secrets/admin_web_action_secret
