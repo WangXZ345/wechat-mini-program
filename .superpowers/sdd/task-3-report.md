@@ -160,6 +160,113 @@ skipped 1
 ## 关注点与验证边界
 
 1. 当前业务写接口为 JSON，导入页面只提交文件名/预览结果而不上传二进制，因此默认 1 MiB 足够；未来若新增文件直传，需要在受控配置中显式提高 `maxRequestBodyBytes` 并补容量测试。
-2. 上游返回的应用层 4xx/5xx 业务 JSON 为保持现有错误码/文案契约而流式透传；本代理保证的是自身路径、413、网络错误和 timeout 错误不泄露上游异常细节或 secret。上游业务错误仍需由 BFF 自身脱敏。
+2. 上游应用层 4xx 业务 JSON 为保持现有错误码/文案契约而流式透传，仍需由 BFF 自身脱敏；`>=500` 已按下方 Fix Review 改为有界缓冲和最小安全 envelope 重建。
 3. 验证使用本机 loopback HTTP 加公开 `requestUpstream` 注入，未连接测试 CloudBase、未验证公网 TLS/证书/NAS 网络，也未连接生产。
 4. 基线 `package.json` 的 `test:gateway` 还列出后续 Task 4 的 `server/server.test.mjs`，当前文件尚不存在；因此本任务使用明确的 Task 1–3 三文件联跑，不把缺少后续任务文件误报为 Task 3 失败。
+
+## Fix Review
+
+### 审查结论与修复
+
+根据 Task 3 安全审查的 Needs changes，在同一 worktree 追加以下修复；仍只修改 Task 3 实现、测试和本报告。
+
+1. 请求体 DoS 与连接终止：
+   - 删除错误路径中的 `request.resume()` 无限排空。
+   - 超限 413、非法路径/方法及上游在浏览器上传结束前提前完成时，暂停并解绑本代理的请求体监听，响应显式设置 `Connection: close`。
+   - 错误响应 `finish` 后销毁 incoming request/socket；真实慢速 chunked 客户端验证可稳定收到完整 413 后连接关闭。
+   - 已等待的旧 `drain` 回调同时检查 terminal/close 状态；上游提前完成后不会重新 `resume()` 未结束上传。
+   - 正常已完成请求不设置 `Connection: close`，真实 keep-alive agent 连续两次请求复用同一 socket。
+2. 失败重入：
+   - 在执行 `destroy()`、写响应或其他副作用之前原子锁定 `terminalLocked`。
+   - `destroyUpstream()` 幂等；同一 upstream 连续触发 `aborted -> error -> close` 只生成一次稳定 502。
+   - upstream/outgoing 使用持续 `error` sink，late second error 被安全忽略，不产生测试结束后的 uncaught exception。
+3. 平台级 5xx 脱敏：
+   - 仅对 `>=500` 响应做最大 64 KiB 有界缓冲；2xx 继续流式，4xx 保持现有业务契约。
+   - HTML、解析失败、超限和非规范 JSON 重建为固定 `{ ok:false, code:"BFF_UPSTREAM_ERROR", message:"后台服务暂时不可用" }`。
+   - 仅当顶层 envelope 同时满足 `ok === false`、规范大写 code、规范 requestId 和 JSON content type 时，投影顶层 `code`/`requestId`；message 固定泛化，绝不复制 `error`、`meta`、`stack`、nested、serverTime 或原 body。
+   - 规范 501 `SERVICE_NOT_MIGRATED` 保留 status/code/requestId，但不暴露原始迁移细节。
+   - 5xx 重建响应仅保留 `Set-Cookie`、`Retry-After`、`WWW-Authenticate`、`X-Request-Id` 等最小安全头，并覆盖 JSON content headers。
+4. 方法白名单：
+   - 只允许 `GET`、`POST`、`OPTIONS`。
+   - `HEAD`、`TRACE` 及其他方法本地返回 405，带 `Allow: GET, POST, OPTIONS`，不创建 upstream、不注入 action secret。
+   - `OPTIONS` 继续代理到现有 BFF 边界。
+5. 双向背压：
+   - 保留既有请求方向重复 `drain` 测试。
+   - 新增响应方向连续三次 `write(false) -> pause -> drain -> resume` 测试，确认每轮都恢复且数据完整。
+
+### Review RED
+
+新增审查用例后的命令：
+
+```powershell
+& 'C:\Users\bin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' --test server/proxy-handler.test.mjs
+```
+
+关键输出：
+
+```text
+tests 23
+pass 16
+fail 7
+actual connection: keep-alive (expected close)
+upstream destroy calls: 3 (expected 1)
+platform HTML/JSON and oversized 5xx were returned unsanitized
+HEAD returned upstream 204 (expected local 405)
+```
+
+第一版 GREEN 后 23 个断言本身通过，但测试 runner 检出一条异步噪音：
+
+```text
+Error: A resource generated asynchronous activity after the test ended.
+Error: late error
+```
+
+该结果未被当作通过。原因是 `.once("error")` 在第一次重入 error 后移除，第二个 late error 无监听；改为持续 error sink 后重新验证。
+
+最终自查又用精确用例复现 stale `drain` 竞态：
+
+```text
+tests 1
+pass 0
+fail 1
+requestResumeCalls: 1 (expected 0)
+```
+
+修正 `drain` 恢复条件后，该用例及全套专项测试均通过。
+
+### Review GREEN
+
+Proxy 专项最终结果：
+
+```text
+tests 25
+pass 25
+fail 0
+skipped 0
+无异步资源或 uncaught error 噪音
+```
+
+Task 1–3 gateway 联跑：
+
+```text
+tests 47
+pass 46
+fail 0
+skipped 1
+```
+
+唯一 skip 仍是 Windows 环境文件 symlink 创建 `EPERM`；junction 越界保护测试通过。
+
+稳定性与静态检查：
+
+- Proxy 25 项连续重复 5 次：全部 PASS。
+- `node --check`：实现和测试均 exit code 0。
+- 定向 ESLint：0 errors，0 warnings。
+- `git diff --check`：exit code 0。
+- 未连接 CloudBase/NAS/生产，未 push、merge、upload 或发布。
+
+### Review 后剩余验证边界
+
+1. 64 KiB 只用于平台 5xx 安全重建，不改变 2xx 流式响应；如果未来 BFF 合法 5xx envelope 超过该上限，会安全降级为 `BFF_UPSTREAM_ERROR`。
+2. 规范 5xx code 仅在同时存在合法顶层 requestId 时保留；不完整 envelope 会安全降级，调用方应以 HTTP status 和 `BFF_UPSTREAM_ERROR` 处理。
+3. 连接关闭测试使用真实本机 HTTP socket/keep-alive agent；公网 TLS、CloudBase 平台和 NAS 反代链路仍未连接或实测。

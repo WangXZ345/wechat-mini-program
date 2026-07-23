@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { createServer, request as httpRequest } from "node:http";
+import { Agent, createServer, request as httpRequest } from "node:http";
 import test from "node:test";
 import { createProxyHandler } from "./proxy-handler.mjs";
 
@@ -588,4 +588,479 @@ test("uses a 1 MiB request limit when the loaded gateway config has no override"
   assert.equal(response.statusCode, 413);
   assert.equal(JSON.parse(response.body).code, "BFF_REQUEST_TOO_LARGE");
   assert.equal(completedUpstreamRequests, 0);
+});
+
+test("closes a slow chunked upload after returning a stable 413 without draining the remaining body", async (t) => {
+  let completedUpstreamRequests = 0;
+  const upstream = await listen(createServer((incoming, response) => {
+    incoming.on("error", () => {});
+    incoming.on("end", () => {
+      completedUpstreamRequests += 1;
+      response.end("unexpected");
+    });
+    incoming.resume();
+  }));
+  t.after(() => close(upstream));
+  const gateway = await startGateway(createProxyHandler(
+    gatewayConfig(serverUrl(upstream), { maxRequestBodyBytes: 16 }),
+    httpRequest
+  ));
+  t.after(() => close(gateway));
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  t.after(() => agent.destroy());
+
+  let client;
+  const clientClosed = new Promise((resolve) => {
+    client = httpRequest({
+      agent,
+      headers: { "content-type": "application/octet-stream", "transfer-encoding": "chunked" },
+      host: "127.0.0.1",
+      method: "POST",
+      path: "/api/admin/v1/orders/review",
+      port: gateway.address().port
+    });
+    client.once("close", resolve);
+  });
+  t.after(() => client.destroy());
+  const responsePromise = new Promise((resolve, reject) => {
+    client.on("response", (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => resolve({
+        body: Buffer.concat(chunks).toString("utf8"),
+        headers: response.headers,
+        statusCode: response.statusCode
+      }));
+    });
+    client.on("error", reject);
+  });
+  client.write(Buffer.alloc(12, "a"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  client.write(Buffer.alloc(12, "b"));
+
+  const response = await responsePromise;
+  assert.equal(response.statusCode, 413);
+  assert.equal(JSON.parse(response.body).code, "BFF_REQUEST_TOO_LARGE");
+  assert.equal(response.headers.connection, "close");
+  await Promise.race([
+    clientClosed,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error("oversized upload connection remained open")),
+      300
+    ))
+  ]);
+  assert.equal(client.destroyed, true);
+  assert.equal(completedUpstreamRequests, 0);
+});
+
+test("closes an unfinished browser upload when upstream responds before request end", async (t) => {
+  const upstream = await listen(createServer((incoming, response) => {
+    incoming.once("data", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
+    });
+  }));
+  t.after(() => close(upstream));
+  const gateway = await startGateway(createProxyHandler(gatewayConfig(serverUrl(upstream)), httpRequest));
+  t.after(() => close(gateway));
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  t.after(() => agent.destroy());
+
+  let client;
+  const clientClosed = new Promise((resolve) => {
+    client = httpRequest({
+      agent,
+      headers: { "content-type": "application/octet-stream", "transfer-encoding": "chunked" },
+      host: "127.0.0.1",
+      method: "POST",
+      path: "/api/admin/v1/orders/review",
+      port: gateway.address().port
+    });
+    client.once("close", resolve);
+  });
+  t.after(() => client.destroy());
+  const responsePromise = new Promise((resolve, reject) => {
+    client.on("response", (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => resolve({
+        body: Buffer.concat(chunks).toString("utf8"),
+        headers: response.headers,
+        statusCode: response.statusCode
+      }));
+    });
+    client.on("error", reject);
+  });
+  client.write("partial upload");
+
+  const response = await responsePromise;
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body, '{"ok":true}');
+  assert.equal(response.headers.connection, "close");
+  await Promise.race([
+    clientClosed,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error("early upstream response left browser upload open")),
+      300
+    ))
+  ]);
+  assert.equal(client.destroyed, true);
+});
+
+test("keeps a normal completed request connection reusable", async (t) => {
+  const upstream = await listen(createServer((_incoming, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"ok":true}');
+  }));
+  t.after(() => close(upstream));
+  const gateway = await startGateway(createProxyHandler(gatewayConfig(serverUrl(upstream)), httpRequest));
+  t.after(() => close(gateway));
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  t.after(() => agent.destroy());
+
+  const sockets = [];
+  const makeRequest = () => new Promise((resolve, reject) => {
+    const client = httpRequest({
+      agent,
+      host: "127.0.0.1",
+      path: "/api/admin/v1/dashboard",
+      port: gateway.address().port
+    }, (response) => {
+      response.resume();
+      response.on("end", () => resolve(response));
+    });
+    client.on("socket", (socket) => sockets.push(socket));
+    client.on("error", reject);
+    client.end();
+  });
+
+  const first = await makeRequest();
+  const second = await makeRequest();
+  assert.notEqual(first.headers.connection, "close");
+  assert.notEqual(second.headers.connection, "close");
+  assert.equal(sockets[0], sockets[1]);
+});
+
+test("locks the first upstream failure before aborted, error, and close can re-enter", async (t) => {
+  let upstreamDestroyCalls = 0;
+  const requestUpstream = (_options, callback) => {
+    const outgoing = new EventEmitter();
+    outgoing.destroy = () => {};
+    outgoing.end = () => queueMicrotask(() => {
+      const upstreamResponse = new EventEmitter();
+      upstreamResponse.complete = false;
+      upstreamResponse.headers = { "content-type": "application/json" };
+      upstreamResponse.pause = () => {};
+      upstreamResponse.resume = () => {};
+      upstreamResponse.statusCode = 200;
+      upstreamResponse.destroy = () => {
+        upstreamDestroyCalls += 1;
+        if (upstreamDestroyCalls === 1) {
+          upstreamResponse.emit("error", new Error("reentrant error"));
+          upstreamResponse.emit("close");
+        }
+      };
+      callback(upstreamResponse);
+      upstreamResponse.emit("aborted");
+      upstreamResponse.emit("error", new Error("late error"));
+      upstreamResponse.emit("close");
+    });
+    outgoing.setTimeout = () => {};
+    outgoing.write = () => true;
+    return outgoing;
+  };
+  const gateway = await startGateway(createProxyHandler(
+    gatewayConfig(new URL("https://upstream.invalid")),
+    requestUpstream
+  ));
+  t.after(() => close(gateway));
+
+  const response = await request(gateway);
+  assert.equal(response.statusCode, 502);
+  assert.equal(JSON.parse(response.body).code, "BFF_UPSTREAM_UNAVAILABLE");
+  assert.equal(upstreamDestroyCalls, 1);
+});
+
+test("replaces platform HTML and arbitrary 5xx JSON with a fixed safe envelope", async (t) => {
+  const upstream = await listen(createServer((incoming, response) => {
+    if (incoming.url.endsWith("/html")) {
+      response.writeHead(500, { "content-type": "text/html", "set-cookie": "refresh=safe; HttpOnly; Secure" });
+      response.end(`<html><pre>platform stack ${ACTION_SECRET}</pre></html>`);
+      return;
+    }
+    response.writeHead(502, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      code: "ATTACKER_CONTROLLED",
+      message: `secret detail ${ACTION_SECRET}`,
+      nested: { token: ACTION_SECRET },
+      stack: "private platform stack"
+    }));
+  }));
+  t.after(() => close(upstream));
+  const gateway = await startGateway(createProxyHandler(gatewayConfig(serverUrl(upstream)), httpRequest));
+  t.after(() => close(gateway));
+
+  for (const [path, statusCode] of [
+    ["/api/admin/v1/platform/html", 500],
+    ["/api/admin/v1/platform/json", 502]
+  ]) {
+    const response = await request(gateway, { path });
+    const body = JSON.parse(response.body);
+    assert.equal(response.statusCode, statusCode);
+    assert.deepEqual(body, {
+      ok: false,
+      code: "BFF_UPSTREAM_ERROR",
+      message: "后台服务暂时不可用"
+    });
+    assert.match(response.headers["content-type"], /^application\/json/);
+    assert.doesNotMatch(response.body, /ATTACKER|secret|stack|nested|ssssssss|<html>/i);
+    if (path.endsWith("/html")) {
+      assert.deepEqual(response.headers["set-cookie"], ["refresh=safe; HttpOnly; Secure"]);
+    }
+  }
+});
+
+test("projects only canonical top-level code and requestId from a BFF 501", async (t) => {
+  const upstream = await listen(createServer((_incoming, response) => {
+    response.writeHead(501, { "content-type": "application/json", "x-request-id": "header-request" });
+    response.end(JSON.stringify({
+      ok: false,
+      code: "SERVICE_NOT_MIGRATED",
+      message: `internal migration detail ${ACTION_SECRET}`,
+      requestId: "request-501",
+      serverTime: "private",
+      error: { code: "SERVICE_NOT_MIGRATED", message: "nested secret" },
+      meta: { requestId: "request-501", trace: "private" }
+    }));
+  }));
+  t.after(() => close(upstream));
+  const gateway = await startGateway(createProxyHandler(gatewayConfig(serverUrl(upstream)), httpRequest));
+  t.after(() => close(gateway));
+
+  const response = await request(gateway, { path: "/api/admin/v1/settings/migrate" });
+  assert.equal(response.statusCode, 501);
+  assert.deepEqual(JSON.parse(response.body), {
+    ok: false,
+    code: "SERVICE_NOT_MIGRATED",
+    message: "后台服务暂时不可用",
+    requestId: "request-501"
+  });
+  assert.equal(response.headers["x-request-id"], "header-request");
+  assert.doesNotMatch(response.body, /internal|nested|serverTime|meta|error|ssssssss/);
+});
+
+test("bounds buffered upstream 5xx bodies before returning a generic error", async (t) => {
+  const upstream = await listen(createServer((_incoming, response) => {
+    response.writeHead(502, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      ok: false,
+      code: "SERVICE_NOT_MIGRATED",
+      message: "x".repeat(70 * 1024),
+      requestId: "oversized-request"
+    }));
+  }));
+  t.after(() => close(upstream));
+  const gateway = await startGateway(createProxyHandler(gatewayConfig(serverUrl(upstream)), httpRequest));
+  t.after(() => close(gateway));
+
+  const response = await request(gateway);
+  assert.equal(response.statusCode, 502);
+  assert.deepEqual(JSON.parse(response.body), {
+    ok: false,
+    code: "BFF_UPSTREAM_ERROR",
+    message: "后台服务暂时不可用"
+  });
+  assert.ok(Buffer.byteLength(response.body) < 1024);
+});
+
+test("proxies OPTIONS but rejects HEAD and TRACE locally without creating upstream requests", async (t) => {
+  const upstreamRequests = [];
+  const upstream = await listen(createServer((incoming, response) => {
+    upstreamRequests.push({
+      headers: incoming.headers,
+      method: incoming.method
+    });
+    response.writeHead(204).end();
+  }));
+  t.after(() => close(upstream));
+  const gateway = await startGateway(createProxyHandler(gatewayConfig(serverUrl(upstream)), httpRequest));
+  t.after(() => close(gateway));
+
+  const options = await request(gateway, { method: "OPTIONS" });
+  assert.equal(options.statusCode, 204);
+  assert.equal(upstreamRequests.length, 1);
+  assert.equal(upstreamRequests[0].method, "OPTIONS");
+  assert.equal(upstreamRequests[0].headers["x-admin-action-secret"], ACTION_SECRET);
+
+  const head = await request(gateway, { method: "HEAD" });
+  assert.equal(head.statusCode, 405);
+  assert.equal(head.headers.allow, "GET, POST, OPTIONS");
+  assert.equal(head.body, "");
+
+  const trace = await request(gateway, { method: "TRACE" });
+  assert.equal(trace.statusCode, 405);
+  assert.equal(trace.headers.allow, "GET, POST, OPTIONS");
+  assert.equal(JSON.parse(trace.body).code, "BFF_METHOD_NOT_ALLOWED");
+  assert.equal(upstreamRequests.length, 1);
+});
+
+test("resumes the upstream response after every downstream backpressure cycle", async () => {
+  const upstreamChunks = ["first", "second", "third"];
+  let pauseCalls = 0;
+  let resumeCalls = 0;
+  const requestUpstream = (_options, callback) => {
+    const outgoing = new EventEmitter();
+    outgoing.destroy = () => {};
+    outgoing.setTimeout = () => {};
+    outgoing.write = () => true;
+    outgoing.end = () => queueMicrotask(() => {
+      let index = 0;
+      let paused = false;
+      const upstreamResponse = new EventEmitter();
+      upstreamResponse.complete = false;
+      upstreamResponse.destroy = () => {};
+      upstreamResponse.headers = { "content-type": "application/octet-stream" };
+      upstreamResponse.statusCode = 200;
+      const emitNext = () => {
+        if (paused) return;
+        if (index === upstreamChunks.length) {
+          upstreamResponse.complete = true;
+          upstreamResponse.emit("end");
+          upstreamResponse.emit("close");
+          return;
+        }
+        const chunk = upstreamChunks[index];
+        index += 1;
+        upstreamResponse.emit("data", Buffer.from(chunk));
+      };
+      upstreamResponse.pause = () => {
+        pauseCalls += 1;
+        paused = true;
+      };
+      upstreamResponse.resume = () => {
+        resumeCalls += 1;
+        paused = false;
+        queueMicrotask(emitNext);
+      };
+      callback(upstreamResponse);
+      queueMicrotask(emitNext);
+    });
+    return outgoing;
+  };
+
+  const incomingRequest = new EventEmitter();
+  incomingRequest.destroyed = false;
+  incomingRequest.headers = {};
+  incomingRequest.method = "GET";
+  incomingRequest.pause = () => {};
+  incomingRequest.readableEnded = false;
+  incomingRequest.resume = () => {};
+  incomingRequest.url = "/api/admin/v1/dashboard";
+
+  const responseChunks = [];
+  const outgoingResponse = new EventEmitter();
+  outgoingResponse.destroyed = false;
+  outgoingResponse.headersSent = false;
+  outgoingResponse.writableEnded = false;
+  outgoingResponse.destroy = () => {
+    outgoingResponse.destroyed = true;
+    outgoingResponse.emit("close");
+  };
+  outgoingResponse.end = (chunk) => {
+    if (chunk) responseChunks.push(Buffer.from(chunk));
+    outgoingResponse.writableEnded = true;
+    queueMicrotask(() => outgoingResponse.emit("finish"));
+  };
+  outgoingResponse.write = (chunk) => {
+    responseChunks.push(Buffer.from(chunk));
+    setImmediate(() => outgoingResponse.emit("drain"));
+    return false;
+  };
+  outgoingResponse.writeHead = (statusCode, headers) => {
+    outgoingResponse.headersSent = true;
+    outgoingResponse.statusCode = statusCode;
+    outgoingResponse.headers = headers;
+  };
+
+  const handler = createProxyHandler(
+    gatewayConfig(new URL("https://upstream.invalid")),
+    requestUpstream
+  );
+  const handled = handler(incomingRequest, outgoingResponse);
+  incomingRequest.readableEnded = true;
+  incomingRequest.emit("end");
+  assert.equal(await handled, true);
+  assert.equal(outgoingResponse.statusCode, 200);
+  assert.equal(Buffer.concat(responseChunks).toString("utf8"), "firstsecondthird");
+  assert.equal(pauseCalls, 3);
+  assert.equal(resumeCalls, 3);
+});
+
+test("does not resume an unfinished upload from a stale drain after upstream completed early", async () => {
+  let outgoing;
+  let requestResumeCalls = 0;
+  let responseFinish;
+  const requestUpstream = (_options, callback) => {
+    outgoing = new EventEmitter();
+    outgoing.destroy = () => {};
+    outgoing.end = () => {};
+    outgoing.setTimeout = () => {};
+    outgoing.write = () => {
+      queueMicrotask(() => {
+        const upstreamResponse = new EventEmitter();
+        upstreamResponse.complete = true;
+        upstreamResponse.destroy = () => {};
+        upstreamResponse.headers = { "content-type": "application/json" };
+        upstreamResponse.pause = () => {};
+        upstreamResponse.resume = () => {};
+        upstreamResponse.statusCode = 200;
+        callback(upstreamResponse);
+        upstreamResponse.emit("data", Buffer.from('{"ok":true}'));
+        upstreamResponse.emit("end");
+        upstreamResponse.emit("close");
+        outgoing.emit("drain");
+        responseFinish();
+      });
+      return false;
+    };
+    return outgoing;
+  };
+
+  const incomingRequest = new EventEmitter();
+  incomingRequest.destroy = () => {
+    incomingRequest.destroyed = true;
+  };
+  incomingRequest.destroyed = false;
+  incomingRequest.headers = { "transfer-encoding": "chunked" };
+  incomingRequest.method = "POST";
+  incomingRequest.pause = () => {};
+  incomingRequest.readableEnded = false;
+  incomingRequest.resume = () => {
+    requestResumeCalls += 1;
+  };
+  incomingRequest.url = "/api/admin/v1/orders/review";
+
+  const outgoingResponse = new EventEmitter();
+  outgoingResponse.destroyed = false;
+  outgoingResponse.headersSent = false;
+  outgoingResponse.writableEnded = false;
+  outgoingResponse.destroy = () => {};
+  outgoingResponse.end = () => {
+    outgoingResponse.writableEnded = true;
+  };
+  outgoingResponse.write = () => true;
+  outgoingResponse.writeHead = () => {
+    outgoingResponse.headersSent = true;
+  };
+  responseFinish = () => outgoingResponse.emit("finish");
+
+  const handler = createProxyHandler(
+    gatewayConfig(new URL("https://upstream.invalid")),
+    requestUpstream
+  );
+  const handled = handler(incomingRequest, outgoingResponse);
+  incomingRequest.emit("data", Buffer.from("partial"));
+  assert.equal(await handled, true);
+  assert.equal(requestResumeCalls, 0);
+  assert.equal(incomingRequest.destroyed, true);
 });
