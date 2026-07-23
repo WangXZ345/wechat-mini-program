@@ -263,7 +263,10 @@ function proxyRequest(request, response, config, target, requestUpstream, maxReq
     response.once("finish", () => {
       const shouldCloseIncoming = closeIncomingAfterResponse;
       settle();
-      if (shouldCloseIncoming && !request.destroyed) request.destroy();
+      if (shouldCloseIncoming) {
+        destroyUpstream();
+        if (!request.destroyed) request.destroy();
+      }
     });
     response.once("close", () => {
       if (!completed) {

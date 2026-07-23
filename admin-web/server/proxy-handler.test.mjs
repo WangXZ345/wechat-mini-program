@@ -998,12 +998,21 @@ test("resumes the upstream response after every downstream backpressure cycle", 
 
 test("does not resume an unfinished upload from a stale drain after upstream completed early", async () => {
   let outgoing;
+  let outgoingDestroyCalls = 0;
+  let outgoingEndCalls = 0;
   let requestResumeCalls = 0;
+  let responseDestroyCalls = 0;
+  let responseEndCalls = 0;
   let responseFinish;
   const requestUpstream = (_options, callback) => {
     outgoing = new EventEmitter();
-    outgoing.destroy = () => {};
-    outgoing.end = () => {};
+    outgoing.destroy = () => {
+      outgoingDestroyCalls += 1;
+      outgoing.emit("error", new Error("late outgoing error after early response"));
+    };
+    outgoing.end = () => {
+      outgoingEndCalls += 1;
+    };
     outgoing.setTimeout = () => {};
     outgoing.write = () => {
       queueMicrotask(() => {
@@ -1044,8 +1053,11 @@ test("does not resume an unfinished upload from a stale drain after upstream com
   outgoingResponse.destroyed = false;
   outgoingResponse.headersSent = false;
   outgoingResponse.writableEnded = false;
-  outgoingResponse.destroy = () => {};
+  outgoingResponse.destroy = () => {
+    responseDestroyCalls += 1;
+  };
   outgoingResponse.end = () => {
+    responseEndCalls += 1;
     outgoingResponse.writableEnded = true;
   };
   outgoingResponse.write = () => true;
@@ -1063,4 +1075,8 @@ test("does not resume an unfinished upload from a stale drain after upstream com
   assert.equal(await handled, true);
   assert.equal(requestResumeCalls, 0);
   assert.equal(incomingRequest.destroyed, true);
+  assert.equal(outgoingDestroyCalls, 1);
+  assert.equal(outgoingEndCalls, 0);
+  assert.equal(responseEndCalls, 1);
+  assert.equal(responseDestroyCalls, 0);
 });

@@ -270,3 +270,49 @@ skipped 1
 1. 64 KiB 只用于平台 5xx 安全重建，不改变 2xx 流式响应；如果未来 BFF 合法 5xx envelope 超过该上限，会安全降级为 `BFF_UPSTREAM_ERROR`。
 2. 规范 5xx code 仅在同时存在合法顶层 requestId 时保留；不完整 envelope 会安全降级，调用方应以 HTTP status 和 `BFF_UPSTREAM_ERROR` 处理。
 3. 连接关闭测试使用真实本机 HTTP socket/keep-alive agent；公网 TLS、CloudBase 平台和 NAS 反代链路仍未连接或实测。
+
+### Fix Review 复审 Important：早响应 upstream 生命周期
+
+复审发现：upstream 在浏览器请求体结束前提前成功响应时，安全分支会移除 request `end` 监听；此前 downstream `finish` 只销毁 incoming request，没有结束或销毁 outgoing ClientRequest。
+
+在既有 early-response/stale-drain 测试中增加：
+
+- `outgoing.destroy()` 必须在 downstream 安全 `finish` 后恰好调用一次；
+- 未结束上传不会伪造 `outgoing.end()`；
+- `destroy()` 同步触发的 late outgoing error 不产生 uncaught noise 或第二个响应；
+- downstream 仍只 `end()` 一次，且不被 `destroy()`；
+- incoming request 仍关闭，stale `drain` 仍不得 `resume()`。
+
+Focused RED：
+
+```powershell
+& $node --test --test-name-pattern "does not resume an unfinished upload" server/proxy-handler.test.mjs
+```
+
+关键输出：
+
+```text
+tests 1
+pass 0
+fail 1
+outgoingDestroyCalls: 0 (expected 1)
+```
+
+实现只改 downstream `finish` 回调：先 `settle()` 锁定完成状态，再仅当 `closeIncomingAfterResponse === true` 时调用幂等 `destroyUpstream()`，最后销毁 incoming request。这样同步 late error 看到 completed 状态后直接 no-op；正常已完成请求和 keep-alive 分支不调用该销毁路径。
+
+Focused GREEN：
+
+```text
+tests 1
+pass 1
+fail 0
+```
+
+Proxy 专项 GREEN：
+
+```text
+tests 25
+pass 25
+fail 0
+无异步资源或 uncaught error 噪音
+```
