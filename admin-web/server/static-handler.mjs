@@ -1,5 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
-import { extname, resolve, sep } from "node:path";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -38,9 +38,15 @@ function isSafePath(pathname) {
   return pathname.startsWith("/") && !pathname.includes("\0") && !pathname.split(/[\\/]/).includes("..");
 }
 
-async function fileOrNull(path) {
+function isInside(root, candidate) {
+  const difference = relative(root, candidate);
+  return difference === "" || (difference !== ".." && !difference.startsWith(`..${sep}`) && !isAbsolute(difference));
+}
+
+async function fileInsideRoot(path, realRoot) {
   try {
-    return (await stat(path)).isFile() ? path : null;
+    const realFile = await realpath(path);
+    return isInside(realRoot, realFile) && (await stat(realFile)).isFile() ? realFile : null;
   } catch {
     return null;
   }
@@ -48,6 +54,7 @@ async function fileOrNull(path) {
 
 export function createStaticHandler({ distDir }) {
   const root = resolve(distDir);
+  const realRoot = realpath(root).catch(() => null);
 
   return async function staticHandler(request, response) {
     const rawPathname = String(request.url || "/").split("?", 1)[0];
@@ -59,6 +66,10 @@ export function createStaticHandler({ distDir }) {
       return true;
     }
 
+    if (!isSafePath(pathname)) {
+      badRequest(response);
+      return true;
+    }
     if (isApiPath(pathname)) return false;
     if (pathname === "/healthz") {
       response.writeHead(200, {
@@ -66,10 +77,6 @@ export function createStaticHandler({ distDir }) {
         "content-type": "application/json; charset=utf-8"
       });
       response.end(request.method === "HEAD" ? undefined : '{"ok":true}');
-      return true;
-    }
-    if (!isSafePath(pathname)) {
-      badRequest(response);
       return true;
     }
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -83,8 +90,13 @@ export function createStaticHandler({ distDir }) {
       badRequest(response);
       return true;
     }
-    const requestedFile = await fileOrNull(requested);
-    const file = requestedFile || (pathname.startsWith("/assets/") ? null : await fileOrNull(resolve(root, "index.html")));
+    const physicalRoot = await realRoot;
+    if (!physicalRoot) {
+      notFound(response);
+      return true;
+    }
+    const requestedFile = await fileInsideRoot(requested, physicalRoot);
+    const file = requestedFile || (pathname.startsWith("/assets/") ? null : await fileInsideRoot(resolve(root, "index.html"), physicalRoot));
     if (!file) {
       notFound(response);
       return true;
@@ -99,7 +111,7 @@ export function createStaticHandler({ distDir }) {
         return true;
       }
     }
-    const isAsset = file.startsWith(`${root}${sep}assets${sep}`);
+    const isAsset = file.startsWith(`${physicalRoot}${sep}assets${sep}`);
     response.writeHead(200, {
       "cache-control": isAsset ? "public, max-age=31536000, immutable" : "no-store",
       "content-type": TYPES.get(extname(file).toLowerCase()) || "application/octet-stream"

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -93,6 +93,23 @@ test("API paths are left for the API handler", async (t) => {
   }
 });
 
+test("unsafe API paths are rejected before the API handler", async (t) => {
+  const distDir = await fixture();
+  t.after(() => rm(distDir, { force: true, recursive: true }));
+  await withServer(distDir, async (server) => {
+    for (const path of [
+      "/api/admin/v1/../secret",
+      "/api/admin/v1/%2e%2e/secret",
+      "/api/admin/v1/%00secret",
+      "/api/admin/v1/%E0%A4%A"
+    ]) {
+      const response = await request(server, path);
+      assert.equal(response.statusCode, 400, path);
+      assert.equal(response.body, "Bad Request");
+    }
+  });
+});
+
 test("encoded traversal and malformed paths are rejected without SPA fallback", async (t) => {
   const distDir = await fixture();
   t.after(() => rm(distDir, { force: true, recursive: true }));
@@ -123,5 +140,45 @@ test("a missing index responds safely instead of throwing", async (t) => {
     const response = await request(server, "/missing-route");
     assert.equal(response.statusCode, 404);
     assert.equal(response.body, "Not Found");
+  });
+});
+
+test("directory junctions that escape the real dist root are not served", async (t) => {
+  const distDir = await fixture({ withIndex: false });
+  const outsideDir = await mkdtemp(join(tmpdir(), "admin-web-static-outside-"));
+  t.after(() => Promise.all([
+    rm(distDir, { force: true, recursive: true }),
+    rm(outsideDir, { force: true, recursive: true })
+  ]));
+  await writeFile(join(outsideDir, "secret.txt"), "outside asset");
+  try {
+    await symlink(outsideDir, join(distDir, "assets", "outside"), "junction");
+  } catch (error) {
+    t.skip(`junction creation is unavailable: ${error.code || error.message}`);
+    return;
+  }
+  await withServer(distDir, async (server) => {
+    const asset = await request(server, "/assets/outside/secret.txt");
+    assert.equal(asset.statusCode, 404);
+  });
+});
+
+test("a fallback index symlink outside the real dist root is not served", async (t) => {
+  const distDir = await fixture({ withIndex: false });
+  const outsideDir = await mkdtemp(join(tmpdir(), "admin-web-static-outside-"));
+  t.after(() => Promise.all([
+    rm(distDir, { force: true, recursive: true }),
+    rm(outsideDir, { force: true, recursive: true })
+  ]));
+  await writeFile(join(outsideDir, "index.html"), "outside index");
+  try {
+    await symlink(join(outsideDir, "index.html"), join(distDir, "index.html"), "file");
+  } catch (error) {
+    t.skip(`file symlink creation is unavailable: ${error.code || error.message}`);
+    return;
+  }
+  await withServer(distDir, async (server) => {
+    const fallback = await request(server, "/orders/order-1");
+    assert.equal(fallback.statusCode, 404);
   });
 });
