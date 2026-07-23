@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const TEST_BFF_ORIGIN = "https://cloud1-d7g4mbc5r2fac4a77-1440838049.ap-shanghai.app.tcloudbase.com";
+
 function exactHttpsUrl(raw, label, allowPath) {
   const value = String(raw || "").trim();
   let parsed;
@@ -29,11 +31,14 @@ function integer(raw, fallback, min, max, label) {
 
 export function loadGatewayConfig(env = process.env, readSecret = (path) => readFileSync(path, "utf8")) {
   const publicUrl = exactHttpsUrl(env.ADMIN_WEB_PUBLIC_ORIGIN, "ADMIN_WEB_PUBLIC_ORIGIN", false);
-  const upstream = exactHttpsUrl(env.ADMIN_WEB_BFF_TARGET, "ADMIN_WEB_BFF_TARGET", true);
+  const upstream = exactHttpsUrl(env.ADMIN_WEB_BFF_TARGET, "ADMIN_WEB_BFF_TARGET", false);
+  if (upstream.origin !== TEST_BFF_ORIGIN) {
+    throw new Error("ADMIN_WEB_BFF_TARGET must match the configured test BFF gateway.");
+  }
   const secretFile = String(env.ADMIN_WEB_ACTION_SECRET_FILE || "").trim();
   if (!secretFile) throw new Error("ADMIN_WEB_ACTION_SECRET_FILE is required.");
   const actionSecret = String(readSecret(secretFile)).trim();
-  if (actionSecret.length < 32 || /[\r\n\0]/.test(actionSecret)) {
+  if (actionSecret.length < 32 || /[\u0000-\u001f\u007f]/.test(actionSecret)) {
     throw new Error("The action secret must be at least 32 characters without control characters.");
   }
   return Object.freeze({

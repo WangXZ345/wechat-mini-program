@@ -21,6 +21,19 @@ test("loads a normalized production gateway configuration", () => {
 });
 
 for (const value of [
+  "https://production.example.com",
+  "https://third-party.example.com",
+  `${baseEnv.ADMIN_WEB_BFF_TARGET}/unexpected-path`
+]) {
+  test(`rejects a BFF target outside the exact test gateway contract: ${value}`, () => {
+    assert.throws(
+      () => loadGatewayConfig({ ...baseEnv, ADMIN_WEB_BFF_TARGET: value }, () => "s".repeat(32)),
+      /ADMIN_WEB_BFF_TARGET/
+    );
+  });
+}
+
+for (const value of [
   "http://example.zconnect.cn",
   "https://user:pass@example.zconnect.cn",
   "https://example.zconnect.cn/path",
@@ -38,3 +51,10 @@ for (const value of [
 test("rejects missing or short action secret", () => {
   assert.throws(() => loadGatewayConfig(baseEnv, () => "short"), /action secret/i);
 });
+
+for (const controlCharacter of ["\t", "\v", "\x7f"]) {
+  test(`rejects action secrets containing control character ${JSON.stringify(controlCharacter)}`, () => {
+    const secret = `${"s".repeat(16)}${controlCharacter}${"s".repeat(16)}`;
+    assert.throws(() => loadGatewayConfig(baseEnv, () => secret), /action secret/i);
+  });
+}
