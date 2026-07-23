@@ -45,6 +45,14 @@ function isApiPath(pathname) {
   return pathname === API_ROOT || pathname.startsWith(`${API_ROOT}/`);
 }
 
+function containsForbiddenRequestCharacter(value) {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
 function parseRequestTarget(rawUrl) {
   const raw = String(rawUrl || "/");
   const rawPathname = raw.split("?", 1)[0];
@@ -53,7 +61,8 @@ function parseRequestTarget(rawUrl) {
     !raw.startsWith("/")
     || raw.startsWith("//")
     || raw.includes("#")
-    || /[\u0000-\u0020\u007f\\]/.test(raw)
+    || containsForbiddenRequestCharacter(raw)
+    || raw.includes("\\")
   ) {
     return { handled: true, valid: false };
   }

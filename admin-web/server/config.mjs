@@ -29,6 +29,14 @@ function integer(raw, fallback, min, max, label) {
   return value;
 }
 
+function containsControlCharacter(value) {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
 export function loadGatewayConfig(env = process.env, readSecret = (path) => readFileSync(path, "utf8")) {
   const publicUrl = exactHttpsUrl(env.ADMIN_WEB_PUBLIC_ORIGIN, "ADMIN_WEB_PUBLIC_ORIGIN", false);
   const upstream = exactHttpsUrl(env.ADMIN_WEB_BFF_TARGET, "ADMIN_WEB_BFF_TARGET", false);
@@ -38,7 +46,7 @@ export function loadGatewayConfig(env = process.env, readSecret = (path) => read
   const secretFile = String(env.ADMIN_WEB_ACTION_SECRET_FILE || "").trim();
   if (!secretFile) throw new Error("ADMIN_WEB_ACTION_SECRET_FILE is required.");
   const actionSecret = String(readSecret(secretFile)).trim();
-  if (actionSecret.length < 32 || /[\u0000-\u001f\u007f]/.test(actionSecret)) {
+  if (actionSecret.length < 32 || containsControlCharacter(actionSecret)) {
     throw new Error("The action secret must be at least 32 characters without control characters.");
   }
   return Object.freeze({

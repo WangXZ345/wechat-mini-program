@@ -117,6 +117,42 @@ npm run build
 
 `npm run test:e2e` 需要已安装 Playwright Chromium。本地 Mock、静态检查和构建不能替代真实 BFF、数据库权限、Cookie/CSRF、事务幂等或小程序双端同步测试。
 
+## 极空间部署（测试环境）
+
+以下步骤只面向隔离测试环境的极空间 Docker Compose 项目；不发布小程序、不连接生产环境，也不将 secret 粘贴到聊天、截图或 Git。上传 `admin-web/` 后，建议使用管理员可写、普通用户不可浏览的项目目录，例如：
+
+```text
+<极空间受限目录>/beauty-wholesale-admin-web/
+├── docker-compose.zspace.yml
+├── zspace.env                 # 从 zspace.env.example 复制；不提交
+├── Dockerfile
+├── server/
+├── dist/                       # 由镜像构建产生，不必手工复制
+└── secrets/
+    └── admin_web_action_secret # 宿主机 secret；不提交、不截图
+```
+
+Compose 项目目录就是上述 `beauty-wholesale-admin-web/`；`docker-compose.zspace.yml` 中的 `./secrets/admin_web_action_secret` 相对此目录解析。`zspace.env.example` 只包含可公开的变量，首次启动可临时保留 `ADMIN_WEB_PUBLIC_ORIGIN=https://bootstrap.invalid`，顶层 secret 必须单独保存在 `secrets/admin_web_action_secret`，不得写进 Compose 环境变量、`zspace.env` 或镜像。
+
+容器以 UID 1000 运行。因此在宿主机上，secret 文件必须由数值 UID 1000 拥有并设为 `0400`，或使用 ACL 仅向 UID 1000 授予只读权限。启动前和后续 Task 7 均须在容器内验证该文件实际可读；如果验证失败，停止处理权限问题，绝不能改成 `0444`、全局可读，也不能改为 root 运行时绕过问题。
+
+### 部署顺序
+
+1. 将已验证的 `admin-web/` 上传至极空间中仅管理员可写的 Compose 项目目录，并在该目录创建 `secrets/admin_web_action_secret`；不要截图或把内容写入 Compose。
+2. 复制 `zspace.env.example` 为同目录的私有 `zspace.env`。首次仅使用 `ADMIN_WEB_PUBLIC_ORIGIN=https://bootstrap.invalid`；`ADMIN_WEB_BFF_TARGET` 必须是已经确认的隔离测试 BFF HTTPS 地址。
+3. 在极空间 Docker 的 Compose 项目界面导入同目录 `docker-compose.zspace.yml`，确认项目目录正确、默认宿主端口为 `18080`，然后启动。只先验收服务状态为 `healthy` 和容器内 secret 可读；不要把 bootstrap 地址用于登录。
+4. 在极空间远程访问中把宿主端口 `18080` 添加为网页服务。记录极空间给出的完整 HTTPS 地址，并从中精确提取 `scheme + host + 可选端口` 作为 `ZSPACE_PUBLIC_ORIGIN`。
+5. 若远程访问 URL 带有 path-prefix（例如 `https://host/prefix/`），立即停止部署：当前网关按站点根路径设计，须先设计并验证 base-path 支持；不要通过修改 CloudBase 配置来规避该问题。
+6. 用精确的 `ZSPACE_PUBLIC_ORIGIN` 替换 `zspace.env` 中的 bootstrap origin，在 Compose GUI 中重新创建容器，并再次确认 `healthy`、`/healthz` 和容器内 secret 读取。
+7. 仅在用户明确确认后，才分别把该精确 origin 加入测试环境两个云函数的 allowlist：`adminWebApi`、`adminWebAuth`（A-Z 顺序）。保留本地 origin，不使用 wildcard；此步骤不上传或发布小程序。
+8. 最终验收只做外网登录和代表性的真实读取。不得以订单、库存、账款、付款或客户数据写操作来证明连通性。
+
+### 更新、版本标签与回滚
+
+更新前记录正在运行的镜像标签（当前 Compose 示例为 `beauty-wholesale-admin-web:2026-07-23`）、Compose 文件版本和当前可用的 `ZSPACE_PUBLIC_ORIGIN`。更新时先在本地完成本 README 的验证命令，再上传同一版本的项目目录，在 Compose GUI 中将 `image` 标签改为新的明确版本标签后重新创建容器，并复核健康检查与只读验收。
+
+如需回滚，将 Compose 中镜像标签切回上一条已记录标签并重新创建容器。镜像回滚不修改业务数据库；只有远程 HTTPS 地址确认废弃后，才在用户确认后从测试 allowlist 中删除对应 origin。不得删除 local origin 或以 wildcard 替代精确 origin。
+
 ## 部署边界
 
-本工程当前只完成本地 Web 前端、真实/Mock 构建隔离和 transport 契约。尚未上传云函数、创建数据库集合或索引、连接测试/生产数据、部署 Web、发布小程序。测试部署时应让 Web 测试版和小程序体验版访问同一套隔离测试业务库，并通过同源 HTTPS `/api` 转发到 Web BFF。
+本轮仅准备了极空间测试环境的 Compose 包和部署说明，尚未在 Docker、极空间 NAS 或真实远程 HTTPS origin 上运行或验证；也尚未执行本轮任何云函数 allowlist 修改、云函数上传、Web 部署或小程序发布。真实验收应让 Web 测试版和小程序体验版访问同一套隔离测试业务库，并通过同源 HTTPS `/api` 转发到 Web BFF；本地检查、镜像构建和容器健康检查均不能替代该验收。
