@@ -12,6 +12,15 @@ async function readAdminWebFile(name) {
   return readFile(path.join(adminWebDir, name), "utf8");
 }
 
+function runtimeServerCopyBasenames(runtimeStage) {
+  return Array.from(
+    runtimeStage.matchAll(
+      /^COPY --from=build --chown=node:node \/app\/server\/([^/\s]+) \/app\/server\/[^\s]+$/gm,
+    ),
+    (match) => match[1],
+  ).sort();
+}
+
 test("container package builds the real gateway into a non-root runtime image", async () => {
   const dockerfile = await readAdminWebFile("Dockerfile");
   const runtimeStage = dockerfile.split(/^FROM node:20-alpine AS runtime$/m)[1];
@@ -23,18 +32,13 @@ test("container package builds the real gateway into a non-root runtime image", 
   assert.match(dockerfile, /^FROM node:20-alpine AS runtime$/m);
   assert.match(dockerfile, /COPY --from=build --chown=node:node \/app\/dist \.\/dist/);
   assert.ok(runtimeStage, "missing runtime stage");
-  for (const module of [
+  assert.deepEqual(runtimeServerCopyBasenames(runtimeStage), [
     "config.mjs",
-    "static-handler.mjs",
+    "index.mjs",
     "proxy-handler.mjs",
     "server.mjs",
-    "index.mjs",
-  ]) {
-    assert.match(
-      runtimeStage,
-      new RegExp(`^COPY --from=build --chown=node:node /app/server/${module} /app/server/${module}$`, "m"),
-    );
-  }
+    "static-handler.mjs",
+  ]);
   assert.doesNotMatch(
     runtimeStage,
     /^COPY --from=build --chown=node:node \/app\/server\s+(?:\.\/)?server\/?$/m,
@@ -86,9 +90,10 @@ test("ZSpace Compose uses public configuration and mounts the action secret read
   assert.match(compose, /^ {6}ADMIN_WEB_PUBLIC_ORIGIN: \$\{ADMIN_WEB_PUBLIC_ORIGIN\}$/m);
   assert.match(compose, /^ {6}ADMIN_WEB_BFF_TARGET: \$\{ADMIN_WEB_BFF_TARGET\}$/m);
   assert.match(compose, /^ {6}ADMIN_WEB_ACTION_SECRET_FILE: \/run\/secrets\/admin_web_action_secret$/m);
+  assert.match(compose, /^ {4}user: "1000:1000"$/m);
   assert.match(
     compose,
-    /^ {4}secrets:\n {6}- source: admin_web_action_secret\n {8}target: admin_web_action_secret\n {8}mode: 0444$/m,
+    /^ {4}secrets:\n {6}- source: admin_web_action_secret\n {8}target: admin_web_action_secret$/m,
   );
   assert.match(
     compose,
@@ -103,8 +108,14 @@ test("ZSpace Compose uses public configuration and mounts the action secret read
     /^ {6}test: \["CMD", "node", "-e", "fetch\('http:\/\/127\.0\.0\.1:8080\/healthz'\)/m,
   );
   assert.doesNotMatch(compose, /^ {4}volumes:/m);
+  assert.doesNotMatch(compose, /^\s*(?:mode|uid|gid):/m);
   assert.doesNotMatch(compose, /^\s*ADMIN_WEB_ACTION_SECRET:\s*/m);
   assert.doesNotMatch(compose, /\bwget\b/);
+  assert.match(envExample, /numeric UID 1000.*0400/s);
+  assert.match(envExample, /ACL.*UID 1000.*read-only/s);
+  assert.match(envExample, /Compose project directory/);
+  assert.match(envExample, /Task 7.*actual container or ZSpace read/);
+  assert.match(envExample, /world-readable/);
   assert.match(envExample, /ADMIN_WEB_PUBLIC_ORIGIN=https:\/\/bootstrap\.invalid/);
   assert.match(envExample, new RegExp(`ADMIN_WEB_BFF_TARGET=${expectedBffTarget.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}`));
 });

@@ -39,3 +39,11 @@
 ## Fix Review: 验证边界
 
 - 完整 gateway 测试与真实模式构建/扫描仍在本机以 bundled Node 执行；Docker 仍不可用，因此未运行镜像 build、`docker compose config`、image history 或容器文件系统检查。
+
+## Fix Review 2: file-backed secret 可读性
+
+- RED command: `node --test server/container-contract.test.mjs`。输出为 `pass 2`、`fail 1`，因为 Compose 尚未显式锁定非 root `user: "1000:1000"`，且仍含 file-backed secret 上不会可靠生效的 `mode: 0444` 声明。
+- GREEN command: `node --test server/container-contract.test.mjs`。输出为 `pass 3`、`fail 0`。服务现在显式以 `1000:1000` 运行，保留 top-level secret 与 target，删除 service secret 的 `mode`/`uid`/`gid` 虚假权限声明；Dockerfile 仍以 `USER node` 运行。
+- 契约现在提取 runtime stage 内每条 `/app/server/` 的 `COPY --from=build` 源 basename，并与五文件白名单做精确 `deepEqual`；任何第六个生产文件、测试文件或整目录复制都会失败。
+- `zspace.env.example` 明确写出可执行前置条件：宿主 `secrets/admin_web_action_secret` 必须由 numeric UID 1000 拥有且为 `0400`，或 ACL 明确授予 UID 1000 只读；相对路径以 Compose 项目目录解析；Task 7 启动前必须用实际容器/极空间读取验证，失败不得放宽为 world-readable。
+- 静态 Docker/Compose 包无法证明极空间宿主 secret 对 UID 1000 真实可读；该闭环只可由 Task 7 的实际运行验证完成。本机仍无 Docker，未运行镜像构建、Compose config 或运行时检查。

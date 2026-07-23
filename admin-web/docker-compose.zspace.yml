@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     image: beauty-wholesale-admin-web:2026-07-23
     container_name: beauty-wholesale-admin-web
+    user: "1000:1000"
     restart: unless-stopped
     ports:
       - "18080:8080"
@@ -19,7 +20,6 @@ services:
     secrets:
       - source: admin_web_action_secret
         target: admin_web_action_secret
-        mode: 0444
     read_only: true
     tmpfs:
       - /tmp
