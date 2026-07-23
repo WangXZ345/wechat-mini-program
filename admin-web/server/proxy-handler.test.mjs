@@ -208,6 +208,52 @@ test("rejects malformed or encoded traversal inside the API namespace without co
   assert.equal(upstreamRequests, 0);
 });
 
+test("rejects raw C0, space, DEL, and backslash request targets before contacting upstream", async () => {
+  let upstreamRequests = 0;
+  const handler = createProxyHandler(
+    gatewayConfig(new URL("https://upstream.invalid")),
+    () => {
+      upstreamRequests += 1;
+      throw new Error("unsafe raw target reached upstream");
+    }
+  );
+
+  for (const suffix of [String.fromCharCode(0x1f), String.fromCharCode(0x20), String.fromCharCode(0x7f), "\\"]) {
+    const request = new EventEmitter();
+    request.destroyed = false;
+    request.headers = {};
+    request.method = "GET";
+    request.pause = () => {};
+    request.resume = () => {};
+    request.url = `/api/admin/v1/raw${suffix}target`;
+    request.destroy = () => {
+      request.destroyed = true;
+    };
+
+    const chunks = [];
+    const response = new EventEmitter();
+    response.destroyed = false;
+    response.headersSent = false;
+    response.writableEnded = false;
+    response.writeHead = (statusCode, headers) => {
+      response.headersSent = true;
+      response.statusCode = statusCode;
+      response.headers = headers;
+    };
+    response.end = (chunk) => {
+      if (chunk) chunks.push(Buffer.from(chunk));
+      response.writableEnded = true;
+      response.emit("finish");
+    };
+
+    assert.equal(await handler(request, response), true);
+    assert.equal(response.statusCode, 400);
+    assert.equal(JSON.parse(Buffer.concat(chunks).toString("utf8")).code, "BFF_INVALID_PATH");
+    assert.equal(request.destroyed, true);
+  }
+  assert.equal(upstreamRequests, 0);
+});
+
 test("converts an upstream request error to a detail-free JSON 502", async (t) => {
   const requestUpstream = () => {
     const outgoing = new EventEmitter();
