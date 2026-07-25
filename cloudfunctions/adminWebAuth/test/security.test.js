@@ -31,6 +31,7 @@ const REMOTE_SECURITY_ENV = {
   ADMIN_WEB_ACTION_SECRET: "a".repeat(32),
   ADMIN_WEB_ALLOWED_ORIGINS: "https://admin.test.example"
 };
+const ZSPACE_TEST_ORIGIN = "https://remote-access-18081.zconnect.cn";
 
 test("normalizes login identifiers without retaining whitespace or case", () => {
   assert.equal(normalizeLoginId("  Admin.User  "), "admin.user");
@@ -127,7 +128,12 @@ test("origin parsing is exact and remote environments fail closed", () => {
     assert.equal(config.testLike, false);
     assert.equal(config.remoteLike, true);
     assert.equal(config.allowInsecureActionTransport, false);
-    assert.deepEqual(config.allowedOrigins, ["https://admin.test.example"]);
+    assert.deepEqual(
+      config.allowedOrigins,
+      environment === "test"
+        ? ["https://admin.test.example", ZSPACE_TEST_ORIGIN]
+        : ["https://admin.test.example"]
+    );
   }
 
   for (const origin of ["http://localhost:5173", "http://127.0.0.1:4173", "http://[::1]:5173"]) {
@@ -136,7 +142,7 @@ test("origin parsing is exact and remote environments fail closed", () => {
       ...REMOTE_SECURITY_ENV,
       ADMIN_WEB_ALLOWED_ORIGINS: origin
     });
-    assert.deepEqual(config.allowedOrigins, [origin]);
+    assert.deepEqual(config.allowedOrigins, [origin, ZSPACE_TEST_ORIGIN]);
   }
   for (const origin of [
     "http://admin.test.example",
@@ -163,15 +169,36 @@ test("origin parsing is exact and remote environments fail closed", () => {
       ADMIN_WEB_ALLOWED_ORIGINS: "http://127.0.0.1:5173"
     }), /安全配置不完整/);
   }
-  for (const key of ["ADMIN_WEB_TOKEN_PEPPER", "ADMIN_WEB_PASSWORD_PEPPER", "ADMIN_WEB_ACTION_SECRET", "ADMIN_WEB_ALLOWED_ORIGINS"]) {
+  for (const key of ["ADMIN_WEB_TOKEN_PEPPER", "ADMIN_WEB_PASSWORD_PEPPER", "ADMIN_WEB_ACTION_SECRET"]) {
     assert.throws(() => loadSecurityConfig({ ADMIN_WEB_ENV: "test", ...REMOTE_SECURITY_ENV, [key]: "" }), /安全配置不完整/);
   }
+  assert.deepEqual(loadSecurityConfig({
+    ADMIN_WEB_ENV: "test",
+    ...REMOTE_SECURITY_ENV,
+    ADMIN_WEB_ALLOWED_ORIGINS: ""
+  }).allowedOrigins, [ZSPACE_TEST_ORIGIN]);
   assert.throws(() => loadSecurityConfig({
     ADMIN_WEB_ENV: "test",
     ...REMOTE_SECURITY_ENV,
     ADMIN_WEB_ALLOW_BOOTSTRAP: "true",
     ADMIN_WEB_BOOTSTRAP_SECRET: "short"
   }), /安全配置不完整/);
+});
+
+test("only the test environment automatically trusts the ZSpace remote-access origin", () => {
+  const testConfig = loadSecurityConfig({
+    ADMIN_WEB_ENV: "test",
+    ...REMOTE_SECURITY_ENV
+  });
+  assert.equal(testConfig.allowedOrigins.includes(ZSPACE_TEST_ORIGIN), true);
+
+  for (const environment of ["staging", "production"]) {
+    const config = loadSecurityConfig({
+      ADMIN_WEB_ENV: environment,
+      ...REMOTE_SECURITY_ENV
+    });
+    assert.equal(config.allowedOrigins.includes(ZSPACE_TEST_ORIGIN), false);
+  }
 });
 
 test("only an explicit local switch enables insecure internal-gateway transport", () => {

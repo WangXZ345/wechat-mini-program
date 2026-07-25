@@ -24,6 +24,7 @@ const DEFAULT_SCRYPT_PARAMS = Object.freeze({
 });
 
 const TEST_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"];
+const TEST_REMOTE_ORIGINS = ["https://remote-access-18081.zconnect.cn"];
 const REFRESH_COOKIE_NAME = "__Host-admin_web_refresh";
 const LOCAL_ENVIRONMENTS = new Set(["local", "development", "unit-test"]);
 const REMOTE_ENVIRONMENTS = new Set(["test", "staging", "production"]);
@@ -307,8 +308,13 @@ function loadSecurityConfig(env = process.env) {
   const remoteLike = REMOTE_ENVIRONMENTS.has(environment);
   const tokenPepper = String(env.ADMIN_WEB_TOKEN_PEPPER || (localLike ? "local-only-token-pepper-never-deploy" : ""));
   const passwordPepper = String(env.ADMIN_WEB_PASSWORD_PEPPER || (localLike ? "local-only-password-pepper-never-deploy" : ""));
-  let allowedOrigins = parseAllowedOrigins(env.ADMIN_WEB_ALLOWED_ORIGINS, environment);
+  const configuredAllowedOrigins = String(env.ADMIN_WEB_ALLOWED_ORIGINS || "").trim();
+  let allowedOrigins = parseAllowedOrigins(configuredAllowedOrigins, environment);
+  const invalidConfiguredOrigins = Boolean(configuredAllowedOrigins && !allowedOrigins.length);
   if (!allowedOrigins.length && localLike) allowedOrigins = TEST_ORIGINS.slice();
+  if (environment === "test" && !invalidConfiguredOrigins) {
+    allowedOrigins = Array.from(new Set([...allowedOrigins, ...TEST_REMOTE_ORIGINS]));
+  }
   const actionSecret = String(env.ADMIN_WEB_ACTION_SECRET || "");
   const bootstrapEnabled = String(env.ADMIN_WEB_ALLOW_BOOTSTRAP || "").toLowerCase() === "true";
   const bootstrapSecret = String(env.ADMIN_WEB_BOOTSTRAP_SECRET || "");
