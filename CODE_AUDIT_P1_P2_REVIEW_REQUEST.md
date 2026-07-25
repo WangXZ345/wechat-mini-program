@@ -2,8 +2,9 @@
 
 ## 1. 审阅目标
 
-请审阅 `main` 分支从基线提交 `07eae28` 到最新的
-`fix: harden P1 P2 order and payment flows` 提交之间的代码变化。
+请审阅 `main` 分支从基线提交 `07eae28` 到 `HEAD` 的代码变化。
+P1/P2 核心代码提交为 `22c1681 fix: harden P1 P2 order and payment flows`；
+其后的提交只更新本审阅说明和部署状态。
 
 本轮只处理原代码审计报告中的 P1/P2。P0 中的真实 CloudBase transaction API
 兼容性、真实并发、生产唯一索引和冲突行为不属于本轮修改目标，请仅在本轮代码使这些风险
@@ -113,14 +114,12 @@ Critical/Important，请明确写出，并单独列出剩余环境风险和测�
 
 ## 7. 部署状态
 
-用户已确认以下 30 个云函数均已上传；本次 Codex 会话没有重新连接云环境核验上传版本或执行真实数据写入。
-
-提交前独立复审发现，原 `adminReviewOrder` 与 `adminWebApi` 源目录中的 4 个审核依赖文件是跨目录 proxy。当前本地代码已将它们修复为自包含 canonical 副本，并增加 hash 回归测试。因此，无论此前使用原始目录还是 guarded 包上传，这两个云函数都必须在当前提交后再次上传，才能确认云端版本与 `main` 一致：
+用户已确认以下 30 个云函数均已上传，并在核心代码提交 `22c1681` 后重新上传了最后修复涉及的两个函数：
 
 - `adminReviewOrder`
 - `adminWebApi`
 
-其余 28 个函数本轮收口阶段没有再次修改。此前上传状态来自用户确认，不是 Codex 云端核验结果。
+其余 28 个函数本轮收口阶段没有再次修改。全部上传状态来自用户确认；Codex 没有重新连接云环境核验函数版本/hash，也没有执行真实数据写入，因此“已上传”不等同于已完成云端运行验收。
 
 完整 30 个函数账本：
 
@@ -180,7 +179,8 @@ admin-web/BFF 的本地 test/build 不等同于已部署；如本次需要交付
 请以 Git 中的实际提交为唯一代码依据，不要直接采信本文或本地验证报告的结论：
 
 ```powershell
-git show --stat --oneline --decorate HEAD
+git log --oneline --decorate 07eae28..HEAD
+git show --stat --oneline 22c1681
 git diff --find-renames 07eae28..HEAD
 git status --short
 ```
