@@ -1,0 +1,126 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const adminWebDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const expectedBffTarget =
+  "https://cloud1-d7g4mbc5r2fac4a77-1440838049.ap-shanghai.app.tcloudbase.com";
+
+async function readAdminWebFile(name) {
+  return readFile(path.join(adminWebDir, name), "utf8");
+}
+
+function runtimeServerCopyBasenames(runtimeStage) {
+  return Array.from(
+    runtimeStage.matchAll(
+      /^COPY --from=build --chown=node:node \/app\/server\/([^/\s]+) \/app\/server\/[^\s]+$/gm,
+    ),
+    (match) => match[1],
+  ).sort();
+}
+
+test("container package builds the real gateway into a non-root runtime image", async () => {
+  const dockerfile = await readAdminWebFile("Dockerfile");
+  const runtimeStage = dockerfile.split(/^FROM \$\{NODE_IMAGE\} AS runtime$/m)[1];
+
+  assert.match(dockerfile, /^ARG NODE_IMAGE=node:20-alpine$/m);
+  assert.match(dockerfile, /^FROM \$\{NODE_IMAGE\} AS build$/m);
+  assert.match(dockerfile, /^COPY package\.json package-lock\.json \.\/$/m);
+  assert.match(dockerfile, /RUN npm ci/);
+  assert.match(dockerfile, /RUN npm run test:gateway && npm run build/);
+  assert.match(dockerfile, /^FROM \$\{NODE_IMAGE\} AS runtime$/m);
+  assert.match(dockerfile, /COPY --from=build --chown=node:node \/app\/dist \.\/dist/);
+  assert.ok(runtimeStage, "missing runtime stage");
+  assert.deepEqual(runtimeServerCopyBasenames(runtimeStage), [
+    "config.mjs",
+    "index.mjs",
+    "proxy-handler.mjs",
+    "server.mjs",
+    "static-handler.mjs",
+  ]);
+  assert.doesNotMatch(
+    runtimeStage,
+    /^COPY --from=build --chown=node:node \/app\/server\s+(?:\.\/)?server\/?$/m,
+  );
+  assert.doesNotMatch(runtimeStage, /\.test\.mjs|container-contract\.test\.mjs/);
+  assert.match(dockerfile, /^USER node$/m);
+  assert.match(dockerfile, /^EXPOSE 8080$/m);
+  assert.match(
+    dockerfile,
+    /CMD node -e "fetch\('http:\/\/127\.0\.0\.1:8080\/healthz'\)/,
+  );
+  assert.doesNotMatch(dockerfile, /\bwget\b/);
+  assert.match(dockerfile, /CMD \["node", "server\/index\.mjs"\]/);
+});
+
+test("container build context excludes local, generated, and secret-bearing files", async () => {
+  const dockerignore = await readAdminWebFile(".dockerignore");
+  const ignoredEntries = new Set(dockerignore.split(/\r?\n/));
+
+  for (const entry of [
+    ".git",
+    ".env",
+    ".env.*.local",
+    ".env.*",
+    "node_modules",
+    "dist",
+    "coverage",
+    "playwright-report",
+    "test-results",
+    ".tooling",
+    "*.log",
+    "secrets",
+    "docker-compose*.local.yml",
+  ]) {
+    assert.ok(ignoredEntries.has(entry), `missing .dockerignore entry: ${entry}`);
+  }
+  assert.ok(ignoredEntries.has("!.env.test"), "must retain the public .env.test file");
+});
+
+test("ZSpace Compose uses public configuration and mounts the action secret read-only", async () => {
+  const [compose, envExample] = await Promise.all([
+    readAdminWebFile("docker-compose.zspace.yml"),
+    readAdminWebFile("zspace.env.example"),
+  ]);
+
+  assert.match(compose, /^services:\n {2}admin-web:\n/m);
+  assert.match(
+    compose,
+    /^ {6}args:\n {8}NODE_IMAGE: docker\.m\.daocloud\.io\/library\/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293$/m,
+  );
+  assert.match(compose, /^ {4}restart: unless-stopped$/m);
+  assert.match(compose, /^ {6}- "18081:8080"$/m);
+  assert.match(compose, /^ {6}ADMIN_WEB_PUBLIC_ORIGIN: \$\{ADMIN_WEB_PUBLIC_ORIGIN\}$/m);
+  assert.match(compose, /^ {6}ADMIN_WEB_BFF_TARGET: \$\{ADMIN_WEB_BFF_TARGET\}$/m);
+  assert.match(compose, /^ {6}ADMIN_WEB_ACTION_SECRET_FILE: \/run\/secrets\/admin_web_action_secret$/m);
+  assert.match(compose, /^ {4}user: "1000:1000"$/m);
+  assert.match(
+    compose,
+    /^ {4}secrets:\n {6}- source: admin_web_action_secret\n {8}target: admin_web_action_secret$/m,
+  );
+  assert.match(
+    compose,
+    /^secrets:\n {2}admin_web_action_secret:\n {4}file: \.\/secrets\/admin_web_action_secret$/m,
+  );
+  assert.match(compose, /^ {4}read_only: true$/m);
+  assert.match(compose, /^ {4}tmpfs:\n {6}- \/tmp$/m);
+  assert.match(compose, /^ {4}security_opt:\n {6}- no-new-privileges:true$/m);
+  assert.match(compose, /^ {4}cap_drop:\n {6}- ALL$/m);
+  assert.match(
+    compose,
+    /^ {6}test: \["CMD", "node", "-e", "fetch\('http:\/\/127\.0\.0\.1:8080\/healthz'\)/m,
+  );
+  assert.doesNotMatch(compose, /^ {4}volumes:/m);
+  assert.doesNotMatch(compose, /^\s*(?:mode|uid|gid):/m);
+  assert.doesNotMatch(compose, /^\s*ADMIN_WEB_ACTION_SECRET:\s*/m);
+  assert.doesNotMatch(compose, /\bwget\b/);
+  assert.match(envExample, /numeric UID 1000.*0400/s);
+  assert.match(envExample, /ACL.*UID 1000.*read-only/s);
+  assert.match(envExample, /Compose project directory/);
+  assert.match(envExample, /Task 7.*actual container or ZSpace read/);
+  assert.match(envExample, /world-readable/);
+  assert.match(envExample, /ADMIN_WEB_PUBLIC_ORIGIN=https:\/\/bootstrap\.invalid/);
+  assert.match(envExample, new RegExp(`ADMIN_WEB_BFF_TARGET=${expectedBffTarget.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}`));
+});

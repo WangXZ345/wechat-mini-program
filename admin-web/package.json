@@ -8,12 +8,14 @@
     "dev:mock": "vite --mode mock",
     "typecheck": "vue-tsc --noEmit -p tsconfig.app.json",
     "lint": "eslint . --max-warnings=0",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:gateway",
+    "test:gateway": "node --test server/config.test.mjs server/static-handler.test.mjs server/proxy-handler.test.mjs server/server.test.mjs server/container-contract.test.mjs",
     "test:e2e": "playwright test",
     "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build --mode test && node scripts/verify-real-build.mjs",
     "build:mock": "vue-tsc --noEmit -p tsconfig.app.json && vite build --mode mock",
     "verify:real-build": "node scripts/verify-real-build.mjs",
-    "preview": "vite preview --mode test"
+    "preview": "vite preview --mode test",
+    "start": "node server/index.mjs"
   },
   "dependencies": {
     "axios": "^1.12.2",

@@ -117,6 +117,58 @@ npm run build
 
 `npm run test:e2e` 需要已安装 Playwright Chromium。本地 Mock、静态检查和构建不能替代真实 BFF、数据库权限、Cookie/CSRF、事务幂等或小程序双端同步测试。
 
+## 极空间部署（测试环境）
+
+以下步骤只面向隔离测试环境的极空间 Docker Compose 项目；不发布小程序、不连接生产环境，也不将 secret 粘贴到聊天、截图或 Git。上传 `admin-web/` 后，建议使用管理员可写、普通用户不可浏览的项目目录，例如：
+
+```text
+<极空间受限目录>/beauty-wholesale-admin-web/
+├── docker-compose.zspace.yml
+├── .env                        # 从 zspace.env.example 复制；不提交
+├── Dockerfile
+├── server/
+├── dist/                       # 由镜像构建产生，不必手工复制
+└── secrets/
+    └── admin_web_action_secret # 宿主机 secret；不提交、不截图
+```
+
+Compose 项目目录就是上述 `beauty-wholesale-admin-web/`；`docker-compose.zspace.yml` 中的 `./secrets/admin_web_action_secret` 相对此目录解析。将 `zspace.env.example` 复制为项目目录的标准 `.env`（Git 已忽略，禁止提交）；Docker Compose 默认从项目目录的 `.env` 为 `${ADMIN_WEB_PUBLIC_ORIGIN}`、`${ADMIN_WEB_BFF_TARGET}` 插值。不要使用或声称会自动加载自定义 `zspace.env`。首次启动可临时保留 `ADMIN_WEB_PUBLIC_ORIGIN=https://bootstrap.invalid`，顶层 secret 必须单独保存在 `secrets/admin_web_action_secret`，不得写进 Compose 环境变量、`.env` 或镜像。
+
+容器以 UID 1000 运行。因此在宿主机上，secret 文件必须由数值 UID 1000 拥有并设为 `0400`，或使用 ACL 仅向 UID 1000 授予只读权限。file-backed secret 不能靠 Compose 重映射 UID/GID 解决宿主文件权限。若极空间 GUI 无法设置数值 UID 或 ACL，必须启用 NAS 管理员终端/SSH；若终端/SSH 不可用，停止部署。进入 Compose 项目目录后执行以下命令，它们不会打印 secret 内容：
+
+```sh
+cd /path/to/beauty-wholesale-admin-web
+sudo chown 1000:1000 ./secrets/admin_web_action_secret
+sudo chmod 0400 ./secrets/admin_web_action_secret
+stat -c 'uid=%u mode=%a' ./secrets/admin_web_action_secret
+```
+
+`stat` 的输出只应用于核对 UID 为 `1000`、mode 为 `400`，不要使用 `cat`、编辑器预览或截图读取 secret。启动主服务前和后续 Task 7 必须在容器内验证文件实际可读且 `trim` 后长度不少于 32；以下一次性检查不输出任何 secret 内容，失败只以非零退出码表示：
+
+```sh
+docker compose -f docker-compose.zspace.yml run --rm --no-deps --entrypoint node admin-web -e 'const fs=require("node:fs");try{if(fs.readFileSync("/run/secrets/admin_web_action_secret","utf8").trim().length<32)process.exit(1)}catch{process.exit(1)}'
+```
+
+如果上述权限或容器检查失败，停止处理权限问题，绝不能改成 `0444`、全局可读，也不能改为 root runtime 绕过问题。
+
+### 部署顺序
+
+1. 将已验证的 `admin-web/` 上传至极空间中仅管理员可写的 Compose 项目目录，并在该目录创建 `secrets/admin_web_action_secret`；不要截图或把内容写入 Compose。
+2. 复制 `zspace.env.example` 为同目录的私有标准 `.env`。首次仅使用 `ADMIN_WEB_PUBLIC_ORIGIN=https://bootstrap.invalid`；`ADMIN_WEB_BFF_TARGET` 必须是已经确认的唯一隔离测试 BFF HTTPS 地址。
+3. 在极空间 Docker 的 Compose 项目界面导入同目录 `docker-compose.zspace.yml`。启动前先用 Compose 的预览/解析结果确认 `ADMIN_WEB_PUBLIC_ORIGIN=https://bootstrap.invalid` 与 `ADMIN_WEB_BFF_TARGET` 均为非空且后者为唯一测试 BFF；Task 7 也必须以实际 `docker compose ... config` 或 GUI 预览复核这一门禁。不要假定自定义 env 文件会被加载。
+4. 确认项目目录正确、默认宿主端口为 `18080` 后，先执行上方不回显的容器 secret 检查，再启动。只先验收服务状态为 `healthy` 和容器内 secret 可读；不要把 bootstrap 地址用于登录。
+5. 在极空间远程访问中把宿主端口 `18080` 添加为网页服务。记录极空间给出的完整 HTTPS 地址，并从中精确提取 `scheme + host + 可选端口` 作为 `ZSPACE_PUBLIC_ORIGIN`。
+6. 若远程访问 URL 带有 path-prefix（例如 `https://host/prefix/`），立即停止部署：当前网关按站点根路径设计，须先设计并验证 base-path 支持；不要通过修改 CloudBase 配置来规避该问题。
+7. 用精确的 `ZSPACE_PUBLIC_ORIGIN` 替换 `.env` 中的 bootstrap origin，在 Compose GUI 中重新创建容器，并再次确认 `healthy`、`/healthz` 和容器内 secret 读取。
+8. 仅在用户明确确认后，才分别把该精确 origin 加入测试环境两个云函数的 allowlist：`adminWebApi`、`adminWebAuth`（A-Z 顺序）。保留本地 origin，不使用 wildcard；此步骤不上传或发布小程序。
+9. 最终验收只做外网登录和代表性的真实读取。不得以订单、库存、账款、付款或客户数据写操作来证明连通性。
+
+### 更新、版本标签与回滚
+
+更新前记录正在运行的镜像标签（当前 Compose 示例为 `beauty-wholesale-admin-web:2026-07-23`）、Compose 文件版本和当前可用的 `ZSPACE_PUBLIC_ORIGIN`。更新时先在本地完成本 README 的验证命令，再上传同一版本的项目目录，在 Compose GUI 中将 `image` 标签改为新的明确版本标签后重新创建容器，并复核健康检查与只读验收。
+
+如需回滚，恢复上一版 `docker-compose.zspace.yml`、与其对应的非 secret `.env` 公开配置和镜像标签，然后重新创建容器。secret 除非执行明确的轮换，否则不随版本回滚；镜像回滚不修改业务数据库。只有远程 HTTPS 入口确认废弃后，才在用户确认后从测试 allowlist 中删除对应 origin；入口仍在用时保留 allowlist。不得删除 local origin 或以 wildcard 替代精确 origin。
+
 ## 部署边界
 
-本工程当前只完成本地 Web 前端、真实/Mock 构建隔离和 transport 契约。尚未上传云函数、创建数据库集合或索引、连接测试/生产数据、部署 Web、发布小程序。测试部署时应让 Web 测试版和小程序体验版访问同一套隔离测试业务库，并通过同源 HTTPS `/api` 转发到 Web BFF。
+本轮仅准备了极空间测试环境的 Compose 包和部署说明，尚未在 Docker、极空间 NAS 或真实远程 HTTPS origin 上运行或验证；也尚未执行本轮任何云函数 allowlist 修改、云函数上传、Web 部署或小程序发布。真实验收应让 Web 测试版和小程序体验版访问同一套隔离测试业务库，并通过同源 HTTPS `/api` 转发到 Web BFF；本地检查、镜像构建和容器健康检查均不能替代该验收。

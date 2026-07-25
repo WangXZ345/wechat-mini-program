@@ -1,0 +1,41 @@
+services:
+  admin-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: docker.m.daocloud.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+    image: beauty-wholesale-admin-web:2026-07-23
+    container_name: beauty-wholesale-admin-web
+    user: "1000:1000"
+    restart: unless-stopped
+    ports:
+      - "18081:8080"
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      ADMIN_WEB_DIST_DIR: /app/dist
+      ADMIN_WEB_PUBLIC_ORIGIN: ${ADMIN_WEB_PUBLIC_ORIGIN}
+      ADMIN_WEB_BFF_TARGET: ${ADMIN_WEB_BFF_TARGET}
+      ADMIN_WEB_ACTION_SECRET_FILE: /run/secrets/admin_web_action_secret
+      ADMIN_WEB_UPSTREAM_TIMEOUT_MS: "55000"
+    secrets:
+      - source: admin_web_action_secret
+        target: admin_web_action_secret
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+secrets:
+  admin_web_action_secret:
+    file: ./secrets/admin_web_action_secret

@@ -1,0 +1,14 @@
+.git
+.env
+.env.*.local
+.env.*
+!.env.test
+node_modules
+dist
+coverage
+playwright-report
+test-results
+.tooling
+*.log
+secrets
+docker-compose*.local.yml
