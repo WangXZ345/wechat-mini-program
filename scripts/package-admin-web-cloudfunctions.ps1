@@ -124,6 +124,8 @@ $canonicalInventoryMutationService = Join-Path $root "cloudfunctions\common\serv
 $canonicalProductAnalyticsQueryService = Join-Path $root "cloudfunctions\common\services\productAnalyticsQueryService.js"
 $canonicalOrderQueryService = Join-Path $root "cloudfunctions\common\services\orderQueryService.js"
 $canonicalOrderReviewService = Join-Path $root "cloudfunctions\common\services\orderReviewService.js"
+$canonicalOrderApprovalService = Join-Path $root "cloudfunctions\common\services\orderApprovalService.js"
+$canonicalOrderStatusPolicy = Join-Path $root "cloudfunctions\common\orderStatusPolicy.js"
 $canonicalShipmentQueryService = Join-Path $root "cloudfunctions\common\services\shipmentQueryService.js"
 $canonicalAccountQueryService = Join-Path $root "cloudfunctions\common\services\accountQueryService.js"
 $canonicalPaymentQueryService = Join-Path $root "cloudfunctions\common\services\paymentQueryService.js"
@@ -170,6 +172,8 @@ Assert-File $canonicalInventoryMutationService
 Assert-File $canonicalProductAnalyticsQueryService
 Assert-File $canonicalOrderQueryService
 Assert-File $canonicalOrderReviewService
+Assert-File $canonicalOrderApprovalService
+Assert-File $canonicalOrderStatusPolicy
 Assert-File $canonicalShipmentQueryService
 Assert-File $canonicalAccountQueryService
 Assert-File $canonicalPaymentQueryService
@@ -262,6 +266,11 @@ Copy-Item -LiteralPath $canonicalOrderQueryService -Destination (Join-Path $apiT
 Copy-Item -LiteralPath $canonicalOrderQueryService -Destination (Join-Path $ordersTarget "orderQueryService.js") -Force
 Copy-Item -LiteralPath $canonicalOrderReviewService -Destination (Join-Path $apiTarget "lib\orderReviewService.js") -Force
 Copy-Item -LiteralPath $canonicalOrderReviewService -Destination (Join-Path $reviewTarget "orderReviewService.js") -Force
+Copy-Item -LiteralPath $canonicalOrderApprovalService -Destination (Join-Path $apiTarget "lib\orderApprovalService.js") -Force
+Copy-Item -LiteralPath $canonicalOrderApprovalService -Destination (Join-Path $reviewTarget "orderApprovalService.js") -Force
+Copy-Item -LiteralPath $canonicalOrderStatusPolicy -Destination (Join-Path $apiTarget "lib\orderStatusPolicy.js") -Force
+Copy-Item -LiteralPath $canonicalOrderStatusPolicy -Destination (Join-Path $reviewTarget "orderStatusPolicy.js") -Force
+Copy-Item -LiteralPath $canonicalOrderStatusPolicy -Destination (Join-Path $cancelTarget "orderStatusPolicy.js") -Force
 Copy-Item -LiteralPath $canonicalShipmentQueryService -Destination (Join-Path $apiTarget "lib\shipmentQueryService.js") -Force
 Copy-Item -LiteralPath $canonicalShipmentQueryService -Destination (Join-Path $shipmentGroupsTarget "shipmentQueryService.js") -Force
 Copy-Item -LiteralPath $canonicalAccountQueryService -Destination (Join-Path $apiTarget "lib\accountQueryService.js") -Force
@@ -351,6 +360,13 @@ $orderQueryServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $ordersTarg
 $orderReviewServiceSourceHash = (Get-FileHash -LiteralPath $canonicalOrderReviewService -Algorithm SHA256).Hash
 $orderReviewServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\orderReviewService.js") -Algorithm SHA256).Hash
 $orderReviewServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $reviewTarget "orderReviewService.js") -Algorithm SHA256).Hash
+$orderApprovalServiceSourceHash = (Get-FileHash -LiteralPath $canonicalOrderApprovalService -Algorithm SHA256).Hash
+$orderApprovalServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\orderApprovalService.js") -Algorithm SHA256).Hash
+$orderApprovalServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $reviewTarget "orderApprovalService.js") -Algorithm SHA256).Hash
+$orderStatusPolicySourceHash = (Get-FileHash -LiteralPath $canonicalOrderStatusPolicy -Algorithm SHA256).Hash
+$orderStatusPolicyApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\orderStatusPolicy.js") -Algorithm SHA256).Hash
+$orderStatusPolicyReviewHash = (Get-FileHash -LiteralPath (Join-Path $reviewTarget "orderStatusPolicy.js") -Algorithm SHA256).Hash
+$orderStatusPolicyCancelHash = (Get-FileHash -LiteralPath (Join-Path $cancelTarget "orderStatusPolicy.js") -Algorithm SHA256).Hash
 $shipmentQueryServiceSourceHash = (Get-FileHash -LiteralPath $canonicalShipmentQueryService -Algorithm SHA256).Hash
 $shipmentQueryServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\shipmentQueryService.js") -Algorithm SHA256).Hash
 $shipmentQueryServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $shipmentGroupsTarget "shipmentQueryService.js") -Algorithm SHA256).Hash
@@ -436,6 +452,12 @@ if ($orderQueryServiceSourceHash -ne $orderQueryServiceApiHash -or $orderQuerySe
 }
 if ($orderReviewServiceSourceHash -ne $orderReviewServiceApiHash -or $orderReviewServiceSourceHash -ne $orderReviewServiceLegacyHash) {
   throw "Canonical order review service hash verification failed"
+}
+if ($orderApprovalServiceSourceHash -ne $orderApprovalServiceApiHash -or $orderApprovalServiceSourceHash -ne $orderApprovalServiceLegacyHash) {
+  throw "Canonical order approval service hash verification failed"
+}
+if ($orderStatusPolicySourceHash -ne $orderStatusPolicyApiHash -or $orderStatusPolicySourceHash -ne $orderStatusPolicyReviewHash -or $orderStatusPolicySourceHash -ne $orderStatusPolicyCancelHash) {
+  throw "Canonical order status policy hash verification failed"
 }
 if ($shipmentQueryServiceSourceHash -ne $shipmentQueryServiceApiHash -or $shipmentQueryServiceSourceHash -ne $shipmentQueryServiceLegacyHash) {
   throw "Canonical shipment query service hash verification failed"
@@ -595,6 +617,8 @@ $manifest = [ordered]@{
   canonicalProductAnalyticsQueryServiceSha256 = $productAnalyticsQueryServiceSourceHash
   canonicalOrderQueryServiceSha256 = $orderQueryServiceSourceHash
   canonicalOrderReviewServiceSha256 = $orderReviewServiceSourceHash
+  canonicalOrderApprovalServiceSha256 = $orderApprovalServiceSourceHash
+  canonicalOrderStatusPolicySha256 = $orderStatusPolicySourceHash
   canonicalShipmentQueryServiceSha256 = $shipmentQueryServiceSourceHash
   canonicalAccountQueryServiceSha256 = $accountQueryServiceSourceHash
   canonicalPaymentQueryServiceSha256 = $paymentQueryServiceSourceHash
@@ -630,6 +654,8 @@ $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -En
   InventoryMutationServiceHashVerified = $true
   ProductAnalyticsQueryServiceHashVerified = $true
   OrderQueryServiceHashVerified = $true
+  OrderApprovalServiceHashVerified = $true
+  OrderStatusPolicyHashVerified = $true
   ShipmentQueryServiceHashVerified = $true
   AccountQueryServiceHashVerified = $true
   PaymentQueryServiceHashVerified = $true

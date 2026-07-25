@@ -349,6 +349,9 @@ async function applyInventoryMutationInTransaction({ db, store, stockAlert, inpu
   const plan = createInventoryMutationPlan(product, input, stockAlert);
   if (!plan.changed) return resultFromProduct(input.productId, product, { changed: false, beforeStock: plan.beforeStock });
   const timestamp = db.serverDate();
+  if (plan.currentVersion >= Number.MAX_SAFE_INTEGER) {
+    throw new InventoryMutationError("DATA_VERSION_INVALID", "商品数据版本异常，暂不能修改", 409);
+  }
   const nextVersion = plan.currentVersion + 1;
   const statusUpdate = stockAlert.buildStockStatusUpdate(product, { stock: plan.afterStock, warningStock: plan.warningStock, now: timestamp });
   const updateData = {

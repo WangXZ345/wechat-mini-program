@@ -78,6 +78,63 @@ test("deployable shipment query service is byte-identical to the canonical sourc
   assert.equal(fs.readFileSync(deployablePath, "utf8"), fs.readFileSync(canonicalPath, "utf8"));
 });
 
+test("deployable shipment query masks procurement addresses and strips internal fields", async () => {
+  const { createShipmentQueryService } = require(deployablePath);
+  const row = {
+    _id: "sg-1",
+    shipmentNo: "SHP-001",
+    shippingStatus: "pending_shipment",
+    customerPhoneMasked: "13800138000",
+    shippingAddressSnapshot: {
+      receiverName: "张三",
+      receiverPhone: "13800138000",
+      regionText: "上海市",
+      detailAddress: "浦东新区完整地址"
+    },
+    shippingAddressMasked: {
+      receiverName: "张三",
+      receiverPhoneMasked: "13800138000",
+      regionText: "上海市",
+      detailAddressMasked: "浦东新区完整地址"
+    },
+    openid: "secret-openid",
+    userId: "secret-user",
+    idempotencyKey: "secret-idempotency",
+    businessKey: "secret-business",
+    createdAt: new Date("2026-07-13T01:00:00Z")
+  };
+  const query = {
+    where() { return query; },
+    orderBy() { return query; },
+    skip() { return query; },
+    limit() { return query; },
+    async get() { return { data: [row] }; }
+  };
+  const service = createShipmentQueryService({
+    db: { collection() { return query; } },
+    command: { in(values) { return values; }, and(values) { return values; }, or(values) { return values; } }
+  });
+
+  const result = await service.listLegacyShipmentGroups({
+    actor: {
+      id: "procurement-1",
+      role: "procurement",
+      status: "active",
+      isActive: true,
+      permissions: ["shipment:view", "shipment:view_address_masked"]
+    },
+    query: { page: 1, pageSize: 20 }
+  });
+
+  const projected = result.groups[0];
+  assert.equal(projected.shippingAddressSnapshot, null);
+  assert.equal(projected.shippingAddress.receiverPhoneMasked, "138****8000");
+  assert.equal(projected.shippingAddress.detailAddressMasked.includes("完整地址"), false);
+  for (const field of ["openid", "userId", "idempotencyKey", "businessKey"]) {
+    assert.equal(Object.hasOwn(projected, field), false, field);
+  }
+});
+
 test("getAdminShipmentGroups delegates to the canonical legacy list projector and preserves wrapper shape", async () => {
   const calls = [];
   const expected = { groups: [{ _id: "sg-1" }], hasMore: false, page: 2, pageSize: 30 };

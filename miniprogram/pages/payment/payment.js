@@ -228,7 +228,7 @@ Page({
     return Promise.all(this.data.localImages.map((filePath, index) => {
       const extMatch = String(filePath).match(/\.(jpg|jpeg|png|webp)$/i);
       const ext = extMatch ? extMatch[1].toLowerCase() : "jpg";
-      const cloudPath = `payments/${orderId}-${Date.now()}-${index}.${ext}`;
+      const cloudPath = `payments/${orderId}/${Date.now()}-${index}.${ext}`;
       return wx.cloud.uploadFile({ cloudPath, filePath }).then((upload) => upload.fileID);
     })).then((screenshotUrls) => {
       this.setData({ screenshotUrls });

@@ -231,6 +231,37 @@ describe("HttpBffTransport session recovery", () => {
     window.sessionStorage.clear();
   });
 
+  it("allows the realtime catch-up request to outlive the standard API timeout", async () => {
+    let observedTimeout = 0;
+    const client = createClient((config) => {
+      if (config.url === "/sync/events") {
+        observedTimeout = Number(config.timeout || 0);
+        return {
+          status: 200,
+          data: {
+            ok: true,
+            data: {
+              events: [],
+              nextCursor: "cursor-1",
+              highWatermark: "cursor-1",
+              hasMore: false,
+              serverTime: "2026-07-20T12:00:00.000Z",
+              mode: "outbox_with_collection_fallback",
+              fallbackActive: true,
+              entityTypes: ["system"]
+            }
+          }
+        };
+      }
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    });
+    const transport = new HttpBffTransport(client);
+
+    await transport.catchUp();
+
+    expect(observedTimeout).toBe(45_000);
+  });
+
   it("uses one refresh request for concurrent 401 responses", async () => {
     let initialRequests = 0;
     let refreshedRequests = 0;

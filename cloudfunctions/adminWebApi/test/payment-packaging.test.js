@@ -118,6 +118,88 @@ test("guarded package includes afterSales and the canonical review service hash 
   assert.match(script, /AfterSaleReviewServiceHashVerified\s*=\s*\$true/);
 });
 
+test("guarded package flattens and hash-verifies the shared order approval primitive", () => {
+  const script = readPackagingScript();
+
+  assert.match(
+    script,
+    /\$canonicalOrderApprovalService\s*=\s*Join-Path \$root "cloudfunctions\\common\\services\\orderApprovalService\.js"/
+  );
+  assert.match(
+    script,
+    /Copy-Item -LiteralPath \$canonicalOrderApprovalService -Destination \(Join-Path \$apiTarget "lib\\orderApprovalService\.js"\) -Force/
+  );
+  assert.match(
+    script,
+    /Copy-Item -LiteralPath \$canonicalOrderApprovalService -Destination \(Join-Path \$reviewTarget "orderApprovalService\.js"\) -Force/
+  );
+  assert.match(script, /Canonical order approval service hash verification failed/);
+  assert.match(
+    script,
+    /canonicalOrderApprovalServiceSha256\s*=\s*\$orderApprovalServiceSourceHash/
+  );
+  assert.match(script, /OrderApprovalServiceHashVerified\s*=\s*\$true/);
+});
+
+test("guarded package flattens and hash-verifies the shared order status policy", () => {
+  const script = readPackagingScript();
+
+  assert.match(
+    script,
+    /\$canonicalOrderStatusPolicy\s*=\s*Join-Path \$root "cloudfunctions\\common\\orderStatusPolicy\.js"/
+  );
+  assert.match(
+    script,
+    /Copy-Item -LiteralPath \$canonicalOrderStatusPolicy -Destination \(Join-Path \$apiTarget "lib\\orderStatusPolicy\.js"\) -Force/
+  );
+  assert.match(
+    script,
+    /Copy-Item -LiteralPath \$canonicalOrderStatusPolicy -Destination \(Join-Path \$reviewTarget "orderStatusPolicy\.js"\) -Force/
+  );
+  assert.match(
+    script,
+    /Copy-Item -LiteralPath \$canonicalOrderStatusPolicy -Destination \(Join-Path \$cancelTarget "orderStatusPolicy\.js"\) -Force/
+  );
+  assert.match(script, /Canonical order status policy hash verification failed/);
+  assert.match(
+    script,
+    /canonicalOrderStatusPolicySha256\s*=\s*\$orderStatusPolicySourceHash/
+  );
+  assert.match(script, /OrderStatusPolicyHashVerified\s*=\s*\$true/);
+});
+
+test("raw admin deployment directories contain self-contained canonical review dependencies", () => {
+  const pairs = [
+    [
+      "cloudfunctions/common/services/orderApprovalService.js",
+      "cloudfunctions/adminReviewOrder/orderApprovalService.js"
+    ],
+    [
+      "cloudfunctions/common/services/orderApprovalService.js",
+      "cloudfunctions/adminWebApi/lib/orderApprovalService.js"
+    ],
+    [
+      "cloudfunctions/common/orderStatusPolicy.js",
+      "cloudfunctions/adminReviewOrder/orderStatusPolicy.js"
+    ],
+    [
+      "cloudfunctions/common/orderStatusPolicy.js",
+      "cloudfunctions/adminWebApi/lib/orderStatusPolicy.js"
+    ]
+  ];
+
+  for (const [canonicalRelativePath, deploymentRelativePath] of pairs) {
+    const canonicalPath = path.join(repositoryRoot, canonicalRelativePath);
+    const deploymentPath = path.join(repositoryRoot, deploymentRelativePath);
+    assert.equal(sha256(deploymentPath), sha256(canonicalPath), deploymentRelativePath);
+    assert.doesNotMatch(
+      fs.readFileSync(deploymentPath, "utf8"),
+      /require\(["']\.\.[\\/]/,
+      deploymentRelativePath
+    );
+  }
+});
+
 test("guarded package includes the canonical return snapshot helper", () => {
   const script = readPackagingScript();
   assert.match(script, /\$canonicalReturnSnapshot\s*=\s*Join-Path \$root "cloudfunctions\\common\\services\\returnSnapshot\.js"/);
@@ -321,9 +403,40 @@ test("guarded package executes in isolation and emits an auditable refund manife
   const afterSalesHash = sha256(
     path.join(result.output, "afterSales/common/services/refundMutationService.js")
   );
+  const canonicalApprovalHash = sha256(
+    path.join(fixtureRoot().root, "cloudfunctions/common/services/orderApprovalService.js")
+  );
+  const apiApprovalHash = sha256(
+    path.join(result.output, "adminWebApi/lib/orderApprovalService.js")
+  );
+  const reviewApprovalHash = sha256(
+    path.join(result.output, "adminReviewOrder/orderApprovalService.js")
+  );
+  const canonicalOrderStatusPolicyHash = sha256(
+    path.join(fixtureRoot().root, "cloudfunctions/common/orderStatusPolicy.js")
+  );
+  const apiOrderStatusPolicyHash = sha256(
+    path.join(result.output, "adminWebApi/lib/orderStatusPolicy.js")
+  );
+  const reviewOrderStatusPolicyHash = sha256(
+    path.join(result.output, "adminReviewOrder/orderStatusPolicy.js")
+  );
+  const cancelOrderStatusPolicyHash = sha256(
+    path.join(result.output, "cancelOrder/orderStatusPolicy.js")
+  );
   assert.equal(manifest.canonicalRefundMutationServiceSha256, canonicalHash);
   assert.equal(apiHash, canonicalHash);
   assert.equal(afterSalesHash, canonicalHash);
+  assert.equal(manifest.canonicalOrderApprovalServiceSha256, canonicalApprovalHash);
+  assert.equal(apiApprovalHash, canonicalApprovalHash);
+  assert.equal(reviewApprovalHash, canonicalApprovalHash);
+  assert.equal(manifest.canonicalOrderStatusPolicySha256, canonicalOrderStatusPolicyHash);
+  assert.equal(apiOrderStatusPolicyHash, canonicalOrderStatusPolicyHash);
+  assert.equal(reviewOrderStatusPolicyHash, canonicalOrderStatusPolicyHash);
+  assert.equal(cancelOrderStatusPolicyHash, canonicalOrderStatusPolicyHash);
+  assert.doesNotThrow(() => require(path.join(result.output, "adminReviewOrder/orderReviewService.js")));
+  assert.doesNotThrow(() => require(path.join(result.output, "adminWebApi/lib/orderReviewService.js")));
+  assert.doesNotThrow(() => require(path.join(result.output, "cancelOrder/orderCancellationService.js")));
 });
 
 test("guarded package execution rejects every forbidden artifact without a manifest", async (t) => {

@@ -1,10 +1,26 @@
 "use strict";
 
 const crypto = require("crypto");
+const path = require("path");
 const { applyInventoryMutationInTransaction: canonicalInventoryMutation } = require("./inventoryMutationService");
-const MAX_ORDER_ITEMS = 100;
-const ORDER_REVIEW_STATUSES = new Set(["pending_admin", "auto_reviewing"]);
-const APPROVED_STATUSES = new Set(["approved_pending_payment", "pending_payment_confirm", "paid", "partial_paid", "unpaid"]);
+const {
+  MAX_ORDER_ITEMS,
+  includeApprovedOrderInTransaction,
+  normalizeReviewItems: normalizeSharedReviewItems,
+  normalizeOrderAmount: normalizeSharedOrderAmount,
+  versionOf: sharedVersionOf,
+  nextVersionOf: sharedNextVersionOf
+} = require("./orderApprovalService");
+const policyDirectory = path.basename(__dirname) === "services"
+  ? path.join(__dirname, "..")
+  : __dirname;
+const orderStatusPolicy = require(path.join(policyDirectory, "orderStatusPolicy"));
+const {
+  canReviewOrder,
+  isApprovedOrder,
+  isApprovedOrderStatus,
+  isTerminalReviewStatus
+} = orderStatusPolicy;
 const SYNC_EVENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ACCOUNT_RECALCULATION_WARNING = "订单已审核，客户账款汇总将在稍后更新";
 
@@ -64,7 +80,7 @@ function normalizeExpectedStatus(value, required) {
     if (required) throw new OrderReviewError("EXPECTED_STATUS_REQUIRED", "缺少订单当前状态，请刷新后重试", 400);
     return undefined;
   }
-  if (!ORDER_REVIEW_STATUSES.has(status)) throw new OrderReviewError("EXPECTED_STATUS_INVALID", "订单当前状态无效", 400);
+  if (!canReviewOrder(status)) throw new OrderReviewError("EXPECTED_STATUS_INVALID", "订单当前状态无效", 400);
   return status;
 }
 
@@ -87,37 +103,15 @@ function normalizeReviewInput(input = {}, options = {}) {
 }
 
 function normalizeReviewItems(items) {
-  if (!Array.isArray(items) || !items.length) throw new OrderReviewError("ORDER_ITEMS_REQUIRED", "订单缺少商品明细", 409);
-  if (items.length > MAX_ORDER_ITEMS) throw new OrderReviewError("ORDER_ITEMS_LIMIT_EXCEEDED", "订单商品明细过多，暂不能审核", 503);
-  const grouped = new Map();
-  for (const item of items) {
-    const productId = cleanString(item && item.productId, 128);
-    if (!productId) throw new OrderReviewError("ORDER_ITEM_INVALID", "订单商品缺少商品 ID", 409);
-    const quantity = item && item.quantity;
-    if (typeof quantity !== "number" || !Number.isSafeInteger(quantity) || quantity <= 0) {
-      throw new OrderReviewError("ORDER_ITEM_QUANTITY_INVALID", "订单商品数量无效", 409);
-    }
-    const previous = grouped.get(productId);
-    const totalQuantity = (previous ? previous.quantity : 0) + quantity;
-    if (!Number.isSafeInteger(totalQuantity) || totalQuantity <= 0) {
-      throw new OrderReviewError("ORDER_ITEM_QUANTITY_INVALID", "订单商品数量无效", 409);
-    }
-    grouped.set(productId, { productId, quantity: totalQuantity });
-  }
-  return Array.from(grouped.values());
+  return normalizeSharedReviewItems(items);
 }
 
 function normalizeOrderAmount(value) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new OrderReviewError("ORDER_AMOUNT_INVALID", "订单金额数据异常，暂不能审核", 409);
-  }
-  return value;
+  return normalizeSharedOrderAmount(value);
 }
 
 function versionOf(row = {}) {
-  const value = row.version === undefined || row.version === null || row.version === "" ? 0 : row.version;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new OrderReviewError("DATA_VERSION_INVALID", "订单版本数据异常，暂不能审核", 409);
-  return value;
+  return sharedVersionOf(row);
 }
 
 function safeStoredAmount(value) {
@@ -157,17 +151,6 @@ function reviewResult(order, decision, options = {}) {
     userId: cleanString(order.userId, 128),
     userOpenid: cleanString(order.userOpenid || order.openid, 128)
   };
-}
-
-function localDateKey(value) {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) throw new OrderReviewError("DATE_INVALID", "订单审核时间无效", 500);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function accountAmount(row, primary, fallback) {
-  const value = row && row[primary] !== undefined && row[primary] !== null ? row[primary] : row && row[fallback];
-  return safeStoredAmount(value);
 }
 
 function createOrderReviewService({
@@ -238,124 +221,15 @@ function createOrderReviewService({
     } });
   }
 
-  function validateAccountLog(log, order, amount) {
-    const conflicts = [
-      cleanString(log.businessKey, 180) !== `order_debt:${order._id}`,
-      cleanString(log.sourceType, 80) !== "order",
-      cleanString(log.sourceId, 128) !== order._id,
-      cleanString(log.relatedOrderId, 128) !== order._id,
-      cleanString(log.relatedPaymentRecordId, 128) !== "",
-      cleanString(log.changeType, 80) !== "order_approved",
-      log.changeAmount !== amount,
-      Boolean(order.userId) && cleanString(log.userId, 128) !== cleanString(order.userId, 128),
-      Boolean(order.userOpenid || order.openid) && cleanString(log.userOpenid, 128) !== cleanString(order.userOpenid || order.openid, 128)
-    ];
-    if (conflicts.some(Boolean)) throw new OrderReviewError("ACCOUNT_LOG_CONFLICT", "历史账款流水与订单不一致", 409);
-  }
-
-  async function findAccount(tx, order) {
-    if (order.userId) {
-      const byUserId = await tx.collection("customer_accounts").where({ userId: order.userId }).limit(1).get();
-      if (byUserId.data && byUserId.data[0]) return byUserId.data[0];
-    }
-    const userOpenid = order.userOpenid || order.openid;
-    if (userOpenid) {
-      const byOpenid = await tx.collection("customer_accounts").where({ userOpenid }).limit(1).get();
-      if (byOpenid.data && byOpenid.data[0]) return byOpenid.data[0];
-    }
-    return null;
-  }
-
   async function includeAccount(tx, { order, actor, amount, timestamp }) {
-    const businessKey = `order_debt:${order._id}`;
-    const priorLogs = await tx.collection("account_logs").where({ businessKey }).limit(2).get();
-    const logs = Array.isArray(priorLogs.data) ? priorLogs.data : [];
-    if (logs.length > 1) throw new OrderReviewError("ACCOUNT_LOG_DUPLICATE", "订单账款流水重复，暂不能继续审核", 409);
-    if (logs[0]) {
-      validateAccountLog(logs[0], order, amount);
-      return { reused: true };
-    }
-
-    const account = await findAccount(tx, order);
-    const beforeTotalOrder = accountAmount(account, "totalOrderAmount", "totalReceivableAmount");
-    const beforeTotalPaid = accountAmount(account, "totalPaidAmount", "paidAmount");
-    const beforeTotalUnpaid = accountAmount(account, "totalUnpaidAmount", "unpaidAmount");
-    const afterTotalOrder = beforeTotalOrder + amount;
-    const afterTotalUnpaid = beforeTotalUnpaid + amount;
-    if (!Number.isSafeInteger(afterTotalOrder) || !Number.isSafeInteger(afterTotalUnpaid)) throw new OrderReviewError("ACCOUNT_AMOUNT_INVALID", "客户账款数据异常，暂不能审核", 409);
-    const todayDate = localDateKey(timestamp);
-    if (account) {
-      const sameDay = cleanString(account.todayDate, 20) === todayDate;
-      const todayOrderAmount = (sameDay ? accountAmount(account, "todayOrderAmount", "todayOrderAmount") : 0) + amount;
-      await tx.collection("customer_accounts").doc(account._id).update({ data: {
-        totalOrderAmount: afterTotalOrder,
-        totalReceivableAmount: afterTotalOrder,
-        totalUnpaidAmount: afterTotalUnpaid,
-        unpaidAmount: afterTotalUnpaid,
-        todayOrderAmount,
-        todayDate,
-        orderCount: safeStoredAmount(account.orderCount) + 1,
-        unpaidOrderCount: safeStoredAmount(account.unpaidOrderCount) + 1,
-        lastOrderAt: timestamp,
-        isSettled: false,
-        updatedAt: timestamp
-      } });
-    } else {
-      await tx.collection("customer_accounts").add({ data: {
-        userId: cleanString(order.userId, 128),
-        userOpenid: cleanString(order.userOpenid || order.openid, 128),
-        nickname: cleanString(order.nickname || order.customerName, 120),
-        phone: cleanString(order.phone || order.customerPhone, 40),
-        totalOrderAmount: amount,
-        totalReceivableAmount: amount,
-        totalPaidAmount: 0,
-        paidAmount: 0,
-        totalUnpaidAmount: amount,
-        unpaidAmount: amount,
-        todayOrderAmount: amount,
-        todayDate,
-        historyUnpaidAmount: 0,
-        pendingConfirmAmount: 0,
-        abnormalAmount: 0,
-        abnormalCount: 0,
-        orderCount: 1,
-        unpaidOrderCount: 1,
-        paidOrderCount: 0,
-        partialPaidOrderCount: 0,
-        lastOrderAt: timestamp,
-        lastPaymentAt: null,
-        riskLevel: "normal",
-        isSettled: false,
-        adminRemark: "",
-        adminNote: "",
-        adminTags: [],
-        createdAt: timestamp,
-        updatedAt: timestamp
-      } });
-    }
-    await tx.collection("account_logs").add({ data: {
-      businessKey,
-      sourceType: "order",
-      sourceId: order._id,
-      userId: cleanString(order.userId, 128),
-      userOpenid: cleanString(order.userOpenid || order.openid, 128),
-      relatedOrderId: order._id,
-      relatedPaymentRecordId: "",
-      changeType: "order_approved",
-      beforeTotalOrderAmount: beforeTotalOrder,
-      afterTotalOrderAmount: afterTotalOrder,
-      beforeTotalPaidAmount: beforeTotalPaid,
-      afterTotalPaidAmount: beforeTotalPaid,
-      beforeTotalUnpaidAmount: beforeTotalUnpaid,
-      afterTotalUnpaidAmount: afterTotalUnpaid,
-      changeAmount: amount,
-      operatorId: actor.id,
-      operatorOpenid: actor.openid,
-      operatorRole: actor.role,
-      remark: "订单批准计入客户账款",
-      createdAt: timestamp
-    } });
-    return { reused: false };
+    return includeApprovedOrderInTransaction({
+      store: tx,
+      order,
+      actor,
+      amount,
+      timestamp,
+      calendarDate: now()
+    });
   }
 
   async function hasInventoryReplayCandidate(tx, orderId, productId) {
@@ -376,20 +250,21 @@ function createOrderReviewService({
 
       if (input.decision === "reject") {
         if (order.status === "rejected") return reviewResult(order, "reject", { affected: 0, reused: true, requestId: operationId });
-        if (APPROVED_STATUSES.has(order.status) || order.paymentStatus === "paid") throw new OrderReviewError("ORDER_ALREADY_APPROVED", "已通过订单不能拒绝", 409);
-        if (!ORDER_REVIEW_STATUSES.has(order.status)) throw new OrderReviewError("ORDER_STATUS_INVALID", "当前订单状态不能审核", 409);
-        const next = { ...order, status: "rejected", reviewType: "manual", rejectedAt: db.serverDate ? db.serverDate() : now(), rejectedBy: actor.id, version: currentVersion + 1, updatedAt: db.serverDate ? db.serverDate() : now() };
+        if (isApprovedOrder(order.status, order.paymentStatus)) throw new OrderReviewError("ORDER_ALREADY_APPROVED", "已通过订单不能拒绝", 409);
+        if (!canReviewOrder(order.status)) throw new OrderReviewError("ORDER_STATUS_INVALID", "当前订单状态不能审核", 409);
+        const nextVersion = sharedNextVersionOf(order);
+        const next = { ...order, status: "rejected", reviewType: "manual", rejectedAt: db.serverDate ? db.serverDate() : now(), rejectedBy: actor.id, version: nextVersion, updatedAt: db.serverDate ? db.serverDate() : now() };
         await tx.collection("orders").doc(input.id).update({ data: { status: next.status, reviewType: next.reviewType, rejectedAt: next.rejectedAt, rejectedBy: next.rejectedBy, version: next.version, updatedAt: next.updatedAt } });
         await tx.collection("admin_operation_logs").add({ data: { businessKey, sourceId: operationId, idempotencyKey: idempotencyKey || "", action: "order_reject", resourceType: "order", resourceId: input.id, beforeData: { status: order.status, version: currentVersion }, afterData: { status: next.status, version: next.version }, operatorId: actor.id, operatorOpenid: actor.openid, operatorRole: actor.role, reason: input.reason, status: "success", createdAt: next.updatedAt } });
         await writeOrderEvent(tx, { order, actor, businessKey, decision: "reject", timestamp: next.updatedAt, version: next.version });
         return reviewResult(next, "reject", { affected: 1, reused: false, requestId: operationId });
       }
 
-      if (ORDER_REVIEW_STATUSES.has(order.status) && order.accountIncluded === true) throw new OrderReviewError("ORDER_ACCOUNT_STATE_CONFLICT", "订单审核与账款状态不一致，暂不能继续审核", 409);
-      if (APPROVED_STATUSES.has(order.status)) return reviewResult(order, "approve", { affected: 0, reused: true, requestId: operationId });
-      if (["rejected", "cancelled"].includes(order.status)) throw new OrderReviewError("ORDER_STATUS_INVALID", "已拒绝或已取消订单不能审核通过", 409);
-      if (!ORDER_REVIEW_STATUSES.has(order.status)) throw new OrderReviewError("ORDER_STATUS_INVALID", "当前订单状态不能审核", 409);
+      if (isApprovedOrderStatus(order.status)) return reviewResult(order, "approve", { affected: 0, reused: true, requestId: operationId });
+      if (isTerminalReviewStatus(order.status)) throw new OrderReviewError("ORDER_STATUS_INVALID", "已拒绝或已取消订单不能审核通过", 409);
+      if (!canReviewOrder(order.status)) throw new OrderReviewError("ORDER_STATUS_INVALID", "当前订单状态不能审核", 409);
 
+      const nextVersion = sharedNextVersionOf(order);
       const amount = safeStoredAmount(order.totalAmount);
       const items = await readItems(tx, order);
       const grouped = normalizeReviewItems(items);
@@ -438,7 +313,7 @@ function createOrderReviewService({
       for (const item of items) if (item._id) await tx.collection("order_items").doc(item._id).update({ data: { stockCheckStatus: "enough" } });
 
       await includeAccount(tx, { order, actor, amount, timestamp });
-      const next = { ...order, status: "approved_pending_payment", reviewType: "manual", paymentStatus: "unpaid", paidAmount: 0, unpaidAmount: amount, accountIncluded: true, accountRecalculationPending: true, version: currentVersion + 1, approvedAt: timestamp, updatedAt: timestamp };
+      const next = { ...order, status: "approved_pending_payment", reviewType: "manual", paymentStatus: "unpaid", paidAmount: 0, unpaidAmount: amount, accountIncluded: true, accountRecalculationPending: true, version: nextVersion, approvedAt: timestamp, updatedAt: timestamp };
       await tx.collection("orders").doc(input.id).update({ data: { status: next.status, reviewType: next.reviewType, paymentStatus: next.paymentStatus, paidAmount: next.paidAmount, unpaidAmount: next.unpaidAmount, accountIncluded: true, accountRecalculationPending: true, version: next.version, approvedAt: next.approvedAt, updatedAt: next.updatedAt } });
       await tx.collection("admin_operation_logs").add({ data: { businessKey, sourceId: operationId, idempotencyKey: idempotencyKey || "", action: "order_approve", resourceType: "order", resourceId: input.id, beforeData: { status: order.status, version: currentVersion }, afterData: { status: next.status, version: next.version }, operatorId: actor.id, operatorOpenid: actor.openid, operatorRole: actor.role, status: "success", createdAt: timestamp } });
       await writeOrderEvent(tx, { order, actor, businessKey, decision: "approve", timestamp, version: next.version });
@@ -489,9 +364,8 @@ function createOrderReviewService({
   return { reviewOrder, normalizeReviewActor, normalizeReviewInput, normalizeReviewItems, normalizeOrderAmount };
 }
 
-module.exports = {
+const orderReviewExports = {
   MAX_ORDER_ITEMS,
-  ORDER_REVIEW_STATUSES,
   ACCOUNT_RECALCULATION_WARNING,
   OrderReviewError,
   createOrderReviewService,
@@ -500,3 +374,12 @@ module.exports = {
   normalizeReviewItems,
   normalizeOrderAmount
 };
+
+Object.defineProperty(orderReviewExports, "ORDER_REVIEW_STATUSES", {
+  enumerable: true,
+  get() {
+    return orderStatusPolicy.MANUAL_REVIEWABLE_STATUSES;
+  }
+});
+
+module.exports = orderReviewExports;

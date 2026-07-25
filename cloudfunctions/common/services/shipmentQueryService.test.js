@@ -406,4 +406,47 @@ test("legacy projectors preserve mini-program list and detail response shapes", 
   assert.deepEqual(detail.itemSummary[0].orderNos, ["ORD-001"]);
 });
 
+test("legacy shipment query masks the address for procurement without a full-address permission", async () => {
+  const collections = detailCollections({
+    shipment_groups: [group({ unexpectedPrivateField: "must-not-leak" })]
+  });
+  const { db, command } = fakeDatabase(collections);
+  const service = createShipmentQueryService({ db, command });
+  const actor = activeActor("procurement", ["shipment:view", "shipment:view_address_masked"]);
+
+  const list = await service.listLegacyShipmentGroups({
+    actor,
+    query: { page: 1, pageSize: 20, status: "pending_shipment", keyword: "SHP-001" }
+  });
+
+  assert.equal(list.groups[0].shippingAddressSnapshot, null);
+  assert.ok(list.groups[0].shippingAddress);
+  assert.equal(Object.hasOwn(list.groups[0].shippingAddress, "detailAddress"), false);
+  assert.equal(Object.hasOwn(list.groups[0].shippingAddress, "detailAddressMasked"), true);
+  assert.equal(list.groups[0].shippingAddress.receiverPhoneMasked, "138****8000");
+  assert.equal(list.groups[0].shippingAddress.detailAddressMasked.includes("完整地址"), false);
+  assert.deepEqual(list.groups[0].shippingAddressMasked, list.groups[0].shippingAddress);
+  assert.equal(list.groups[0].customerPhoneMasked, "138****8000");
+  for (const field of ["openid", "userId", "idempotencyKey", "businessKey", "updatedBy"]) {
+    assert.equal(Object.hasOwn(list.groups[0], field), false, field);
+  }
+  assert.equal(Object.hasOwn(list.groups[0], "unexpectedPrivateField"), false);
+});
+
+test("legacy shipment query preserves the full-address contract with explicit permission", async () => {
+  const source = group();
+  const { db, command } = fakeDatabase(detailCollections({ shipment_groups: [source] }));
+  const service = createShipmentQueryService({ db, command });
+  const actor = activeActor("procurement", ["shipment:view", "shipment:view_address_full"]);
+
+  const list = await service.listLegacyShipmentGroups({ actor, query: { page: 1, pageSize: 20 } });
+
+  assert.deepEqual(list.groups[0].shippingAddressSnapshot, source.shippingAddressSnapshot);
+  assert.deepEqual(list.groups[0].shippingAddress, source.shippingAddressSnapshot);
+  assert.equal(list.groups[0].shippingAddress.receiverPhone, "13800138000");
+  for (const field of ["openid", "userId", "idempotencyKey", "businessKey", "updatedBy"]) {
+    assert.equal(Object.hasOwn(list.groups[0], field), false, field);
+  }
+});
+
 module.exports = { activeActor, fakeDatabase, group };

@@ -222,7 +222,12 @@ function safeChangedFields(value) {
 
 function sourceClient(value, fallback) {
   const normalized = cleanString(value, 30);
-  return ["miniprogram", "admin_web", "mock"].includes(normalized) ? normalized : fallback;
+  return ["miniprogram", "admin_web", "mock", "system"].includes(normalized) ? normalized : fallback;
+}
+
+function safeActorType(value) {
+  const normalized = cleanString(value, 30);
+  return ["admin", "user", "system"].includes(normalized) ? normalized : "";
 }
 
 function eventOwnerMatches(row, principal) {
@@ -245,6 +250,7 @@ function storedEventVisible(row, principal, allowedTypes) {
 
 function sanitizeStoredEvent(row, fallbackClient) {
   const mark = markForRow(row, "createdAt");
+  const actorType = safeActorType(row && row.actorType);
   return {
     eventId: cleanString(row.eventId, 128) || stableEventId("stored", row._id || row.id, mark.ms),
     eventType: cleanString(row.eventType, 100),
@@ -253,6 +259,7 @@ function sanitizeStoredEvent(row, fallbackClient) {
     action: cleanString(row.action || "invalidate", 60),
     version: Math.max(0, Number(row.version || 0)),
     changedFields: safeChangedFields(row.changedFields),
+    ...(actorType ? { actorType } : {}),
     sourceClient: sourceClient(row.sourceClient, fallbackClient),
     createdAt: mark.ms ? new Date(mark.ms).toISOString() : null,
     fallback: false,
@@ -496,6 +503,7 @@ module.exports = {
   allowedEntityTypes,
   selectedEntityTypes,
   safeChangedFields,
+  sanitizeStoredEvent,
   storedEventVisible,
   deriveFallbackEvent,
   mergeAndDedupeEvents,

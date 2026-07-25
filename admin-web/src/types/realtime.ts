@@ -13,7 +13,8 @@ export interface SyncEvent {
   action: string;
   version: number;
   changedFields: string[];
-  sourceClient: "miniprogram" | "admin_web" | "mock";
+  actorType?: "admin" | "user" | "system";
+  sourceClient: "miniprogram" | "admin_web" | "mock" | "system";
   createdAt: string;
   cursor?: string;
 }

@@ -62,6 +62,8 @@ import {
   type RefundMutationAction
 } from "./refund-mutation-contract";
 
+const SYNC_REQUEST_TIMEOUT_MS = 45_000;
+
 export class HttpBffTransport implements AdminTransport {
   readonly mode = "http" as const;
   private readonly client: AxiosInstance;
@@ -369,7 +371,10 @@ export class HttpBffTransport implements AdminTransport {
   }
 
   async catchUp(cursor?: string): Promise<SyncBatch> {
-    return this.safeGet<SyncBatch>("/sync/events", { params: { cursor, limit: 200 } });
+    return this.safeGet<SyncBatch>("/sync/events", {
+      params: { cursor, limit: 200 },
+      timeout: SYNC_REQUEST_TIMEOUT_MS
+    });
   }
 
   private async safeGet<T>(url: string, config?: AxiosRequestConfig): Promise<T> {

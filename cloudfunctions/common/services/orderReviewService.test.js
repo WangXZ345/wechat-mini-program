@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createOrderReviewService, OrderReviewError } = require("./orderReviewService");
+const orderReviewModule = require("./orderReviewService");
+const { createOrderReviewService, OrderReviewError } = orderReviewModule;
 
 function service() {
   return createOrderReviewService({ db: {}, command: {} });
@@ -48,7 +49,9 @@ function database(initial = {}, options = {}) {
   const collection = (name) => createCollection(state, name);
   const db = {
     command,
-    serverDate: () => new Date("2026-07-13T00:00:00.000Z"),
+    serverDate: () => options.serverDateValue === undefined
+      ? new Date("2026-07-13T00:00:00.000Z")
+      : structuredClone(options.serverDateValue),
     collection,
     async createCollection() {},
     async runTransaction(fn) {
@@ -166,6 +169,214 @@ test("reject changes only the order decision and leaves inventory/account untouc
   assert.equal(current.db.snapshot().inventory_logs.length, 0);
 });
 
+test("review status policy preserves approval and rejection error contracts", async () => {
+  const cases = [
+    {
+      decision: "reject",
+      order: { status: "approved_pending_payment", paymentStatus: "unpaid" },
+      code: "ORDER_ALREADY_APPROVED",
+      message: "已通过订单不能拒绝"
+    },
+    {
+      decision: "reject",
+      order: { status: "pending_admin", paymentStatus: "paid" },
+      code: "ORDER_ALREADY_APPROVED",
+      message: "已通过订单不能拒绝"
+    },
+    {
+      decision: "reject",
+      order: { status: "processing", paymentStatus: "unpaid" },
+      code: "ORDER_STATUS_INVALID",
+      message: "当前订单状态不能审核"
+    },
+    {
+      decision: "approve",
+      order: { status: "rejected", paymentStatus: "unpaid" },
+      code: "ORDER_STATUS_INVALID",
+      message: "已拒绝或已取消订单不能审核通过"
+    },
+    {
+      decision: "approve",
+      order: { status: "cancelled", paymentStatus: "unpaid" },
+      code: "ORDER_STATUS_INVALID",
+      message: "已拒绝或已取消订单不能审核通过"
+    },
+    {
+      decision: "approve",
+      order: { status: "processing", paymentStatus: "unpaid" },
+      code: "ORDER_STATUS_INVALID",
+      message: "当前订单状态不能审核"
+    }
+  ];
+
+  for (const [index, entry] of cases.entries()) {
+    const current = database({
+      orders: [{ _id: `o-policy-${index}`, version: 1, totalAmount: 100, ...entry.order }]
+    });
+    await assert.rejects(
+      () => createReview(current).reviewOrder({
+        actor: actor(),
+        input: {
+          id: `o-policy-${index}`,
+          decision: entry.decision,
+          reason: entry.decision === "reject" ? "状态策略回归" : undefined
+        },
+        strict: false
+      }),
+      (error) => error.code === entry.code
+        && error.message === entry.message
+        && error.statusCode === 409,
+      `${entry.decision}:${entry.order.status}:${entry.order.paymentStatus}`
+    );
+    assert.deepEqual(current.db.snapshot().orders, [{
+      _id: `o-policy-${index}`,
+      version: 1,
+      totalAmount: 100,
+      ...entry.order
+    }]);
+  }
+});
+
+test("approved status aliases remain idempotent approval successes", async () => {
+  for (const status of [
+    "approved_pending_payment",
+    "pending_payment_confirm",
+    "paid",
+    "partial_paid",
+    "unpaid"
+  ]) {
+    const current = database({
+      orders: [{ _id: `o-approved-${status}`, status, paymentStatus: "unpaid", version: 2 }]
+    });
+    const result = await createReview(current).reviewOrder({
+      actor: actor(),
+      input: { id: `o-approved-${status}`, decision: "approve" },
+      strict: false
+    });
+    assert.equal(result.reused, true, status);
+    assert.equal(result.status, status, status);
+  }
+});
+
+test("partial-paid payment alias on a reviewable order remains rejectable", async () => {
+  const current = database({
+    orders: [{
+      _id: "o-partial-payment-reject",
+      userOpenid: "openid-partial-payment-reject",
+      status: "pending_admin",
+      paymentStatus: "partial_paid",
+      version: 3,
+      totalAmount: 100
+    }]
+  });
+  const result = await createReview(current).reviewOrder({
+    actor: actor(),
+    input: {
+      id: "o-partial-payment-reject",
+      decision: "reject",
+      reason: "保持历史拒绝语义"
+    },
+    strict: false
+  });
+  assert.equal(result.status, "rejected");
+  assert.equal(current.db.snapshot().orders[0].status, "rejected");
+});
+
+test("invalid expectedStatus and approved-terminal precedence keep exact contracts", async () => {
+  assert.throws(
+    () => service().normalizeReviewInput({
+      id: "o-invalid-expected",
+      decision: "approve",
+      expectedVersion: 1,
+      expectedStatus: "paid"
+    }, { strict: true }),
+    (error) => error.code === "EXPECTED_STATUS_INVALID"
+      && error.message === "订单当前状态无效"
+      && error.statusCode === 400
+  );
+
+  const rejectedPaid = database({
+    orders: [{
+      _id: "o-rejected-paid",
+      status: "rejected",
+      paymentStatus: "paid",
+      version: 1
+    }]
+  });
+  const rejectedReplay = await createReview(rejectedPaid).reviewOrder({
+    actor: actor(),
+    input: { id: "o-rejected-paid", decision: "reject", reason: "重复拒绝" },
+    strict: false
+  });
+  assert.equal(rejectedReplay.reused, true);
+  assert.equal(rejectedReplay.status, "rejected");
+
+  const cancelledPaid = database({
+    orders: [{
+      _id: "o-cancelled-paid",
+      status: "cancelled",
+      paymentStatus: "paid",
+      version: 1
+    }]
+  });
+  await assert.rejects(
+    () => createReview(cancelledPaid).reviewOrder({
+      actor: actor(),
+      input: { id: "o-cancelled-paid", decision: "reject", reason: "优先级" },
+      strict: false
+    }),
+    (error) => error.code === "ORDER_ALREADY_APPROVED"
+      && error.message === "已通过订单不能拒绝"
+      && error.statusCode === 409
+  );
+
+  const approved = database({
+    orders: [{ _id: "o-paid-approved", status: "paid", paymentStatus: "paid", version: 1 }]
+  });
+  const approvedReplay = await createReview(approved).reviewOrder({
+    actor: actor(),
+    input: { id: "o-paid-approved", decision: "approve" },
+    strict: false
+  });
+  assert.equal(approvedReplay.reused, true);
+  assert.equal(approvedReplay.status, "paid");
+});
+
+test("mutating exported review statuses cannot change validation across require calls", () => {
+  const statuses = orderReviewModule.ORDER_REVIEW_STATUSES;
+  const original = [...statuses];
+  try {
+    statuses.clear();
+    statuses.add("paid");
+
+    const normalized = service().normalizeReviewInput({
+      id: "o-review-set-pollution",
+      decision: "approve",
+      expectedVersion: 1,
+      expectedStatus: "pending_admin"
+    }, { strict: true });
+    assert.equal(normalized.expectedStatus, "pending_admin");
+    assert.throws(
+      () => service().normalizeReviewInput({
+        id: "o-review-set-pollution",
+        decision: "approve",
+        expectedVersion: 1,
+        expectedStatus: "paid"
+      }, { strict: true }),
+      (error) => error.code === "EXPECTED_STATUS_INVALID"
+        && error.message === "订单当前状态无效"
+        && error.statusCode === 400
+    );
+
+    const requiredAgain = require("./orderReviewService").ORDER_REVIEW_STATUSES;
+    assert.notStrictEqual(requiredAgain, statuses);
+    assert.deepEqual([...requiredAgain], original);
+  } finally {
+    statuses.clear();
+    for (const status of original) statuses.add(status);
+  }
+});
+
 test("approval fails on version conflict or insufficient stock before writes", async () => {
   const current = database({ orders: [{ _id: "o-3", userId: "u-3", status: "pending_admin", totalAmount: 500, version: 3 }], order_items: [{ _id: "i-3", orderId: "o-3", productId: "p-3", quantity: 4 }], products: [{ _id: "p-3", stock: 2, isActive: true }] });
   const review = createReview(current);
@@ -215,8 +426,8 @@ test("account lookup falls back to userOpenid, preserves unrelated fields, and u
   assert.equal(account.totalReceivableAmount, 1000);
   assert.equal(account.totalUnpaidAmount, 980);
   assert.equal(account.unpaidAmount, 980);
-  assert.equal(account.todayOrderAmount, 1000);
-  assert.equal(account.todayDate, "2026-07-13");
+  assert.equal(account.todayOrderAmount, 900);
+  assert.equal(account.todayDate, "2026-07-14");
   assert.equal(account.orderCount, 3);
   assert.equal(account.unpaidOrderCount, 2);
   assert.ok(account.lastOrderAt instanceof Date);
@@ -252,11 +463,147 @@ test("new accounts and account logs initialize the full legacy contract", async 
 });
 
 test("pending orders with accountIncluded already set fail closed instead of masquerading as a replay", async () => {
-  const current = database({ orders: [{ _id: "o-inconsistent", userId: "u-1", status: "pending_admin", accountIncluded: true, totalAmount: 100, version: 1 }] });
+  const current = database({
+    orders: [{ _id: "o-inconsistent", userId: "u-1", status: "pending_admin", accountIncluded: true, totalAmount: 100, version: 1 }],
+    order_items: [{ _id: "i-inconsistent", orderId: "o-inconsistent", productId: "p-inconsistent", quantity: 1 }],
+    products: [{ _id: "p-inconsistent", stock: 3, totalSales: 2, isActive: true, warningStock: 1, version: 1 }],
+    customer_accounts: [{ _id: "a-inconsistent", userId: "u-1", totalOrderAmount: 100, totalUnpaidAmount: 100, orderCount: 1, unpaidOrderCount: 1 }]
+  });
   await assert.rejects(
     () => createReview(current).reviewOrder({ actor: actor(), input: { id: "o-inconsistent", decision: "approve", expectedVersion: 1, expectedStatus: "pending_admin" }, idempotencyKey: "inconsistent", strict: true }),
     (error) => error.code === "ORDER_ACCOUNT_STATE_CONFLICT"
   );
+  const state = current.db.snapshot();
+  assert.equal(state.orders[0].status, "pending_admin");
+  assert.equal(state.products[0].stock, 3);
+  assert.equal(state.products[0].totalSales, 2);
+  assert.equal(state.inventory_logs.length, 0);
+  assert.equal(state.account_logs.length, 0);
+  assert.equal(state.customer_accounts[0].totalOrderAmount, 100);
+});
+
+test("manual approval accepts a non-Date ServerDate placeholder and uses injected now for todayDate", async () => {
+  const serverDateValue = { __serverDate: true };
+  const current = database({
+    orders: [{ _id: "o-server-date", userId: "u-server-date", status: "pending_admin", totalAmount: 500, version: 1 }],
+    order_items: [{ _id: "i-server-date", orderId: "o-server-date", productId: "p-server-date", quantity: 1 }],
+    products: [{ _id: "p-server-date", stock: 3, isActive: true, warningStock: 1, version: 1 }]
+  }, { serverDateValue });
+
+  const result = await createReview(current, {
+    now: () => new Date("2026-07-24T08:00:00.000Z")
+  }).reviewOrder({
+    actor: actor(),
+    input: { id: "o-server-date", decision: "approve", expectedVersion: 1, expectedStatus: "pending_admin" },
+    idempotencyKey: "server-date-placeholder",
+    strict: true
+  });
+
+  const state = current.db.snapshot();
+  assert.equal(result.item.status, "approved_pending_payment");
+  assert.equal(state.customer_accounts[0].todayDate, "2026-07-24");
+  assert.deepEqual(state.customer_accounts[0].lastOrderAt, serverDateValue);
+  assert.deepEqual(state.account_logs[0].createdAt, serverDateValue);
+  assert.deepEqual(state.orders[0].approvedAt, serverDateValue);
+});
+
+test("sparse legacy account evidence discovered after inventory mutation rolls the whole manual transaction back", async () => {
+  const current = database({
+    orders: [{ _id: "o-sparse-debt", userId: "u-sparse-debt", status: "pending_admin", totalAmount: 700, version: 1 }],
+    order_items: [{ _id: "i-sparse-debt", orderId: "o-sparse-debt", productId: "p-sparse-debt", quantity: 2 }],
+    products: [{ _id: "p-sparse-debt", stock: 5, totalSales: 3, isActive: true, warningStock: 1, version: 1 }],
+    customer_accounts: [{ _id: "a-sparse-debt", userId: "u-sparse-debt", totalOrderAmount: 100, totalUnpaidAmount: 100, orderCount: 1, unpaidOrderCount: 1 }],
+    account_logs: [{
+      _id: "l-sparse-debt",
+      relatedOrderId: "o-sparse-debt",
+      changeType: "order_approved",
+      changeAmount: 700
+    }]
+  });
+
+  await assert.rejects(
+    () => createReview(current).reviewOrder({
+      actor: actor(),
+      input: { id: "o-sparse-debt", decision: "approve", expectedVersion: 1, expectedStatus: "pending_admin" },
+      idempotencyKey: "sparse-debt",
+      strict: true
+    }),
+    (error) => error.code === "ACCOUNT_LOG_LEGACY_CONFLICT"
+  );
+
+  const state = current.db.snapshot();
+  assert.equal(state.orders[0].status, "pending_admin");
+  assert.equal(state.products[0].stock, 5);
+  assert.equal(state.products[0].totalSales, 3);
+  assert.equal(state.inventory_logs.length, 0);
+  assert.equal(state.customer_accounts[0].totalOrderAmount, 100);
+  assert.equal(state.account_logs.length, 1);
+});
+
+test("mixed canonical and sparse account evidence rolls back inventory and the whole manual approval", async () => {
+  const current = database({
+    orders: [{
+      _id: "o-mixed-debt",
+      userId: "u-mixed-debt",
+      status: "pending_admin",
+      accountIncluded: true,
+      totalAmount: 800,
+      version: 1
+    }],
+    order_items: [{ _id: "i-mixed-debt", orderId: "o-mixed-debt", productId: "p-mixed-debt", quantity: 2 }],
+    products: [{
+      _id: "p-mixed-debt",
+      stock: 5,
+      totalSales: 3,
+      isActive: true,
+      warningStock: 1,
+      version: 1
+    }],
+    customer_accounts: [{
+      _id: "a-mixed-debt",
+      userId: "u-mixed-debt",
+      totalOrderAmount: 800,
+      totalUnpaidAmount: 800,
+      orderCount: 1,
+      unpaidOrderCount: 1
+    }],
+    account_logs: [{
+      _id: "l-mixed-canonical",
+      businessKey: "order_debt:o-mixed-debt",
+      sourceType: "order",
+      sourceId: "o-mixed-debt",
+      userId: "u-mixed-debt",
+      userOpenid: "",
+      relatedOrderId: "o-mixed-debt",
+      relatedPaymentRecordId: "",
+      changeType: "order_approved",
+      changeAmount: 800
+    }, {
+      _id: "l-mixed-sparse",
+      relatedOrderId: "o-mixed-debt",
+      changeType: "order_approved",
+      changeAmount: 800
+    }]
+  });
+
+  await assert.rejects(
+    () => createReview(current).reviewOrder({
+      actor: actor(),
+      input: { id: "o-mixed-debt", decision: "approve", expectedVersion: 1, expectedStatus: "pending_admin" },
+      idempotencyKey: "mixed-debt",
+      strict: true
+    }),
+    (error) => error.code === "ACCOUNT_LOG_DUPLICATE"
+  );
+
+  const state = current.db.snapshot();
+  assert.equal(state.orders[0].status, "pending_admin");
+  assert.equal(state.orders[0].version, 1);
+  assert.equal(state.products[0].stock, 5);
+  assert.equal(state.products[0].totalSales, 3);
+  assert.equal(state.inventory_logs.length, 0);
+  assert.equal(state.customer_accounts[0].totalOrderAmount, 800);
+  assert.equal(state.account_logs.length, 2);
 });
 
 test("approval writes safe admin, public availability, and anonymous owner outbox events", async () => {

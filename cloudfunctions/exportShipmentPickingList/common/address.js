@@ -63,14 +63,14 @@ function validateAddressPayload(payload = {}) {
 
 function canViewFullAddress(admin = {}) {
   if (!admin) return false;
-  if (admin.role === "super_admin" || admin.role === "procurement") return true;
+  if (admin.role === "super_admin") return true;
   const permissions = Array.isArray(admin.permissions) ? admin.permissions : [];
   return permissions.includes("customer:view_address_full");
 }
 
 function canExportAddress(admin = {}) {
   if (!admin) return false;
-  if (admin.role === "super_admin" || admin.role === "procurement") return true;
+  if (admin.role === "super_admin") return true;
   const permissions = Array.isArray(admin.permissions) ? admin.permissions : [];
   return permissions.includes("customer:export_address");
 }

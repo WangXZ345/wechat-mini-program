@@ -83,6 +83,86 @@ test("a structurally valid legacy order deduction log can be reused without cano
   });
 });
 
+test("primitive rejects an overflowing product version before any product or business-log write", async () => {
+  let productUpdates = 0;
+  let inventoryAdds = 0;
+  const store = {
+    collection(name) {
+      if (name === "inventory_logs") {
+        return {
+          where() {
+            const query = {
+              limit() { return query; },
+              async get() { return { data: [] }; }
+            };
+            return query;
+          },
+          async add() {
+            inventoryAdds += 1;
+          }
+        };
+      }
+      if (name === "products") {
+        return {
+          doc() {
+            return {
+              async get() {
+                return {
+                  data: {
+                    _id: "p-1",
+                    stock: 5,
+                    warningStock: 1,
+                    stockStatus: "normal",
+                    isActive: true,
+                    version: Number.MAX_SAFE_INTEGER
+                  }
+                };
+              },
+              async update() {
+                productUpdates += 1;
+              }
+            };
+          }
+        };
+      }
+      throw new Error(`unexpected collection ${name}`);
+    }
+  };
+
+  await assert.rejects(
+    () => applyInventoryMutationInTransaction({
+      db: { serverDate: () => new Date("2026-07-23T08:00:00.000Z") },
+      store,
+      stockAlert: {
+        buildStockStatusUpdate(product, { stock, now }) {
+          return {
+            stock,
+            warningStock: product.warningStock,
+            stockStatus: "normal",
+            isActive: true,
+            lastStockCheckAt: now,
+            updatedAt: now
+          };
+        },
+        async syncStockAlertRecord() {}
+      },
+      input: { productId: "p-1", mode: "delta", delta: -1, reason: "订单审核" },
+      actor: { id: "system", role: "system" },
+      context: {
+        businessKey: "order_deduct:o-1:p-1",
+        sourceType: "order",
+        sourceId: "o-1",
+        relatedOrderId: "o-1",
+        writeAudit: false,
+        writeSync: false
+      }
+    }),
+    (error) => error.code === "DATA_VERSION_INVALID"
+  );
+  assert.equal(productUpdates, 0);
+  assert.equal(inventoryAdds, 0);
+});
+
 test("idempotency recovery also fails closed on duplicate or conflicting inventory logs", async () => {
   for (const logs of [[validLog(), validLog({ _id: "duplicate" })], [validLog({ sourceId: "wrong-operation" })]]) {
     let observedLimit;

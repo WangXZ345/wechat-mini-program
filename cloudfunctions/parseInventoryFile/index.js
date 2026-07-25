@@ -3,6 +3,13 @@ const xlsx = require("xlsx");
 const { parseInventoryLine, cleanBaseName, extractProductionDate, extractSpecification } = require("./utils/parseProductName");
 const { normalizeWarningStock, getStockStatus } = require("./stockAlert");
 const {
+  buildInventoryImportManifestHash,
+  buildInventoryImportProof,
+  normalizeInventoryMatchText,
+  normalizeProofText,
+  scanInventoryProducts
+} = require("./common/inventoryImportProof");
+const {
   parseQuoteDocx,
   matchQuotePrice,
   normalizeForMatch,
@@ -224,7 +231,7 @@ function buildQuoteOnlyRows(rows, quoteEntries, inventoryIndex) {
 }
 
 function normKey(value) {
-  return String(value || "").replace(/\s+/g, "").toLowerCase();
+  return normalizeInventoryMatchText(value);
 }
 
 function similarity(a, b) {
@@ -244,15 +251,16 @@ function similarity(a, b) {
 
 function matchProduct(item, products) {
   const sameBase = products.filter((product) => normKey(product.name) === normKey(item.baseName));
-  const exact = sameBase.find((product) =>
+  const exactMatches = sameBase.filter((product) =>
     normKey(product.specification) === normKey(item.specification) &&
-    String(product.productionDate || "") === String(item.productionDate || "")
+    normalizeProofText(product.productionDate) === normalizeProofText(item.productionDate)
   );
-  if (exact) return { level: "exact", product: exact, candidates: [] };
+  if (exactMatches.length === 1) return { level: "exact", product: exactMatches[0], candidates: [] };
+  if (exactMatches.length > 1) return { level: "multiple", product: null, candidates: exactMatches };
 
   const sameSpecDifferentDate = sameBase.filter((product) =>
     normKey(product.specification) === normKey(item.specification) &&
-    String(product.productionDate || "") !== String(item.productionDate || "")
+    normalizeProofText(product.productionDate) !== normalizeProofText(item.productionDate)
   );
   if (sameSpecDifferentDate.length === 1) {
     return { level: "sameNameSameSpecDifferentDate", product: sameSpecDifferentDate[0], candidates: sameSpecDifferentDate };
@@ -272,8 +280,9 @@ function matchProduct(item, products) {
 }
 
 async function getAllProducts() {
-  const res = await db.collection("products").limit(1000).get();
-  return res.data.filter((item) => item.isDeleted !== true);
+  const scan = await scanInventoryProducts(db.collection("products"));
+  if (scan.truncated) throw new Error("商品数量超过安全扫描上限，请清理重复商品后重试");
+  return scan.products.filter((item) => item.isDeleted !== true);
 }
 
 function buildPreviewItems(rows, products, quoteEntries = []) {
@@ -431,9 +440,22 @@ exports.main = async (event) => {
         importedAt: null
       }
     });
-    const previewFile = await savePreviewFile(importRecord._id, items);
+    const productsById = new Map(products.map((product) => [String(product._id || ""), product]));
+    const previewItems = items.map((item) => ({
+      ...item,
+      previewProof: buildInventoryImportProof(
+        importRecord._id,
+        item,
+        productsById.get(String(item.matchedProductId || "")) || null
+      )
+    }));
+    const previewManifestHash = buildInventoryImportManifestHash(previewItems);
+    const previewFile = await savePreviewFile(importRecord._id, previewItems);
     await db.collection("import_records").doc(importRecord._id).update({
-      data: previewFile
+      data: {
+        ...previewFile,
+        previewManifestHash
+      }
     });
 
     return ok({

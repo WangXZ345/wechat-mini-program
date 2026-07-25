@@ -227,6 +227,8 @@ test("approved order cannot cancel while the latest payment proof is pending con
   await assert.rejects(
     () => current.service.cancel({ actor: admin, orderId: "order-1" }),
     (error) => error.code === "ORDER_PAYMENT_PENDING_CONFIRM"
+      && error.message === "订单有待确认付款凭证，暂不能取消"
+      && error.statusCode === 409
   );
   assert.equal(current.db.snapshot().orders[0].status, "approved_pending_payment");
 });
@@ -251,7 +253,202 @@ test("a newer rejected payment review permits cancellation but any confirmed pay
   await assert.rejects(
     () => paid.service.cancel({ actor: admin, orderId: "order-1" }),
     (error) => error.code === "ORDER_ALREADY_PAID"
+      && error.message === "订单已有确认付款记录，不能取消"
+      && error.statusCode === 409
   );
+});
+
+test("cancellation guards preserve status, payment, and shipping error contracts", async () => {
+  const cases = [
+    {
+      order: { status: "pending_payment_confirm" },
+      code: "ORDER_NOT_CANCELABLE",
+      message: "当前订单状态不能取消"
+    },
+    {
+      order: { paidAmount: 1 },
+      code: "ORDER_ALREADY_PAID",
+      message: "订单已付款，不能取消"
+    },
+    {
+      order: { paymentStatus: "paid" },
+      code: "ORDER_ALREADY_PAID",
+      message: "订单已付款，不能取消"
+    },
+    {
+      order: { paymentStatus: "partial_paid" },
+      code: "ORDER_ALREADY_PAID",
+      message: "订单已付款，不能取消"
+    },
+    {
+      order: { deliveryStatus: "shipped" },
+      code: "ORDER_ALREADY_SHIPPED",
+      message: "订单已发货，不能取消"
+    },
+    {
+      order: { shippingStatus: "completed" },
+      code: "ORDER_ALREADY_SHIPPED",
+      message: "订单已发货，不能取消"
+    },
+    {
+      order: { shippingStatus: "picked_up" },
+      code: "ORDER_ALREADY_SHIPPED",
+      message: "订单已发货，不能取消"
+    }
+  ];
+
+  for (const entry of cases) {
+    const current = service(approvedState({ order: entry.order }));
+    await assert.rejects(
+      () => current.service.cancel({ actor: admin, orderId: "order-1" }),
+      (error) => error.code === entry.code
+        && error.message === entry.message
+        && error.statusCode === 409,
+      JSON.stringify(entry.order)
+    );
+    assert.equal(current.db.snapshot().orders[0].status, entry.order.status || "approved_pending_payment");
+  }
+});
+
+test("cancellation validation preserves payment-shipping-record error priority", async () => {
+  const paymentRecords = [
+    {
+      _id: "confirmed-old",
+      orderId: "order-1",
+      status: "paid",
+      createdAt: "2026-07-12T08:00:00.000Z"
+    },
+    {
+      _id: "pending-latest",
+      orderId: "order-1",
+      status: "pending_confirm",
+      createdAt: "2026-07-12T10:00:00.000Z"
+    }
+  ];
+  const cases = [
+    {
+      order: {
+        paidAmount: "invalid",
+        paymentStatus: "paid",
+        deliveryStatus: "shipped"
+      },
+      code: "ORDER_PAYMENT_DATA_INVALID",
+      message: "订单付款数据异常，暂不能取消"
+    },
+    {
+      order: {
+        paidAmount: 1,
+        paymentStatus: "paid",
+        deliveryStatus: "shipped"
+      },
+      code: "ORDER_ALREADY_PAID",
+      message: "订单已付款，不能取消"
+    },
+    {
+      order: {
+        paidAmount: 0,
+        paymentStatus: "unpaid",
+        deliveryStatus: "shipped"
+      },
+      code: "ORDER_ALREADY_SHIPPED",
+      message: "订单已发货，不能取消"
+    },
+    {
+      order: {
+        paidAmount: 0,
+        paymentStatus: "unpaid",
+        deliveryStatus: "pending"
+      },
+      code: "ORDER_ALREADY_PAID",
+      message: "订单已有确认付款记录，不能取消"
+    }
+  ];
+
+  for (const entry of cases) {
+    const current = service(approvedState({
+      order: entry.order,
+      payment_records: paymentRecords
+    }));
+    await assert.rejects(
+      () => current.service.cancel({ actor: admin, orderId: "order-1" }),
+      (error) => error.code === entry.code
+        && error.message === entry.message
+        && error.statusCode === 409,
+      entry.code
+    );
+  }
+});
+
+test("payment record status aliases preserve confirmed and pending-confirm cancellation guards", async () => {
+  const confirmedAliases = [
+    { status: "partial" },
+    { status: "partial_paid" },
+    { paymentStatus: "partial" },
+    { paymentStatus: "partial_paid" },
+    { confirmStatus: "confirmed" }
+  ];
+  for (const [index, record] of confirmedAliases.entries()) {
+    const current = service(approvedState({
+      payment_records: [{
+        _id: `confirmed-alias-${index}`,
+        orderId: "order-1",
+        createdAt: "2026-07-12T10:00:00.000Z",
+        ...record
+      }]
+    }));
+    await assert.rejects(
+      () => current.service.cancel({ actor: admin, orderId: "order-1" }),
+      (error) => error.code === "ORDER_ALREADY_PAID"
+        && error.message === "订单已有确认付款记录，不能取消"
+        && error.statusCode === 409,
+      JSON.stringify(record)
+    );
+  }
+
+  const pendingAliases = [
+    { status: "pending_confirm" },
+    { paymentStatus: "pending_confirm" },
+    { confirmStatus: "pending" },
+    { confirmStatus: "pending_confirm" }
+  ];
+  for (const [index, record] of pendingAliases.entries()) {
+    const current = service(approvedState({
+      payment_records: [{
+        _id: `pending-alias-${index}`,
+        orderId: "order-1",
+        createdAt: "2026-07-12T10:00:00.000Z",
+        ...record
+      }]
+    }));
+    await assert.rejects(
+      () => current.service.cancel({ actor: admin, orderId: "order-1" }),
+      (error) => error.code === "ORDER_PAYMENT_PENDING_CONFIRM"
+        && error.message === "订单有待确认付款凭证，暂不能取消"
+        && error.statusCode === 409,
+      JSON.stringify(record)
+    );
+  }
+});
+
+test("deliveryStatus and shippingStatus aliases preserve shipped cancellation guards", async () => {
+  for (const field of ["deliveryStatus", "shippingStatus"]) {
+    for (const status of ["shipped", "completed", "picked_up"]) {
+      const current = service(approvedState({
+        order: {
+          deliveryStatus: "pending",
+          shippingStatus: "",
+          [field]: status
+        }
+      }));
+      await assert.rejects(
+        () => current.service.cancel({ actor: admin, orderId: "order-1" }),
+        (error) => error.code === "ORDER_ALREADY_SHIPPED"
+          && error.message === "订单已发货，不能取消"
+          && error.statusCode === 409,
+        `${field}:${status}`
+      );
+    }
+  }
 });
 
 test("auto-review deduction evidence uses the same business key contract", async () => {

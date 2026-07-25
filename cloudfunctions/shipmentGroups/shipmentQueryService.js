@@ -327,22 +327,39 @@ function shipmentDetailProjection(group, orders, itemSummary, actor) {
   return projected;
 }
 
+const LEGACY_GROUP_SAFE_FIELDS = [
+  "_id", "id", "shipmentNo", "customerName", "orderIds", "orderNos", "orderCount",
+  "totalItemCount", "totalQuantity", "totalProductCount", "totalOrderAmount", "totalPaidAmount",
+  "totalUnpaidAmount", "shippingType", "addressConsistent", "shippingCompany", "trackingNo",
+  "trackingNoList", "shippingStatus", "shippedAt", "completedAt", "cancelledAt", "cancelReason",
+  "adminRemark", "shipmentImages", "createdAt", "updatedAt", "version"
+];
+
 function sanitizeLegacyGroup(group, actor) {
-  const clean = { ...group };
+  const clean = {};
+  for (const field of LEGACY_GROUP_SAFE_FIELDS) {
+    if (Object.hasOwn(group, field)) clean[field] = group[field];
+  }
   const fullAddressAllowed = actor.role === "super_admin"
-    || actor.role === "procurement"
     || explicitPermission(actor, "shipment:view_address_full")
     || explicitPermission(actor, "customer:view_address_full");
   const maskedAllowed = fullAddressAllowed
     || explicitPermission(actor, "shipment:view_address_masked")
     || explicitPermission(actor, "customer:view_address_masked");
-  if (fullAddressAllowed) clean.shippingAddress = group.shippingAddressSnapshot || null;
+  const remaskedAddress = maskedAddress(group);
+  clean.customerPhoneMasked = maskPhone(group.customerPhoneMasked || group.customerPhoneSnapshot || "");
+  clean.shippingAddressMasked = maskedAllowed ? remaskedAddress : null;
+  if (fullAddressAllowed) {
+    clean.shippingAddressSnapshot = group.shippingAddressSnapshot || null;
+    clean.shippingAddress = group.shippingAddressSnapshot || null;
+  }
   else {
     clean.shippingAddressSnapshot = null;
-    clean.shippingAddress = maskedAllowed ? (group.shippingAddressMasked || null) : null;
+    clean.shippingAddress = clean.shippingAddressMasked;
   }
-  if (actor.role !== "super_admin" && !explicitPermission(actor, "customer:view_phone_full")) {
-    delete clean.customerPhoneSnapshot;
+  if ((actor.role === "super_admin" || explicitPermission(actor, "customer:view_phone_full"))
+    && Object.hasOwn(group, "customerPhoneSnapshot")) {
+    clean.customerPhoneSnapshot = cleanText(group.customerPhoneSnapshot, 40);
   }
   return clean;
 }

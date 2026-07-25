@@ -46,6 +46,7 @@ Page({
     isLandscape: false,
     isWideScreen: false,
     orders: [],
+    rawOrders: [],
     dateRangeIndex: 0,
     orderStatusIndex: 0,
     paymentStatusIndex: 0,
@@ -62,7 +63,11 @@ Page({
     isExporting: false,
     exportResult: null,
     loading: false,
+    loadingMore: false,
     initialized: false,
+    currentPage: 0,
+    pageSize: 20,
+    hasMore: true,
     dateRangeOptions: [
       { label: "全部时间", value: "all" },
       { label: "今日", value: "today" },
@@ -163,10 +168,82 @@ Page({
   },
 
   load(options = {}) {
-    if (this.ordersLoading && !options.force) return this.ordersLoading;
-    this.setData({ loading: !options.silent });
-    this.ordersLoading = call("getOrders", { admin: true, filters: this.buildFilters() }, { showLoading: false }).then((data) => {
-      const orders = data.orders.map((item) => ({
+    const reset = options.reset !== false;
+    if (!reset) return this.loadMore();
+    const generation = Number(this.ordersRequestGeneration || 0) + 1;
+    const filters = { ...this.buildFilters() };
+    this.ordersRequestGeneration = generation;
+    this.ordersAppendLoading = null;
+    const page = 1;
+    const silent = Boolean(options.silent);
+    this.setData({ loading: !silent, loadingMore: false });
+    const request = call("getOrders", {
+      admin: true,
+      page,
+      pageSize: this.data.pageSize,
+      filters
+    }, { showLoading: false }).then((data = {}) => {
+      if (generation !== Number(this.ordersRequestGeneration || 0)) return;
+      const rawOrders = this.formatOrders(data.orders || []);
+      this.setData({
+        rawOrders,
+        orders: this.applyShipmentFilter(rawOrders),
+        initialized: true,
+        currentPage: page,
+        hasMore: data.hasMore === true
+      });
+      this.ordersAppliedFilters = filters;
+    }).catch((err) => {
+      if (generation === Number(this.ordersRequestGeneration || 0)) toast(err.message);
+    });
+    this.ordersResetLoading = request;
+    request.finally(() => {
+      if (generation !== Number(this.ordersRequestGeneration || 0) || this.ordersResetLoading !== request) return;
+      this.ordersResetLoading = null;
+      this.setData({ loading: false });
+    });
+    return request;
+  },
+
+  loadMore() {
+    if (this.ordersResetLoading) return this.ordersResetLoading;
+    if (this.ordersAppendLoading) return this.ordersAppendLoading;
+    if (!this.data.hasMore) return Promise.resolve();
+    const generation = Number(this.ordersRequestGeneration || 0);
+    if (!generation) return this.load();
+    const page = this.data.currentPage + 1;
+    const filters = { ...(this.ordersAppliedFilters || {}) };
+    this.setData({ loadingMore: true });
+    const request = call("getOrders", {
+      admin: true,
+      page,
+      pageSize: this.data.pageSize,
+      filters
+    }, { showLoading: false }).then((data = {}) => {
+      if (generation !== Number(this.ordersRequestGeneration || 0)) return;
+      const orders = this.formatOrders(data.orders || []);
+      const rawOrders = this.mergeOrderPages(this.data.rawOrders, orders);
+      this.setData({
+        rawOrders,
+        orders: this.applyShipmentFilter(rawOrders),
+        initialized: true,
+        currentPage: page,
+        hasMore: data.hasMore === true
+      });
+    }).catch((err) => {
+      if (generation === Number(this.ordersRequestGeneration || 0)) toast(err.message);
+    });
+    this.ordersAppendLoading = request;
+    request.finally(() => {
+      if (generation !== Number(this.ordersRequestGeneration || 0) || this.ordersAppendLoading !== request) return;
+      this.ordersAppendLoading = null;
+      this.setData({ loadingMore: false });
+    });
+    return request;
+  },
+
+  formatOrders(items) {
+    return items.map((item) => ({
         ...item,
         selected: this.data.selectedOrderIds.includes(item._id),
         displayName: item.itemSummary || item.productName,
@@ -211,18 +288,24 @@ Page({
           && !["paid", "partial_paid"].includes(item.paymentStatus)
           && !["shipped", "completed", "picked_up"].includes(item.deliveryStatus)
       }));
-      const nextOrders = this.applyShipmentFilter(orders);
-      const state = {
-        orders: nextOrders,
-        initialized: true
-      };
-      this.setData(state);
-    }).catch((err) => toast(err.message));
-    this.ordersLoading.finally(() => {
-      this.ordersLoading = null;
-      this.setData({ loading: false });
+  },
+
+  mergeOrderPages(existingOrders, nextOrders) {
+    const merged = existingOrders.slice();
+    const orderIndexes = new Map();
+    merged.forEach((item, index) => {
+      if (item && item._id) orderIndexes.set(item._id, index);
     });
-    return this.ordersLoading;
+    nextOrders.forEach((item) => {
+      const index = item && item._id ? orderIndexes.get(item._id) : undefined;
+      if (index === undefined) {
+        merged.push(item);
+        if (item && item._id) orderIndexes.set(item._id, merged.length - 1);
+        return;
+      }
+      merged[index] = { ...merged[index], ...item };
+    });
+    return merged;
   },
 
   applyShipmentFilter(orders) {
@@ -260,9 +343,11 @@ Page({
   setOrderPatch(id, patch) {
     const index = this.findOrderIndex(id);
     if (index < 0) return;
+    const rawIndex = this.data.rawOrders.findIndex((item) => item._id === id);
     const updates = {};
     Object.keys(patch).forEach((key) => {
       updates[`orders[${index}].${key}`] = patch[key];
+      if (rawIndex >= 0) updates[`rawOrders[${rawIndex}].${key}`] = patch[key];
     });
     this.setData(updates);
   },
@@ -457,7 +542,10 @@ Page({
       shipmentFilterIndex: index,
       selectedShipmentFilterLabel: option.label,
       exportResult: null
-    }, () => this.load());
+    }, () => {
+      this.setData({ orders: this.applyShipmentFilter(this.data.rawOrders) });
+      this.load();
+    });
   },
 
   onStartDateChange(e) {
@@ -509,6 +597,9 @@ Page({
     const updates = { selectedOrderIds, selectedCustomerKey, canCreateMerge: selectedOrderIds.length >= 2 };
     this.data.orders.forEach((order, index) => {
       updates[`orders[${index}].selected`] = selectedOrderIds.includes(order._id);
+    });
+    this.data.rawOrders.forEach((order, index) => {
+      updates[`rawOrders[${index}].selected`] = selectedOrderIds.includes(order._id);
     });
     this.setData(updates);
   },

@@ -192,6 +192,22 @@
   gap: 12rpx;
 }
 
+.orders-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 92rpx;
+  margin: 8rpx 0 28rpx;
+}
+
+.pagination-button {
+  min-width: 260rpx;
+}
+
+.pagination-end {
+  font-size: 24rpx;
+}
+
 .export-result {
   margin-top: 20rpx;
   padding-top: 20rpx;

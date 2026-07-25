@@ -7,6 +7,7 @@ const {
   pageRowsByCompositeMark,
   markForRow,
   deriveFallbackEvent,
+  sanitizeStoredEvent,
   storedEventVisible,
   safeChangedFields,
   stableEventId,
@@ -69,6 +70,37 @@ test("event envelopes retain only non-sensitive changed field names", () => {
     safeChangedFields(["price", "paymentStatus", "warningStock", "stockStatus", "phone", "address", "paymentScreenshotUrl", "price"]),
     ["price", "paymentStatus", "warningStock", "stockStatus"]
   );
+});
+
+test("stored system order events remain readable without being relabeled as admin activity", () => {
+  const event = sanitizeStoredEvent({
+    _id: "stored-system-order-event",
+    eventId: "auto_order_state:opaque",
+    eventType: "order.status_changed",
+    entityType: "order",
+    entityId: "order-1",
+    action: "manual_review_required",
+    version: 3,
+    changedFields: [
+      "status",
+      "updatedAt",
+      "version",
+      "riskLevelSnapshot",
+      "phone",
+      "paymentScreenshotUrl"
+    ],
+    actorType: "system",
+    sourceClient: "system",
+    createdAt: new Date("2026-07-23T08:00:00.000Z")
+  }, "admin_web");
+
+  assert.deepEqual(event.changedFields, ["status", "updatedAt", "version"]);
+  assert.equal(event.action, "manual_review_required");
+  assert.equal(event.actorType, "system");
+  assert.equal(event.sourceClient, "system");
+  assert.equal(JSON.stringify(event).includes("riskLevelSnapshot"), false);
+  assert.equal(JSON.stringify(event).includes("phone"), false);
+  assert.equal(JSON.stringify(event).includes("paymentScreenshotUrl"), false);
 });
 
 test("procurement never receives payment refund or account topics", () => {

@@ -6,6 +6,7 @@ const db = cloud.database();
 const _ = db.command;
 const { hashPayload } = require("./common/idempotency");
 const { getAdminByOpenid, hasPermission } = require("./common/auth");
+const { assertPaymentProofFileIDs } = require("./paymentProofPolicy");
 
 const PAYMENT_TYPES = ["wechat_qr", "alipay_qr", "bank_transfer", "wechat_pay", "custom"];
 const OFFLINE_TYPES = ["wechat_qr", "alipay_qr", "bank_transfer", "custom"];
@@ -71,6 +72,17 @@ function normalizeBool(value, fallback = false) {
   return value === true || value === "true" || value === 1 || value === "1";
 }
 
+function normalizePaymentScreenshotCount(value, fallback = 3) {
+  let configured = fallback;
+  if (typeof value === "number") {
+    configured = value || fallback;
+  } else if (typeof value === "string" && /^\d+$/.test(value)) {
+    configured = Number(value);
+  }
+  if (!Number.isFinite(configured)) return fallback;
+  return Math.max(1, Math.min(9, configured));
+}
+
 function maskBankCard(value) {
   const digits = String(value || "").replace(/\s+/g, "");
   if (!digits) return "";
@@ -117,7 +129,10 @@ async function getSystemPaymentSettings() {
   return {
     ...defaults,
     ...data,
-    maxPaymentScreenshotCount: Math.max(1, Math.min(9, Number(data.maxPaymentScreenshotCount || defaults.maxPaymentScreenshotCount)))
+    maxPaymentScreenshotCount: normalizePaymentScreenshotCount(
+      data.maxPaymentScreenshotCount,
+      defaults.maxPaymentScreenshotCount
+    )
   };
 }
 
@@ -529,7 +544,7 @@ async function selectOrderPaymentMethod(event = {}) {
 
 async function submitOfflinePaymentProof(event = {}) {
   const orderId = cleanText(event.orderId, 100);
-  const screenshotUrls = Array.isArray(event.screenshotUrls)
+  let screenshotUrls = Array.isArray(event.screenshotUrls)
     ? event.screenshotUrls.map((item) => cleanText(item, 500)).filter(Boolean)
     : [cleanText(event.screenshotUrl || event.paymentScreenshotUrl, 500)].filter(Boolean);
   const openid = getOpenid(event);
@@ -544,7 +559,10 @@ async function submitOfflinePaymentProof(event = {}) {
 
   const settings = await getSystemPaymentSettings();
   if (settings.requirePaymentProofForOfflinePayment && !screenshotUrls.length) throw new Error("请先上传付款截图");
-  if (screenshotUrls.length > settings.maxPaymentScreenshotCount) throw new Error(`付款截图最多上传 ${settings.maxPaymentScreenshotCount} 张`);
+  screenshotUrls = assertPaymentProofFileIDs(screenshotUrls, {
+    orderId,
+    maxCount: settings.maxPaymentScreenshotCount
+  });
 
   const result = await db.runTransaction(async (tx) => {
     const order = (await tx.collection("orders").doc(orderId).get()).data;
@@ -739,6 +757,8 @@ exports.main = async (event = {}) => {
     }
     return { ok: true, data };
   } catch (err) {
-    return { ok: false, message: err.message || "支付操作失败" };
+    const response = { ok: false, message: err.message || "支付操作失败" };
+    if (err && err.code) response.code = err.code;
+    return response;
   }
 };

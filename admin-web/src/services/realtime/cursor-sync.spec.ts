@@ -23,4 +23,35 @@ describe("CursorSyncClient", () => {
     expect(result.events.map((event) => event.eventId)).toEqual(["e1", "e2"]);
     expect(result.cursor).toBe("2");
   });
+
+  it("keeps automatic order-review events readable as system activity", async () => {
+    const batch: SyncBatch = {
+      events: [{
+        eventId: "auto_order_state:opaque",
+        eventType: "order.status_changed",
+        entityType: "order",
+        entityId: "order-1",
+        action: "manual_review_required",
+        version: 3,
+        changedFields: ["status", "updatedAt", "version"],
+        actorType: "system",
+        sourceClient: "system",
+        createdAt: "2026-07-23T08:00:00.000Z"
+      }],
+      nextCursor: "v3.opaque",
+      hasMore: false,
+      serverTime: "2026-07-23T08:00:01.000Z"
+    };
+    const result = await new CursorSyncClient({
+      catchUp: async () => batch
+    }).catchUp();
+
+    expect(result.events).toEqual(batch.events);
+    expect(result.events[0]).toMatchObject({
+      eventType: "order.status_changed",
+      action: "manual_review_required",
+      actorType: "system",
+      sourceClient: "system"
+    });
+  });
 });

@@ -14,7 +14,8 @@
         <view class="hero-value">{{selectedOrderIds.length}}</view>
         <view class="hero-label">已选发货</view>
       </view>
-      <view class="hero-filter-pill">{{selectedOrderStatusLabel}} · {{selectedPaymentStatusLabel}}</view>
+      <view wx:if="{{selectedOrderStatusLabel === '全部' && selectedPaymentStatusLabel === '全部'}}" class="hero-filter-pill">全部订单</view>
+      <view wx:else class="hero-filter-pill">{{selectedOrderStatusLabel}} · {{selectedPaymentStatusLabel}}</view>
     </view>
     <view class="row header-actions">
       <button class="btn btn-secondary mini" bindtap="goShipments">发货单</button>
@@ -113,7 +114,7 @@
   </view>
 
   <view wx:if="{{loading && !orders.length}}" class="empty">加载中...</view>
-  <view wx:elif="{{initialized && !orders.length}}" class="empty">暂无符合条件的订单</view>
+  <view wx:elif="{{initialized && !orders.length && !hasMore}}" class="empty">暂无符合条件的订单</view>
 
   <view wx:if="{{orders.length}}" class="orders-section-heading fade-up">
     <view>
@@ -232,6 +233,11 @@
       <button class="btn btn-danger small" bindtap="markPayment" data-id="{{item._id}}" data-status="abnormal">付款异常</button>
       <button class="btn btn-danger small" bindtap="markPayment" data-id="{{item._id}}" data-status="unpaid">驳回截图</button>
     </view>
+  </view>
+
+  <view wx:if="{{initialized && (orders.length || hasMore)}}" class="orders-pagination">
+    <button wx:if="{{hasMore}}" class="btn btn-secondary small pagination-button" loading="{{loadingMore}}" disabled="{{loadingMore}}" bindtap="loadMore">加载更多订单</button>
+    <view wx:else class="muted pagination-end">已加载全部订单</view>
   </view>
 
   <view wx:if="{{selectedOrderIds.length}}" class="batch-bar">

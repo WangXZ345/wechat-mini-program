@@ -1,10 +1,12 @@
 const crypto = require("crypto");
-
-const USER_CANCELABLE_STATUSES = new Set(["pending_admin", "auto_reviewing"]);
-const ADMIN_CANCELABLE_STATUSES = new Set(["pending_admin", "auto_reviewing", "approved_pending_payment"]);
-const PAID_STATUSES = new Set(["paid", "partial_paid"]);
-const SHIPPED_STATUSES = new Set(["shipped", "completed", "picked_up"]);
-const PAID_RECORD_STATUSES = new Set(["paid", "partial", "partial_paid"]);
+const {
+  canCancelOrderStatus,
+  hasBlockingOrderPayment,
+  hasBlockingOrderShipping,
+  isConfirmedPaymentRecord,
+  isPendingPaymentConfirmationRecord,
+  requiresCancellationInventoryRestore
+} = require("./orderStatusPolicy");
 const SYNC_EVENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 class OrderCancellationError extends Error {
@@ -77,8 +79,7 @@ function validateCancellation(order, actor) {
   if (actor.kind !== "admin" && order.userOpenid !== actor.openid) {
     throw new OrderCancellationError("FORBIDDEN", "无权取消此订单", 403);
   }
-  const allowed = actor.kind === "admin" ? ADMIN_CANCELABLE_STATUSES : USER_CANCELABLE_STATUSES;
-  if (!allowed.has(order.status)) {
+  if (!canCancelOrderStatus(order.status, actor.kind)) {
     throw new OrderCancellationError("ORDER_NOT_CANCELABLE", "当前订单状态不能取消", 409);
   }
 
@@ -86,10 +87,10 @@ function validateCancellation(order, actor) {
   if (!Number.isFinite(paidAmount) || paidAmount < 0) {
     throw new OrderCancellationError("ORDER_PAYMENT_DATA_INVALID", "订单付款数据异常，暂不能取消", 409);
   }
-  if (paidAmount > 0 || PAID_STATUSES.has(order.paymentStatus)) {
+  if (hasBlockingOrderPayment(order)) {
     throw new OrderCancellationError("ORDER_ALREADY_PAID", "订单已付款，不能取消", 409);
   }
-  if (SHIPPED_STATUSES.has(order.deliveryStatus) || SHIPPED_STATUSES.has(order.shippingStatus)) {
+  if (hasBlockingOrderShipping(order)) {
     throw new OrderCancellationError("ORDER_ALREADY_SHIPPED", "订单已发货，不能取消", 409);
   }
 }
@@ -151,9 +152,7 @@ async function validatePaymentRecords(tx, orderId) {
   const result = await tx.collection("payment_records").where({ orderId }).limit(100).get();
   const rows = (result.data || []).map((row, index) => ({ row, index }));
   if (!rows.length) return;
-  if (rows.some(({ row }) => PAID_RECORD_STATUSES.has(row.status)
-    || PAID_RECORD_STATUSES.has(row.paymentStatus)
-    || row.confirmStatus === "confirmed")) {
+  if (rows.some(({ row }) => isConfirmedPaymentRecord(row))) {
     throw new OrderCancellationError("ORDER_ALREADY_PAID", "订单已有确认付款记录，不能取消", 409);
   }
   rows.sort((left, right) => {
@@ -161,8 +160,7 @@ async function validatePaymentRecords(tx, orderId) {
     return timeDiff || right.index - left.index;
   });
   const latest = rows[0].row;
-  if (latest.status === "pending_confirm" || latest.paymentStatus === "pending_confirm"
-    || latest.confirmStatus === "pending" || latest.confirmStatus === "pending_confirm") {
+  if (isPendingPaymentConfirmationRecord(latest)) {
     throw new OrderCancellationError("ORDER_PAYMENT_PENDING_CONFIRM", "订单有待确认付款凭证，暂不能取消", 409);
   }
 }
@@ -266,7 +264,7 @@ function createOrderCancellationService({ db, stockAlert, applyInventoryMutation
       await validatePaymentRecords(tx, orderId);
       const timestamp = db.serverDate();
       const restoredProducts = [];
-      if (order.status === "approved_pending_payment") {
+      if (requiresCancellationInventoryRestore(order.status)) {
         const productIds = await orderProductIds(tx, orderId, order);
         for (const productId of productIds) {
           restoredProducts.push(await restoreProduct(tx, {
@@ -303,7 +301,7 @@ function createOrderCancellationService({ db, stockAlert, applyInventoryMutation
         }
       });
 
-      const hadDeductedInventory = order.status === "approved_pending_payment";
+      const hadDeductedInventory = requiresCancellationInventoryRestore(order.status);
       const accountRecalculationRequired = hadDeductedInventory && order.accountIncluded === true;
       const orderUpdate = {
         status: "cancelled",
