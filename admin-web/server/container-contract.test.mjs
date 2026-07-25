@@ -23,13 +23,14 @@ function runtimeServerCopyBasenames(runtimeStage) {
 
 test("container package builds the real gateway into a non-root runtime image", async () => {
   const dockerfile = await readAdminWebFile("Dockerfile");
-  const runtimeStage = dockerfile.split(/^FROM node:20-alpine AS runtime$/m)[1];
+  const runtimeStage = dockerfile.split(/^FROM \$\{NODE_IMAGE\} AS runtime$/m)[1];
 
-  assert.match(dockerfile, /^FROM node:20-alpine AS build$/m);
+  assert.match(dockerfile, /^ARG NODE_IMAGE=node:20-alpine$/m);
+  assert.match(dockerfile, /^FROM \$\{NODE_IMAGE\} AS build$/m);
   assert.match(dockerfile, /^COPY package\.json package-lock\.json \.\/$/m);
   assert.match(dockerfile, /RUN npm ci/);
   assert.match(dockerfile, /RUN npm run test:gateway && npm run build/);
-  assert.match(dockerfile, /^FROM node:20-alpine AS runtime$/m);
+  assert.match(dockerfile, /^FROM \$\{NODE_IMAGE\} AS runtime$/m);
   assert.match(dockerfile, /COPY --from=build --chown=node:node \/app\/dist \.\/dist/);
   assert.ok(runtimeStage, "missing runtime stage");
   assert.deepEqual(runtimeServerCopyBasenames(runtimeStage), [
@@ -85,8 +86,12 @@ test("ZSpace Compose uses public configuration and mounts the action secret read
   ]);
 
   assert.match(compose, /^services:\n {2}admin-web:\n/m);
+  assert.match(
+    compose,
+    /^ {6}args:\n {8}NODE_IMAGE: docker\.m\.daocloud\.io\/library\/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293$/m,
+  );
   assert.match(compose, /^ {4}restart: unless-stopped$/m);
-  assert.match(compose, /^ {6}- "18080:8080"$/m);
+  assert.match(compose, /^ {6}- "18081:8080"$/m);
   assert.match(compose, /^ {6}ADMIN_WEB_PUBLIC_ORIGIN: \$\{ADMIN_WEB_PUBLIC_ORIGIN\}$/m);
   assert.match(compose, /^ {6}ADMIN_WEB_BFF_TARGET: \$\{ADMIN_WEB_BFF_TARGET\}$/m);
   assert.match(compose, /^ {6}ADMIN_WEB_ACTION_SECRET_FILE: \/run\/secrets\/admin_web_action_secret$/m);

@@ -3,12 +3,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: docker.m.daocloud.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
     image: beauty-wholesale-admin-web:2026-07-23
     container_name: beauty-wholesale-admin-web
     user: "1000:1000"
     restart: unless-stopped
     ports:
-      - "18080:8080"
+      - "18081:8080"
     environment:
       NODE_ENV: production
       PORT: "8080"

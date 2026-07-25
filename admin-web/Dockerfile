@@ -1,4 +1,5 @@
-FROM node:20-alpine AS build
+ARG NODE_IMAGE=node:20-alpine
+FROM ${NODE_IMAGE} AS build
 
 WORKDIR /app
 
@@ -8,7 +9,7 @@ RUN npm ci
 COPY . .
 RUN npm run test:gateway && npm run build
 
-FROM node:20-alpine AS runtime
+FROM ${NODE_IMAGE} AS runtime
 
 ENV NODE_ENV=production \
     PORT=8080 \
