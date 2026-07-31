@@ -129,8 +129,26 @@
         <view class="recommend-row home-rail-row">
           <block wx:for="{{item.products}}" wx:for-item="product" wx:for-index="productIndex" wx:key="_id">
             <view class="recommend-card home-rail-card tap-card" catchtap="goDetail" data-id="{{product._id}}">
-              <image wx:if="{{product.imageUrl}}" class="recommend-image" src="{{product.imageUrl}}" mode="aspectFill" lazy-load="{{productIndex > 1}}"></image>
-              <view wx:else class="recommend-image placeholder">暂无图片</view>
+              <view class="recommend-visual-row">
+                <image wx:if="{{product.imageUrl}}" class="recommend-image" src="{{product.imageUrl}}" mode="aspectFill" lazy-load="{{productIndex > 1}}"></image>
+                <view wx:else class="recommend-image placeholder">暂无图片</view>
+                <view class="recommend-seal recommend-seal-{{item.sectionKey}}" aria-hidden="true">
+                  <block wx:if="{{item.sectionKey === 'frequent_purchase'}}">
+                    <view class="recommend-seal-loop"></view>
+                    <view class="recommend-seal-check"></view>
+                    <view class="recommend-seal-spark"></view>
+                  </block>
+                  <block wx:elif="{{item.sectionKey === 'new_arrivals'}}">
+                    <view class="recommend-seal-new-star"></view>
+                    <view class="recommend-seal-new-dot"></view>
+                    <view class="recommend-seal-spark"></view>
+                  </block>
+                  <block wx:elif="{{item.sectionKey === 'hot_selling'}}">
+                    <view class="recommend-seal-flame"></view>
+                    <view class="recommend-seal-spark"></view>
+                  </block>
+                </view>
+              </view>
               <view class="recommend-name">{{product.name}}</view>
               <view class="recommend-meta">{{product.brand || product.category || product.specification}}</view>
               <view class="recommend-meta">生产日期：{{product.productionDate || '未设置'}}</view>

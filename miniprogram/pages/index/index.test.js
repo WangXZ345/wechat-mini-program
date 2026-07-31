@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 
 const events = [];
 let definition;
@@ -68,4 +70,18 @@ test("missing product still navigates without attempting persistence", () => {
   const page = pageWith([]);
   page.goDetail({ currentTarget: { dataset: { id: "missing" } } });
   assert.deepEqual(events, ["navigate"]);
+});
+
+test("home recommendation cards keep the compact matched heights", () => {
+  const stylesheet = fs.readFileSync(path.join(__dirname, "index.wxss"), "utf8");
+  const template = fs.readFileSync(path.join(__dirname, "index.wxml"), "utf8");
+  assert.match(stylesheet, /\.recommend-skeleton-card\s*\{[^}]*height:\s*464rpx;/s);
+  assert.match(stylesheet, /\.recommend-card\.home-rail-card\s*\{[^}]*height:\s*464rpx;/s);
+  assert.match(stylesheet, /\.recommend-visual-row\s*\{[^}]*height:\s*168rpx;/s);
+  assert.match(stylesheet, /\.recommend-image\s*\{[^}]*width:\s*168rpx;[^}]*height:\s*168rpx;/s);
+  assert.doesNotMatch(stylesheet, /\.page\.is-wide\s+\.recommend-image\s*\{/);
+  assert.match(template, /recommend-seal-\{\{item\.sectionKey\}\}/);
+  ["frequent_purchase", "new_arrivals", "hot_selling"].forEach((sectionKey) => {
+    assert.match(template, new RegExp(`item\\.sectionKey === '${sectionKey}'`));
+  });
 });
