@@ -26,6 +26,7 @@ project.private.config.json
 .codex/
 .codex-runtime/
 .codex-cloudfunction-deploy/
+.codegraph/
 .superpowers/
 .worktrees/
 
