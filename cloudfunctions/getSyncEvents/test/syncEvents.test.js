@@ -11,7 +11,8 @@ const {
   storedEventVisible,
   safeChangedFields,
   stableEventId,
-  selectedEntityTypes
+  selectedEntityTypes,
+  mergeAndDedupeEvents
 } = require("../common/syncEvents");
 
 const CURSOR_SECRET = "test-sync-cursor-secret-with-at-least-32-characters";
@@ -48,6 +49,33 @@ test("composite mark drains more than one page created in the same millisecond",
 
   const ids = [...first.rows, ...second.rows, ...third.rows].map((row) => row._id);
   assert.equal(new Set(ids).size, 250);
+});
+
+test("duplicate outbox delivery is idempotent and keeps the latest composite mark", () => {
+  const earlier = {
+    eventId: "sync-event-1",
+    entityType: "product",
+    entityId: "product-1",
+    version: 3,
+    _mark: { ms: 1000, id: "row-a" }
+  };
+  const later = {
+    ...earlier,
+    version: 4,
+    _mark: { ms: 1000, id: "row-b" }
+  };
+  const other = {
+    eventId: "sync-event-2",
+    entityType: "inventory",
+    entityId: "product-1",
+    version: 4,
+    _mark: { ms: 1001, id: "row-c" }
+  };
+  const merged = mergeAndDedupeEvents([earlier, later, other, later], 100);
+  assert.deepEqual(merged.map((event) => [event.eventId, event.version]), [
+    ["sync-event-1", 4],
+    ["sync-event-2", 4]
+  ]);
 });
 
 test("cursor round trip preserves a watermark per source", () => {

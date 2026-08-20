@@ -55,6 +55,8 @@ export function loadGatewayConfig(env = process.env, readSecret = (path) => read
     publicOrigin: publicUrl.origin,
     upstream,
     actionSecret,
+    maxRequestBodyBytes: integer(env.ADMIN_WEB_MAX_REQUEST_BODY_BYTES, 1024 * 1024, 64 * 1024, 2 * 1024 * 1024, "ADMIN_WEB_MAX_REQUEST_BODY_BYTES"),
+    maxImportRequestBodyBytes: integer(env.ADMIN_WEB_IMPORT_MAX_REQUEST_BODY_BYTES, 15 * 1024 * 1024, 14 * 1024 * 1024, 16 * 1024 * 1024, "ADMIN_WEB_IMPORT_MAX_REQUEST_BODY_BYTES"),
     upstreamTimeoutMs: integer(env.ADMIN_WEB_UPSTREAM_TIMEOUT_MS, 55000, 45000, 120000, "ADMIN_WEB_UPSTREAM_TIMEOUT_MS")
   });
 }

@@ -85,6 +85,7 @@ test("payment confirm and reject routes call the canonical service with only ses
       reason: action === "reject" ? "未核对到款项" : "已核对到账"
     });
     assert.equal(received.idempotencyKey, `payment-${action}-key-0001`);
+    assert.equal(received.requestId, `request-payment-${action}`);
     assert.deepEqual(received.actor, {
       id: "finance-1",
       openid: "trusted-finance-openid",

@@ -1,6 +1,7 @@
 const { ApiError, boundedPermissions } = require("./core");
 const security = require("../security");
 const permissionModel = require("../permissions");
+const { assertSessionIdleLifetime } = require("./sessionPolicy");
 
 function toMillis(value) {
   if (!value) return 0;
@@ -26,6 +27,11 @@ async function requireAccessSession({ db, accessToken, config }) {
   const session = result.data && result.data[0];
   if (!session || session.revokedAt) throw new ApiError("SESSION_REVOKED", "登录状态已失效", 401);
   const now = Date.now();
+  try {
+    assertSessionIdleLifetime(session, now);
+  } catch (error) {
+    throw new ApiError(error.code, error.message, error.statusCode);
+  }
   if (toMillis(session.accessExpiresAt) <= now || toMillis(session.absoluteExpiresAt) <= now) {
     throw new ApiError("SESSION_EXPIRED", "登录状态已过期", 401);
   }

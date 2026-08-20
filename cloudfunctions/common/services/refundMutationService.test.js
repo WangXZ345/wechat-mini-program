@@ -220,6 +220,16 @@ function database(initial = {}, options = {}) {
             Object.assign(row, structuredClone(data));
             return { stats: { updated: 1 } };
           },
+          async set({ data }) {
+            const entry = { operation: "set", collection: name, id, data: structuredClone(data) };
+            if (options.observe) options.observe(entry);
+            if (options.failOn && options.failOn(entry)) throw new Error(`forced ${name}.set failure`);
+            const index = target[name].findIndex((item) => item._id === id);
+            const row = { ...structuredClone(data), _id: id };
+            if (index >= 0) target[name][index] = row;
+            else target[name].push(row);
+            return { stats: { updated: index >= 0 ? 1 : 0, created: index < 0 ? 1 : 0 } };
+          },
           async remove() {
             const entry = { operation: "remove", collection: name, id };
             if (options.observe) options.observe(entry);

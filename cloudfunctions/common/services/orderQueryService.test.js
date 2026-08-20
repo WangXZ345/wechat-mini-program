@@ -41,6 +41,7 @@ function matches(row, where) {
 function fakeDatabase(collections, options = {}) {
   const command = commandSet();
   function collection(name) {
+    if (Array.isArray(options.missingCollections) && options.missingCollections.includes(name)) throw new Error("COLLECTION_NOT_EXIST");
     const state = { where: {}, skip: 0, limit: Infinity, orders: [] };
     const query = {
       where(value) { state.where = value || {}; return query; },
@@ -339,4 +340,41 @@ test("order detail maps database failures to a retryable safe error instead of n
     () => createOrderQueryService({ db, command }).getWebOrder({ principal: principal("customer_service", ["order:view"]), id: "order-1" }),
     (error) => error.code === "ORDER_READ_FAILED" && error.statusCode === 503
   );
+});
+
+test("detail projects newest 100 internal notes only for order:edit_remark and degrades when note_logs is unavailable", async () => {
+  const rows = Array.from({ length: 101 }, (_, index) => ({ _id: `note-${index}`, targetType: "order", targetId: "order-1", content: index === 100 ? "" : `备注 ${index}`, authorId: "admin-1", authorRole: "customer_service", authorName: "客服", createdAt: new Date(Date.UTC(2026, 7, 15, 0, 0, index)) }));
+  const collections = { orders: [{ _id: "order-1", orderNo: "NO-1", status: "pending_admin", createdAt: new Date() }], order_items: [], users: [], customer_accounts: [], note_logs: rows };
+  const { db, command } = fakeDatabase(collections);
+  const editable = await createOrderQueryService({ db, command }).getWebOrder({ principal: principal("customer_service", ["order:view", "order:edit_remark"]), id: "order-1" });
+  assert.equal(editable.internalNotes.length, 99);
+  assert.deepEqual(Object.keys(editable.internalNotes[0]).sort(), ["authorId", "authorName", "authorRole", "content", "createdAt", "id"]);
+  const readonly = await createOrderQueryService({ db, command }).getWebOrder({ principal: principal("finance", ["order:view"]), id: "order-1" });
+  assert.equal(readonly.internalNotes, undefined);
+  assert.equal(readonly.adminRemark, undefined);
+  const missing = fakeDatabase({ ...collections, note_logs: undefined }, { missingCollections: ["note_logs"] });
+  const missingDetail = await createOrderQueryService(missing).getWebOrder({ principal: principal("customer_service", ["order:view", "order:edit_remark"]), id: "order-1" });
+  assert.deepEqual(missingDetail.internalNotes, []);
+});
+
+test("legacy customer output removes nested order internal note fields", async () => {
+  const { db, command } = fakeDatabase({ orders: [{ _id: "order-public", userOpenid: "customer-openid", status: "paid", createdAt: new Date(), internalNotes: [{ content: "后台正文", authorId: "admin-1", authorRole: "customer_service", authorName: "客服" }], adminRemark: "后台摘要" }], order_items: [], users: [], customer_accounts: [] });
+  const result = await createOrderQueryService({ db, command }).listLegacyOrders({ userOpenid: "customer-openid", filters: {}, page: 1, pageSize: 20 });
+  const json = JSON.stringify(result.orders[0]);
+  for (const secret of ["后台正文", "admin-1", "customer_service", "客服", "后台摘要"]) assert.equal(json.includes(secret), false, secret);
+});
+
+test("legacy admin without remark permission strips persisted internal notes and note timestamps", async () => {
+  const order = { _id: "order-private", userOpenid: "customer-openid", status: "paid", createdAt: new Date(), internalNotes: [{ content: "内部正文", authorId: "admin-private", authorRole: "customer_service", authorName: "客服" }], adminNote: "摘要", adminRemark: "摘要", adminNoteUpdatedAt: new Date(), adminNoteUpdatedBy: "admin-private", adminNoteUpdatedByOpenid: "openid-private" };
+  const { db, command } = fakeDatabase({ orders: [order], order_items: [], users: [], customer_accounts: [] });
+  const result = await createOrderQueryService({ db, command }).listLegacyOrders({ principal: principal("finance", ["order:view"]), filters: {}, page: 1, pageSize: 20 });
+  const json = JSON.stringify(result.orders[0]);
+  for (const secret of ["内部正文", "admin-private", "customer_service", "客服", "openid-private", "摘要"]) assert.equal(json.includes(secret), false, secret);
+});
+
+test("detail falls back to legacy operator fields without exposing operatorOpenid", async () => {
+  const { db, command } = fakeDatabase({ orders: [{ _id: "order-1", orderNo: "NO-1", status: "paid", createdAt: new Date() }], order_items: [], users: [], customer_accounts: [], note_logs: [{ _id: "legacy-note", targetType: "order", targetId: "order-1", afterNote: "旧备注", operatorId: "operator-1", operatorRole: "customer_service", operatorName: "老客服", operatorOpenid: "secret-openid", createdAt: new Date() }] });
+  const result = await createOrderQueryService({ db, command }).getWebOrder({ principal: principal("customer_service", ["order:view", "order:edit_remark"]), id: "order-1" });
+  assert.deepEqual(result.internalNotes[0], { id: "legacy-note", content: "旧备注", authorId: "operator-1", authorRole: "customer_service", authorName: "老客服", createdAt: result.internalNotes[0].createdAt });
+  assert.equal(JSON.stringify(result).includes("secret-openid"), false);
 });

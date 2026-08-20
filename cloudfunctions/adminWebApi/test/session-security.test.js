@@ -60,11 +60,23 @@ test("mutation checks permission, then CSRF, before the service boundary", async
   );
 });
 
-test("settings update remains behind permission and CSRF with no migrated write service", async () => {
+test("settings update remains behind permission and CSRF before the service boundary", async () => {
   const csrfToken = "current-csrf-token";
   const request = {
     ...mutationRequest(csrfToken),
-    route: { action: "mutate", resource: "settings", mutationAction: "update" }
+    route: { action: "mutate", resource: "settings", mutationAction: "update" },
+    headers: { "x-admin-csrf": csrfToken, "idempotency-key": "settings-session-check-0001" },
+    body: {
+      enableOfflineQrPayment: true,
+      enableBankTransfer: false,
+      enableWechatPay: false,
+      requirePaymentProofForOfflinePayment: true,
+      allowMultiplePaymentRecords: false,
+      maxPaymentScreenshotCount: 3,
+      lowStockDefaultThreshold: 50,
+      sessionIdleMinutes: 30,
+      expectedVersion: 0
+    }
   };
   await assert.rejects(
     () => dispatch(request, authContext([], csrfToken), config),
@@ -74,8 +86,18 @@ test("settings update remains behind permission and CSRF with no migrated write 
     () => dispatch({ ...request, headers: {} }, authContext(["system:settings"], csrfToken), config),
     (err) => err.code === "CSRF_VALIDATION_FAILED" && err.statusCode === 403
   );
-  await assert.rejects(
-    () => dispatch(request, authContext(["system:settings"], csrfToken), config),
-    (err) => err.code === "SERVICE_NOT_MIGRATED" && err.statusCode === 501
-  );
+  let calls = 0;
+  const result = await dispatch(request, {
+    ...authContext(["system:settings"], csrfToken),
+    principal: { id: "admin-1", role: "super_admin", status: "active", isActive: true, permissions: ["*"] }
+  }, config, {
+    systemSettingsService: {
+      async saveSettings() {
+        calls += 1;
+        return { id: "system", version: 1, ...request.body, updatedAt: new Date("2026-08-15T05:00:00.000Z"), changed: true };
+      }
+    }
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.item.sessionIdleMinutes, 30);
 });

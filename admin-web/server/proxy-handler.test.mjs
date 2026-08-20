@@ -303,6 +303,45 @@ test("rejects a declared oversized request before opening an upstream request", 
   assert.equal(upstreamRequests, 0);
 });
 
+test("allows a separately bounded import payload without relaxing ordinary API routes", async (t) => {
+  const received = [];
+  const upstream = await listen(createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      received.push({ path: request.url, body: Buffer.concat(chunks) });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true,"data":{}}');
+    });
+  }));
+  t.after(() => close(upstream));
+  const gateway = await startGateway(createProxyHandler(
+    gatewayConfig(serverUrl(upstream), { maxRequestBodyBytes: 16, maxImportRequestBodyBytes: 64 }),
+    httpRequest
+  ));
+  t.after(() => close(gateway));
+  const body = Buffer.alloc(32, "x");
+
+  const ordinary = await request(gateway, {
+    path: "/api/admin/v1/orders/remark",
+    method: "POST",
+    body,
+    headers: { "content-length": String(body.length), "content-type": "application/json" }
+  });
+  assert.equal(ordinary.statusCode, 413);
+
+  const imported = await request(gateway, {
+    path: "/api/admin/v1/imports/preview",
+    method: "POST",
+    body,
+    headers: { "content-length": String(body.length), "content-type": "application/json" }
+  });
+  assert.equal(imported.statusCode, 200);
+  assert.equal(received.length, 1);
+  assert.equal(received[0].path, "/api/admin/v1/imports/preview");
+  assert.equal(received[0].body.length, 32);
+});
+
 test("stops a chunked request and its upstream stream when the body limit is crossed", async (t) => {
   let completedUpstreamRequests = 0;
   const upstream = await listen(createServer((incoming, response) => {

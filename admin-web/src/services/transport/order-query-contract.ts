@@ -54,12 +54,22 @@ const fullAddressSchema = z.object({
   detailAddress: shortText(220)
 }).strict();
 
+const orderInternalNoteSchema = z.object({
+  id: shortText(128).min(1),
+  content: shortText(500).min(1),
+  authorId: shortText(128),
+  authorRole: shortText(50),
+  authorName: shortText(80),
+  createdAt: z.string().datetime({ offset: true })
+}).strict();
+
 const orderDetailSchema = orderSummarySchema.extend({
   items: z.array(orderLineSchema).max(500),
   customer: customerSchema,
   shippingAddressMasked: maskedAddressSchema.optional(),
   shippingAddress: fullAddressSchema.optional(),
   adminRemark: shortText(500).optional(),
+  internalNotes: z.array(orderInternalNoteSchema).max(100).optional(),
   riskLevelSnapshot: z.enum(["normal", "important", "risk", "blocked"]).optional()
 }).strict();
 
@@ -73,6 +83,7 @@ const orderListSchema = z.object({
 
 export type OrderSummary = z.infer<typeof orderSummarySchema>;
 export type OrderLine = z.infer<typeof orderLineSchema>;
+export type OrderInternalNote = z.infer<typeof orderInternalNoteSchema>;
 export type OrderDetail = z.infer<typeof orderDetailSchema>;
 
 function contractError(message: string): never {

@@ -131,6 +131,18 @@ async function loadDetail(preserveDraft = false): Promise<void> {
   }
 }
 
+async function loadCreateWarningDefault(): Promise<void> {
+  if (props.mode !== "create") return;
+  try {
+    const settings = await props.transport.get<{ lowStockDefaultThreshold: number }>("settings", "system");
+    if (form.warningThreshold === 10 && Number.isSafeInteger(settings.lowStockDefaultThreshold) && settings.lowStockDefaultThreshold >= 0) {
+      form.warningThreshold = settings.lowStockDefaultThreshold;
+    }
+  } catch {
+    // A settings read must not prevent an operator from creating a product.
+  }
+}
+
 function keywords(): string[] {
   return form.keywordsText
     .split(/[,，、\s]+/)
@@ -305,6 +317,7 @@ watch(() => props.modelValue, (open) => {
   if (!open) return;
   resetForm();
   if (props.mode === "edit") void loadDetail();
+  else void loadCreateWarningDefault();
 });
 </script>
 

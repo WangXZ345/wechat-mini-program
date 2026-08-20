@@ -145,6 +145,7 @@ function baseState(overrides = {}) {
       version: 3
     }],
     inventory_logs: [],
+    admin_operation_logs: [],
     stock_alert_records: [],
     sync_events: [],
     ...clone(overrides)
@@ -154,6 +155,7 @@ function baseState(overrides = {}) {
 function assertDomainStateUnchanged(actual, expected) {
   assert.deepEqual(actual.products, expected.products);
   assert.deepEqual(actual.inventory_logs, expected.inventory_logs);
+  assert.deepEqual(actual.admin_operation_logs, expected.admin_operation_logs);
   assert.deepEqual(actual.stock_alert_records, expected.stock_alert_records);
   assert.deepEqual(actual.sync_events, expected.sync_events);
 }

@@ -4,6 +4,7 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
 const db = cloud.database();
 const _ = db.command;
+const cleanupCore = require("./cleanupCore").createCleanupCore({ db });
 
 const DEFAULT_PROCESSING_TIMEOUT_SECONDS = 30 * 60;
 const DEFAULT_LIMIT = 100;
@@ -38,24 +39,6 @@ async function queryProcessingByTime(field, cutoff, limit, extra = {}) {
   return res.data || [];
 }
 
-async function markExpired(records, errorCode, errorMessage) {
-  let updated = 0;
-  const seen = new Set();
-  for (const record of records || []) {
-    if (!record || !record._id || seen.has(record._id)) continue;
-    seen.add(record._id);
-    await db.collection("idempotency_records").doc(record._id).update({
-      data: {
-        status: "expired",
-        errorCode,
-        errorMessage,
-        updatedAt: db.serverDate()
-      }
-    }).then(() => { updated += 1; }).catch(() => null);
-  }
-  return updated;
-}
-
 async function markTimeoutProcessing(cutoff, limit) {
   const records = [];
   for (const field of ["lockedAt", "updatedAt", "createdAt"]) {
@@ -63,7 +46,7 @@ async function markTimeoutProcessing(cutoff, limit) {
     if (remaining <= 0) break;
     records.push(...await queryProcessingByTime(field, cutoff, remaining));
   }
-  return markExpired(records, "IDEMPOTENCY_PROCESSING_TIMEOUT", "processing timeout");
+  return cleanupCore.markExpired(records, "IDEMPOTENCY_PROCESSING_TIMEOUT", "processing timeout", cutoff);
 }
 
 async function removeExpired(now, limit) {
@@ -72,13 +55,7 @@ async function removeExpired(now, limit) {
     .limit(limit)
     .get()
     .catch(() => ({ data: [] }));
-  let removed = 0;
-  for (const record of res.data || []) {
-    await db.collection("idempotency_records").doc(record._id).remove()
-      .then(() => { removed += 1; })
-      .catch(() => null);
-  }
-  return removed;
+  return cleanupCore.removeExpired(res.data || [], now);
 }
 
 function cleanText(value, maxLength = 120) {
@@ -133,7 +110,7 @@ async function expireActionProcessing(event = {}) {
     if (remaining <= 0) break;
     records.push(...await queryProcessingByTime(field, cutoff, remaining, query));
   }
-  const updated = await markExpired(records, "MANUAL_EXPIRE_PROCESSING", `manually expired processing ${actionType} record`);
+  const updated = await cleanupCore.markExpired(records, "MANUAL_EXPIRE_PROCESSING", `manually expired processing ${actionType} record`, cutoff);
 
   return {
     ok: true,

@@ -55,11 +55,12 @@ function request(resource = "inventory", action = "set-warning", overrides = {})
   };
 }
 
-test("only the two single warning routes are migrated", () => {
+test("only the two warning routes and their batch counterpart are migrated", () => {
   assert.equal(typeof defaultInventoryWarningService.setWarningStock, "function");
   assert.equal(inventoryWarningRoute({ resource: "inventory", mutationAction: "set-warning" }), true);
   assert.equal(inventoryWarningRoute({ resource: "inventory-alerts", mutationAction: "set-warning" }), true);
-  assert.equal(inventoryWarningRoute({ resource: "inventory", mutationAction: "batch-warning" }), false);
+  assert.equal(inventoryWarningRoute({ resource: "inventory", mutationAction: "batch-warning" }), true);
+  assert.equal(inventoryWarningRoute({ resource: "inventory-alerts", mutationAction: "batch-warning" }), true);
   assert.equal(inventoryWarningRoute({ resource: "inventory-alerts", mutationAction: "adjust" }), false);
   assert.equal(inventoryWarningRoute({ resource: "products", mutationAction: "change-price" }), false);
 });
@@ -185,6 +186,7 @@ test("dispatch uses only the session actor and returns the Web MutationResult co
     });
     assert.equal(command.requireExpectedVersion, true);
     assert.equal(command.idempotencyKey, "warning-key-0001");
+    assert.equal(command.requestId, "request-warning-1");
     assert.deepEqual(result, {
       item: { id: "product-1", stock: 8, warningThreshold: 12, status: "low", version: 5 },
       affected: 1,
@@ -384,19 +386,4 @@ test("MutationResult keeps a stable zero version when the service omits one", as
     }
   });
   assert.equal(result.item.version, 0);
-});
-
-test("all other mutations remain explicitly unmigrated", async () => {
-  for (const [resource, action] of [
-    ["inventory", "batch-warning"]
-  ]) {
-    const principal = action === "adjust" ? { permissions: ["inventory:update"] } : {};
-    await assert.rejects(
-      dispatch(request(resource, action), auth({ principal }), config, {
-        inventoryWarningService: { async setWarningStock() { throw new Error("must not run"); } }
-      }),
-      (err) => err.code === "SERVICE_NOT_MIGRATED" && err.statusCode === 501,
-      `${resource}/${action}`
-    );
-  }
 });

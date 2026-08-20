@@ -40,3 +40,12 @@ describe("order query contract", () => {
     })).toThrowError(expect.objectContaining({ code: "INVALID_ORDER_CONTRACT" }));
   });
 });
+
+describe("order internal note DTO", () => {
+  it("accepts the optional permission-gated safe internal note DTO", () => {
+    expect(parseOrderDetail({ ...summary, items: [], customer: { nameMasked: "张*", phoneMasked: "" }, internalNotes: [{ id: "note-1", content: "跟进备注", authorId: "admin-1", authorRole: "customer_service", authorName: "客服", createdAt: "2026-08-15T00:00:00.000Z" }] }).internalNotes).toHaveLength(1);
+  });
+  it("rejects malformed or overlong internal notes", () => {
+    expect(() => parseOrderDetail({ ...summary, items: [], customer: { nameMasked: "张*", phoneMasked: "" }, internalNotes: [{ id: "note-1", content: "x".repeat(501), authorId: "admin-1", authorRole: "customer_service", authorName: "客服", createdAt: "2026-08-15T00:00:00.000Z" }] })).toThrow();
+  });
+});

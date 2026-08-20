@@ -31,6 +31,7 @@ const productStatusModule = require("./lib/productStatusService");
 const productTagModule = require("./lib/productTagService");
 const productWriteModule = require("./lib/productWriteService");
 const inventoryMutationModule = require("./lib/inventoryMutationService");
+const orderNoteModule = require("./lib/orderNoteService");
 const orderQueryModule = require("./lib/orderQueryService");
 const orderReviewModule = require("./lib/orderReviewService");
 const shipmentQueryModule = require("./lib/shipmentQueryService");
@@ -40,6 +41,12 @@ const paymentMutationModule = require("./lib/paymentMutationService");
 const afterSaleReviewModule = require("./lib/afterSaleReviewService");
 const returnInspectionModule = require("./lib/returnInspectionService");
 const refundMutationModule = require("./lib/refundMutationService");
+const systemSettingsModule = require("./lib/systemSettingsService");
+const { executeBatch } = require("./lib/batchExecutor");
+const { BatchContractError, normalizeBatchRequest } = require("./lib/batchContract");
+const importServiceModule = require("./lib/importService");
+const { RequestValidationError, parseObject } = require("./lib/requestValidation");
+const { normalizeRequestId } = require("./lib/errorModel");
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
@@ -131,6 +138,7 @@ const defaultProductStatusService = createProductStatusService();
 const defaultProductTagService = createProductTagService();
 const defaultProductWriteService = createProductWriteService();
 const defaultInventoryMutationService = createInventoryMutationService();
+const defaultOrderNoteService = orderNoteModule.createOrderNoteService({ db, idempotency: inventoryWarningIdempotency });
 const defaultOrderQueryService = orderQueryModule.createOrderQueryService({ db, command });
 const defaultShipmentQueryService = shipmentQueryModule.createShipmentQueryService({ db, command });
 const defaultAccountQueryService = accountQueryModule.createAccountQueryService({ db, command });
@@ -167,6 +175,10 @@ const defaultRefundMutationService = refundMutationModule.createRefundMutationSe
     return cloud.callFunction({ name: "recalculateCustomerAccount", data: { accountId } });
   }
 });
+const defaultSystemSettingsService = systemSettingsModule.createSystemSettingsService({
+  db,
+  idempotency: inventoryWarningIdempotency
+});
 const defaultOrderReviewService = orderReviewModule.createOrderReviewService({
   db,
   command,
@@ -176,6 +188,28 @@ const defaultOrderReviewService = orderReviewModule.createOrderReviewService({
   syncOwnerPepper: process.env.SYNC_OWNER_PEPPER,
   recalculateAccount({ userId, userOpenid }) {
     return cloud.callFunction({ name: "recalculateCustomerAccount", data: { userId, userOpenid } });
+  }
+});
+const defaultImportService = importServiceModule.createImportService({
+  db,
+  idempotency: inventoryWarningIdempotency,
+  mappingProfiles: {
+    quotes: {
+      required: ["name", "value"],
+      aliases: {
+        sku: ["sku", "sku_code", "skucode", "productindex", "商品编号", "商品索引", "编码"],
+        name: ["name", "product_name", "productname", "商品名称", "产品名称", "品名", "名称"],
+        value: ["price", "saleprice", "wholesaleprice", "报价", "售价", "单价", "批发价", "价格"]
+      }
+    },
+    inventory: {
+      required: ["name", "value"],
+      aliases: {
+        sku: ["sku", "sku_code", "skucode", "productindex", "商品编号", "商品索引", "编码"],
+        name: ["name", "product_name", "productname", "商品名称", "产品名称", "品名", "名称"],
+        value: ["stock", "quantity", "qty", "库存", "库存数量", "数量", "可售库存"]
+      }
+    }
   }
 });
 
@@ -1201,6 +1235,313 @@ function assertOnlyFields(value, allowed, message = "请求包含不允许的字
   if (rejected) throw new ApiError("INVALID_REQUEST_BODY", message, 400);
 }
 
+const IMPORT_PREVIEW_BODY_FIELDS = new Set(["type", "file", "mapping"]);
+const IMPORT_CONFIRM_BODY_FIELDS = new Set([
+  "type", "file", "mapping", "previewRecordId", "expectedFileHash", "expectedParseHash"
+]);
+const IMPORT_FILE_BODY_FIELDS = new Set(["name", "mimeType", "size", "contentBase64"]);
+
+function importRoute(route = {}) {
+  return route.resource === "imports" && ["preview", "confirm", "resume"].includes(route.mutationAction);
+}
+
+function normalizeImportFileBody(file) {
+  assertPlainObject(file, "导入文件无效");
+  assertOnlyFields(file, IMPORT_FILE_BODY_FIELDS, "导入文件包含不允许的字段");
+  if (Array.from(IMPORT_FILE_BODY_FIELDS).some((field) => !Object.hasOwn(file, field))) {
+    throw new ApiError("INVALID_REQUEST_BODY", "导入文件字段不完整", 400);
+  }
+  if (typeof file.name !== "string" || typeof file.mimeType !== "string" || typeof file.contentBase64 !== "string"
+    || typeof file.size !== "number" || !Number.isSafeInteger(file.size)) {
+    throw new ApiError("INVALID_REQUEST_BODY", "导入文件格式无效", 400);
+  }
+  return { name: file.name, mimeType: file.mimeType, size: file.size, contentBase64: file.contentBase64 };
+}
+
+function normalizeImportMapping(mapping) {
+  assertPlainObject(mapping, "表头映射无效");
+  const keys = Object.keys(mapping);
+  if (keys.length > 20 || keys.some((key) => !/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key))) {
+    throw new ApiError("IMPORT_MAPPING_INVALID", "表头映射无效", 400);
+  }
+  if (keys.some((key) => typeof mapping[key] !== "string" || !mapping[key].trim() || mapping[key].length > 160)) {
+    throw new ApiError("IMPORT_MAPPING_INVALID", "表头映射无效", 400);
+  }
+  return Object.fromEntries(keys.map((key) => [key, mapping[key]]));
+}
+
+function normalizeImportMutation(request = {}) {
+  const action = request.route && request.route.mutationAction;
+  const body = request.body;
+  assertPlainObject(body);
+  assertOnlyFields(body, action === "preview" ? IMPORT_PREVIEW_BODY_FIELDS : IMPORT_CONFIRM_BODY_FIELDS);
+  const required = action === "preview" ? IMPORT_PREVIEW_BODY_FIELDS : IMPORT_CONFIRM_BODY_FIELDS;
+  if (Array.from(required).some((field) => !Object.hasOwn(body, field))) {
+    throw new ApiError("INVALID_REQUEST_BODY", "导入请求字段不完整", 400);
+  }
+  const type = cleanString(body.type, 40).toLowerCase();
+  if (!['quotes', 'inventory'].includes(type) || body.type !== type) throw new ApiError("IMPORT_TYPE_INVALID", "导入类型无效", 400);
+  let idempotencyKey;
+  try {
+    idempotencyKey = inventoryWarningIdempotency.assertIdempotencyKey(request.headers && request.headers["idempotency-key"]);
+  } catch (error) {
+    throw new ApiError(error.code || "IDEMPOTENCY_KEY_INVALID", error.message || "操作凭证无效", 400);
+  }
+  const input = {
+    type,
+    file: normalizeImportFileBody(body.file),
+    mapping: normalizeImportMapping(body.mapping)
+  };
+  if (action !== "preview") {
+    if (typeof body.previewRecordId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.previewRecordId)) {
+      throw new ApiError("IMPORT_PREVIEW_REQUIRED", "服务端预览批次无效", 400);
+    }
+    if (typeof body.expectedFileHash !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedFileHash)
+      || typeof body.expectedParseHash !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedParseHash)) {
+      throw new ApiError("IMPORT_PREVIEW_MISMATCH", "预览摘要无效", 400);
+    }
+    input.previewRecordId = body.previewRecordId;
+    input.expectedFileHash = body.expectedFileHash;
+    input.expectedParseHash = body.expectedParseHash;
+  }
+  return { action, idempotencyKey, input };
+}
+
+function importApiError(error) {
+  if (error instanceof ApiError) return error;
+  const code = cleanString(error && error.code, 80) || "IMPORT_FAILED";
+  const statusCode = Number.isSafeInteger(error && error.statusCode) ? error.statusCode : 500;
+  const safeMessages = {
+    IMPORT_FILE_NAME_INVALID: "文件名无效",
+    IMPORT_FILE_TYPE_UNSUPPORTED: "仅支持 xlsx、csv 或 txt 文件",
+    IMPORT_FILE_MIME_INVALID: "文件 MIME 类型与格式不匹配",
+    IMPORT_FILE_SIGNATURE_MISMATCH: "文件内容与扩展名不一致",
+    IMPORT_FILE_TOO_LARGE: "文件不能超过 10 MB",
+    IMPORT_FILE_SIZE_INVALID: "文件大小无效",
+    IMPORT_FILE_SIZE_MISMATCH: "文件大小与内容不一致",
+    IMPORT_FILE_CONTENT_INVALID: "文件内容编码无效",
+    IMPORT_FILE_ENCODING_INVALID: "文本文件必须使用 UTF-8 编码",
+    IMPORT_FILE_PARSE_FAILED: "文件无法解析",
+    IMPORT_FILE_EMPTY: "文件没有可导入的数据",
+    IMPORT_HEADER_INVALID: "文件缺少可识别的表头",
+    IMPORT_HEADER_DUPLICATE: "文件包含重复表头",
+    IMPORT_HEADER_LIMIT_EXCEEDED: "文件表头列数超限",
+    IMPORT_ROW_LIMIT_EXCEEDED: "文件行数超限",
+    IMPORT_COLUMN_COUNT_EXCEEDED: "数据列数不能超过表头列数",
+    IMPORT_DANGEROUS_CELL: "文件包含公式、脚本或日志注入内容",
+    IMPORT_XLSX_ENTRY_LIMIT_EXCEEDED: "XLSX 文件条目过多",
+    IMPORT_XLSX_EXPANDED_SIZE_EXCEEDED: "XLSX 解压后内容过大",
+    IMPORT_XLSX_UNSAFE_PACKAGE: "XLSX 包含宏或不需要的嵌入对象",
+    IMPORT_XLSX_EXTERNAL_RELATIONSHIP: "XLSX 包含外部关系",
+    IMPORT_MAPPING_INVALID: "表头映射无效",
+    IMPORT_MAPPING_HEADER_MISSING: "所选表头不存在",
+    IMPORT_MAPPING_DUPLICATE: "同一表头不能重复映射",
+    IMPORT_MAPPING_REQUIRED: "请完成必填表头映射",
+    IMPORT_PREVIEW_REQUIRED: "缺少服务端预览批次",
+    IMPORT_PREVIEW_NOT_FOUND: "服务端预览批次不存在",
+    IMPORT_PREVIEW_MISMATCH: "文件或表头映射已变化，请重新预览",
+    IMPORT_PREVIEW_HAS_ERRORS: "预览仍包含错误行",
+    IMPORT_RESUME_NOT_ALLOWED: "当前导入批次无需恢复",
+    IMPORT_CONFIRM_NOT_ALLOWED: "当前导入批次状态不允许确认",
+    IMPORT_RECORD_ID_INVALID: "导入批次 ID 无效",
+    IMPORT_ITEMS_QUERY_INVALID: "导入明细分页参数无效",
+    IMPORT_ITEMS_CURSOR_REQUIRED: "请从导入明细第一页开始按顺序翻页",
+    IMPORT_ITEMS_CURSOR_INVALID: "导入明细分页游标无效",
+    IMPORT_ITEMS_CURSOR_CONFIG_REQUIRED: "导入明细分页安全配置不完整",
+    IMPORT_ITEMS_UNAVAILABLE: "导入明细暂不可用",
+    IMPORT_STRATEGY_REQUIRED: "该导入类型尚未接入业务校验与写入服务",
+    IDEMPOTENCY_KEY_CONFLICT: "请求已被用于其他导入文件，请重新操作",
+    IDEMPOTENCY_PROCESSING: "导入正在处理中，请稍候",
+    IMPORT_FAILED: "导入处理失败"
+  };
+  return new ApiError(code, safeMessages[code] || "导入处理失败", statusCode);
+}
+
+function importMutationActor(auth = {}) {
+  return inventoryWarningActor(auth);
+}
+
+const IMPORT_PREVIEW_RESULT_FIELDS = new Set([
+  "importRecordId", "status", "fileHash", "parseHash", "fileType", "headers", "mapping", "rows", "counts", "previewTruncated", "duplicate"
+]);
+const IMPORT_PREVIEW_COUNT_FIELDS = new Set(["total", "valid", "failed", "ready", "validation", "truncated"]);
+const IMPORT_PREVIEW_ROW_FIELDS = new Set(["row", "values", "status", "code", "message", "sku", "name", "before", "after", "version"]);
+
+function importResultRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function invalidImportServiceResponse() {
+  throw new ApiError("INVALID_SERVICE_RESPONSE", "导入服务结果无效", 502);
+}
+
+function projectImportPreviewRows(value) {
+  if (!Array.isArray(value) || value.length > 200) invalidImportServiceResponse();
+  return value.map((row) => {
+    if (!importResultRecord(row) || Object.keys(row).some((field) => !IMPORT_PREVIEW_ROW_FIELDS.has(field))
+      || !Number.isSafeInteger(row.row) || row.row < 1
+      || !importResultRecord(row.values) || Object.keys(row.values).length > 20
+      || Object.values(row.values).some((cell) => !(typeof cell === "string" && cell.length <= 8192
+        || typeof cell === "boolean" || typeof cell === "number" && Number.isFinite(cell)))
+      || !["ready", "validation"].includes(row.status)
+      || typeof row.code !== "string" || !row.code || row.code.length > 100
+      || typeof row.message !== "string" || row.message.length > 200
+      || row.sku !== undefined && (typeof row.sku !== "string" || row.sku.length > 160)
+      || row.name !== undefined && (typeof row.name !== "string" || row.name.length > 160)
+      || row.before !== undefined && !Number.isSafeInteger(row.before)
+      || row.after !== undefined && !Number.isSafeInteger(row.after)
+      || row.version !== undefined && (!Number.isSafeInteger(row.version) || row.version < 0)) {
+      invalidImportServiceResponse();
+    }
+    return {
+      row: row.row,
+      values: { ...row.values },
+      status: row.status,
+      code: row.code,
+      message: row.message,
+      ...(row.sku !== undefined ? { sku: row.sku } : {}),
+      ...(row.name !== undefined ? { name: row.name } : {}),
+      ...(row.before !== undefined ? { before: row.before } : {}),
+      ...(row.after !== undefined ? { after: row.after } : {}),
+      ...(row.version !== undefined ? { version: row.version } : {})
+    };
+  });
+}
+
+function importReadyPreviewResult(result, requestId) {
+  if (!importResultRecord(result) || Object.keys(result).some((field) => !IMPORT_PREVIEW_RESULT_FIELDS.has(field))
+    || typeof result.importRecordId !== "string" || !result.importRecordId
+    || !["previewed", "validation_failed"].includes(result.status)
+    || typeof result.fileHash !== "string" || !/^[a-f0-9]{64}$/.test(result.fileHash)
+    || typeof result.parseHash !== "string" || !/^[a-f0-9]{64}$/.test(result.parseHash)
+    || !["xlsx", "csv", "txt"].includes(result.fileType)
+    || !Array.isArray(result.headers) || !result.headers.length || result.headers.length > 100
+    || result.headers.some((header) => typeof header !== "string" || !header || header.length > 160)
+    || new Set(result.headers).size !== result.headers.length
+    || !importResultRecord(result.mapping) || Object.keys(result.mapping).length > 20
+    || Object.keys(result.mapping).some((field) => !/^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(field))
+    || Object.values(result.mapping).some((header) => typeof header !== "string" || !result.headers.includes(header))
+    || result.duplicate !== undefined && typeof result.duplicate !== "boolean") {
+    invalidImportServiceResponse();
+  }
+  const rows = projectImportPreviewRows(result.rows);
+  const counts = result.counts;
+  if (!importResultRecord(counts) || Object.keys(counts).some((field) => !IMPORT_PREVIEW_COUNT_FIELDS.has(field))
+    || ["total", "valid", "failed", "ready", "validation"].some((field) => !Number.isSafeInteger(counts[field]) || counts[field] < 0)
+    || typeof counts.truncated !== "boolean"
+    || counts.total !== counts.valid + counts.failed || counts.ready !== counts.valid || counts.validation !== counts.failed
+    || result.previewTruncated !== counts.truncated
+    || (counts.truncated ? counts.total <= rows.length : counts.total !== rows.length)
+    || !counts.truncated && (rows.filter((row) => row.status === "ready").length !== counts.ready
+      || rows.filter((row) => row.status === "validation").length !== counts.validation)
+    || (counts.failed ? result.status !== "validation_failed" : result.status !== "previewed")) {
+    invalidImportServiceResponse();
+  }
+  const item = {
+    importRecordId: result.importRecordId,
+    status: result.status,
+    fileHash: result.fileHash,
+    parseHash: result.parseHash,
+    fileType: result.fileType,
+    headers: result.headers.slice(),
+    mapping: { ...result.mapping },
+    rows,
+    counts: { ...counts },
+    previewTruncated: result.previewTruncated,
+    duplicate: result.duplicate === true
+  };
+  return {
+    item,
+    affected: 0,
+    changedCount: 0,
+    failedCount: counts.failed,
+    message: "文件已完成服务端预览",
+    requestId
+  };
+}
+
+function importMutationResult(result, requestId, action) {
+  if (result && result.status === "mapping_required") {
+    const context = result.parseContext;
+    const mappingErrors = result.mappingErrors;
+    if (!Array.isArray(result.headers) || result.headers.some((header) => typeof header !== "string")
+      || !result.suggestedMapping || typeof result.suggestedMapping !== "object" || Array.isArray(result.suggestedMapping)
+      || !Array.isArray(result.requiredFields) || result.requiredFields.some((field) => typeof field !== "string")
+      || !Array.isArray(mappingErrors) || mappingErrors.some((item) => !item || typeof item !== "object"
+        || typeof item.field !== "string" || item.code !== "IMPORT_MAPPING_REQUIRED" || typeof item.message !== "string")
+      || typeof result.fileHash !== "string" || !/^[a-f0-9]{64}$/.test(result.fileHash)
+      || !context || typeof context !== "object" || Array.isArray(context)
+      || typeof context.hash !== "string" || !/^[a-f0-9]{64}$/.test(context.hash)
+      || typeof context.fileType !== "string" || typeof context.sheetName !== "string"
+      || !Number.isSafeInteger(context.headerRow) || context.headerRow < 1
+      || !Number.isSafeInteger(context.rowCount) || context.rowCount < 1) {
+      throw new ApiError("INVALID_SERVICE_RESPONSE", "导入服务结果无效", 502);
+    }
+    return {
+      item: {
+        status: "mapping_required",
+        headers: result.headers.slice(),
+        suggestedMapping: { ...result.suggestedMapping },
+        requiredFields: result.requiredFields.slice(),
+        mappingErrors: mappingErrors.map((item) => ({ field: item.field, code: item.code, message: item.message })),
+        fileHash: result.fileHash,
+        parseContext: {
+          hash: context.hash,
+          fileType: context.fileType,
+          sheetName: context.sheetName,
+          headerRow: context.headerRow,
+          rowCount: context.rowCount
+        },
+        duplicate: false
+      },
+      affected: 0,
+      changedCount: 0,
+      failedCount: mappingErrors.length,
+      message: "请完成表头映射后重新校验",
+      requestId
+    };
+  }
+  if (action === "preview") return importReadyPreviewResult(result, requestId);
+  if (!result || typeof result !== "object" || typeof result.importRecordId !== "string" || !result.importRecordId
+    || typeof result.status !== "string" || !result.counts || typeof result.counts !== "object" || Array.isArray(result.counts)) {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "导入服务结果无效", 502);
+  }
+  const item = {
+    importRecordId: result.importRecordId,
+    status: cleanString(result.status, 40),
+    counts: result.counts,
+    ...(Array.isArray(result.errorSummary) ? { errorSummary: result.errorSummary } : {}),
+    ...(result.fileHash ? { fileHash: cleanString(result.fileHash, 64) } : {}),
+    ...(result.parseHash ? { parseHash: cleanString(result.parseHash, 64) } : {}),
+    ...(result.fileType ? { fileType: cleanString(result.fileType, 20) } : {}),
+    ...(Array.isArray(result.headers) ? { headers: result.headers } : {}),
+    ...(result.mapping && typeof result.mapping === "object" ? { mapping: result.mapping } : {}),
+    ...(Array.isArray(result.rows) ? { rows: result.rows } : {}),
+    ...(Array.isArray(result.items) ? { items: result.items } : {}),
+    ...(action === "preview" ? { previewTruncated: result.previewTruncated === true } : {}),
+    ...(result.itemsTruncated === true ? { itemsTruncated: true } : {}),
+    duplicate: result.duplicate === true
+  };
+  const success = Number.isSafeInteger(result.counts.success) ? result.counts.success : 0;
+  const failed = Number.isSafeInteger(result.counts.failed)
+    ? result.counts.failed
+    : Number.isSafeInteger(result.counts.validation) ? result.counts.validation : 0;
+  return {
+    item,
+    affected: action === "preview" ? 0 : success,
+    changedCount: action === "preview" ? 0 : success,
+    failedCount: failed,
+    message: action === "preview" ? "文件已完成服务端预览"
+      : result.duplicate === true ? "相同文件已处理，已返回原批次结果"
+        : result.status === "success" ? "导入批次处理完成"
+          : result.status === "partial" ? "导入批次部分完成，可恢复失败行"
+            : "导入批次处理失败",
+    requestId
+  };
+}
+
 function normalizeProductMetadataBody(value) {
   assertPlainObject(value, "商品资料无效");
   assertOnlyFields(value, PRODUCT_METADATA_FIELDS, "商品资料包含不允许的字段");
@@ -1332,7 +1673,7 @@ function productWriteMutationResult(result = {}, requestId = "", principal = {})
 
 function inventoryWarningRoute(route = {}) {
   return ["inventory", "inventory-alerts"].includes(route.resource)
-    && route.mutationAction === "set-warning";
+    && ["set-warning", "batch-warning"].includes(route.mutationAction);
 }
 
 function inventoryAdjustmentRoute(route = {}) {
@@ -1487,6 +1828,131 @@ function normalizeInventoryWarningMutation(request = {}) {
   };
 }
 
+function inventoryWarningBatchIdempotencyKey(outerKey, itemId) {
+  return crypto.createHash("sha256").update(`${outerKey}\n${itemId}`, "utf8").digest("hex");
+}
+
+function normalizeInventoryWarningBatchPayload(item = {}) {
+  if (!item.payload || typeof item.payload !== "object" || Array.isArray(item.payload)) {
+    const error = new Error("批量项预警值无效");
+    error.code = "INVALID_ARGUMENT";
+    throw error;
+  }
+  const allowedFields = new Set(["warningThreshold", "expectedWarningThreshold", "reason"]);
+  if (item.id !== item.key || Object.keys(item.payload).some((field) => !allowedFields.has(field))) {
+    const error = new Error("批量项预警值无效");
+    error.code = "INVALID_ARGUMENT";
+    throw error;
+  }
+  const { warningThreshold, expectedWarningThreshold, reason } = item.payload;
+  if (typeof warningThreshold !== "number" || !Number.isSafeInteger(warningThreshold)
+    || warningThreshold < 0 || warningThreshold > 99999
+    || typeof expectedWarningThreshold !== "number" || !Number.isSafeInteger(expectedWarningThreshold)
+    || expectedWarningThreshold < 0 || expectedWarningThreshold > 99999
+    || reason !== undefined && (typeof reason !== "string" || reason.trim().length > 120)) {
+    const error = new Error("批量项预警值无效");
+    error.code = "INVALID_ARGUMENT";
+    throw error;
+  }
+  return {
+    productId: item.id,
+    warningThreshold,
+    expectedWarningThreshold,
+    expectedVersion: item.version,
+    reason: reason === undefined ? "" : reason.trim()
+  };
+}
+
+function inventoryWarningBatchFailure(error) {
+  const code = cleanString(error && error.code, 80);
+  if (code === "IDEMPOTENCY_KEY_CONFLICT") {
+    return { status: "conflict", code: "BATCH_ITEM_FINGERPRINT_CONFLICT", retryable: false };
+  }
+  if (["DATA_VERSION_CONFLICT", "DATA_VERSION_INVALID", "DATA_WARNING_THRESHOLD_INVALID", "DATA_STOCK_INVALID"].includes(code)) {
+    return { status: "conflict", code: "DATA_VERSION_CONFLICT", retryable: false };
+  }
+  if (code === "PRODUCT_NOT_FOUND") return { status: "not_allowed", code: "NOT_ALLOWED", retryable: false };
+  if (code === "FORBIDDEN" || code === "INVALID_ACTOR") return { status: "permission", code: "FORBIDDEN", retryable: false };
+  if (code === "PRODUCT_ID_REQUIRED" || code === "WARNING_THRESHOLD_INVALID" || code === "EXPECTED_VERSION_REQUIRED"
+    || code === "EXPECTED_VERSION_INVALID" || code === "EXPECTED_WARNING_THRESHOLD_REQUIRED"
+    || code === "EXPECTED_WARNING_THRESHOLD_INVALID" || code === "REASON_INVALID" || code === "INVALID_ARGUMENT") {
+    return { status: "validation", code: "INVALID_ARGUMENT", retryable: false };
+  }
+  return { status: "business_error", code: "SERVICE_UNAVAILABLE", retryable: false };
+}
+
+function assertInventoryWarningBatchServiceResult(result, item) {
+  if (!result || typeof result !== "object" || Array.isArray(result)
+    || result.productId !== item.id
+    || !Number.isSafeInteger(result.stock) || result.stock < 0
+    || !Number.isSafeInteger(result.warningStock) || result.warningStock < 0 || result.warningStock > 99999
+    || !["normal", "warning", "out_of_stock"].includes(result.stockStatus)
+    || !Number.isSafeInteger(result.version) || result.version < 0
+    || typeof result.changed !== "boolean") {
+    const error = new Error("库存预警结果无效");
+    error.code = "INVALID_SERVICE_RESPONSE";
+    throw error;
+  }
+}
+
+function normalizeInventoryWarningBatchMutation(request = {}) {
+  let idempotencyKey;
+  try {
+    idempotencyKey = inventoryWarningIdempotency.assertIdempotencyKey(request.headers && request.headers["idempotency-key"]);
+  } catch (error) {
+    throw new ApiError(error.code || "IDEMPOTENCY_KEY_INVALID", error.message || "操作凭证无效", 400);
+  }
+  return { idempotencyKey, batch: normalizeBatchRequest(request.body) };
+}
+
+function inventoryWarningBatchIdempotencyError(outcome = {}) {
+  const code = cleanString(outcome.code, 80);
+  if (code === "IDEMPOTENCY_KEY_CONFLICT") {
+    return new ApiError("IDEMPOTENCY_KEY_CONFLICT", "请求已被用于其他操作，请刷新后重试", 409);
+  }
+  if (code === "IDEMPOTENCY_PROCESSING") {
+    return new ApiError("IDEMPOTENCY_PROCESSING", "操作正在处理中，请稍候", 409);
+  }
+  return new ApiError("INVENTORY_SERVICE_UNAVAILABLE", "库存预警服务暂时不可用", 502);
+}
+
+function inventoryWarningBatchResponse(result, batch) {
+  if (!result || typeof result !== "object" || Array.isArray(result)
+    || result.requestId !== batch.requestId || result.batchId !== batch.batchId
+    || !result.counts || typeof result.counts !== "object" || Array.isArray(result.counts)
+    || !Array.isArray(result.items) || result.items.length !== batch.items.length
+    || !["success", "partial", "failed"].includes(result.overallStatus)) {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "库存预警批量结果无效", 502);
+  }
+  const items = result.items.map((entry, index) => {
+    const source = batch.items[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)
+      || entry.id !== source.id || entry.version !== source.version
+      || !["success", "skipped", "validation", "not_allowed", "conflict", "permission", "business_error"].includes(entry.status)
+      || typeof entry.code !== "string" || typeof entry.message !== "string"
+      || typeof entry.retryable !== "boolean" || typeof entry.reused !== "boolean") {
+      throw new ApiError("INVALID_SERVICE_RESPONSE", "库存预警批量结果无效", 502);
+    }
+    return {
+      id: source.id,
+      key: source.key,
+      version: source.version,
+      status: entry.status,
+      code: entry.code,
+      message: entry.message,
+      retryable: entry.retryable,
+      reused: entry.reused
+    };
+  });
+  return {
+    requestId: batch.requestId,
+    batchId: batch.batchId,
+    overallStatus: result.overallStatus,
+    counts: result.counts,
+    items
+  };
+}
+
 function inventoryWarningActor(auth = {}) {
   const principal = auth.principal || {};
   const rawAdmin = auth.rawAdmin || {};
@@ -1498,6 +1964,71 @@ function inventoryWarningActor(auth = {}) {
     status: principal.status,
     isActive: principal.status === "active",
     sourceClient: "admin_web"
+  };
+}
+
+function settingsMutationRoute(route = {}) {
+  return route.resource === "settings" && route.mutationAction === "update";
+}
+
+function normalizeSettingsMutation(request = {}) {
+  const body = request.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError("INVALID_REQUEST_BODY", "系统设置请求无效", 400);
+  }
+  const allowed = new Set([...systemSettingsModule.FIELDS, "expectedVersion"]);
+  if (Object.keys(body).some((key) => !allowed.has(key))) {
+    throw new ApiError("INVALID_REQUEST_BODY", "请求包含不允许的字段", 400);
+  }
+  if (!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) {
+    throw new ApiError(body.expectedVersion === undefined ? "EXPECTED_VERSION_REQUIRED" : "EXPECTED_VERSION_INVALID", "系统设置版本无效", 400);
+  }
+  const input = {};
+  for (const field of systemSettingsModule.FIELDS) input[field] = body[field];
+  try {
+    return {
+      idempotencyKey: inventoryWarningIdempotency.assertIdempotencyKey(request.headers && request.headers["idempotency-key"]),
+      expectedVersion: body.expectedVersion,
+      input: systemSettingsModule.normalizeSettingsInput(input, { strict: true })
+    };
+  } catch (error) {
+    throw settingsMutationApiError(error);
+  }
+}
+
+function settingsMutationApiError(error) {
+  if (error instanceof ApiError) return error;
+  const code = cleanString(error && error.code, 80);
+  const allowed = new Set([
+    "FORBIDDEN", "SETTINGS_INPUT_INVALID", "WECHAT_PAY_NOT_CONFIGURED",
+    "EXPECTED_VERSION_REQUIRED", "EXPECTED_VERSION_INVALID", "DATA_VERSION_CONFLICT",
+    "IDEMPOTENCY_KEY_REQUIRED", "IDEMPOTENCY_KEY_INVALID", "IDEMPOTENCY_KEY_CONFLICT", "IDEMPOTENCY_PROCESSING"
+  ]);
+  if (!allowed.has(code)) return new ApiError("SETTINGS_SAVE_FAILED", "系统设置保存失败，请稍后重试", 503);
+  const statusCode = Number.isSafeInteger(error && error.statusCode) ? error.statusCode : (
+    code === "FORBIDDEN" ? 403 : ["WECHAT_PAY_NOT_CONFIGURED", "DATA_VERSION_CONFLICT", "IDEMPOTENCY_KEY_CONFLICT", "IDEMPOTENCY_PROCESSING"].includes(code) ? 409 : 400
+  );
+  const details = code === "DATA_VERSION_CONFLICT" && Number.isSafeInteger(error && error.details && error.details.currentVersion)
+    ? { currentVersion: error.details.currentVersion, refreshRequired: true }
+    : undefined;
+  return new ApiError(code, cleanString(error && error.message, 240) || "系统设置保存失败", statusCode, details);
+}
+
+function settingsMutationResult(result = {}, requestId = "") {
+  if (!result || typeof result !== "object" || Array.isArray(result)
+    || result.id !== "system" || !Number.isSafeInteger(result.version) || result.version < 0
+    || typeof result.changed !== "boolean") {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "系统设置保存结果无效", 502);
+  }
+  const item = {
+    ...systemSettingsModule.publicRecord(result),
+    updatedAt: dateValue(result.updatedAt)
+  };
+  return {
+    item,
+    affected: result.changed ? 1 : 0,
+    message: result.changed ? "系统设置已保存" : "系统设置未发生变化",
+    requestId
   };
 }
 
@@ -1686,6 +2217,63 @@ function productStatusRoute(route = {}) {
 
 function orderReviewRoute(route = {}) {
   return route.resource === "orders" && (route.mutationAction === "review" || route.mutationAction === "reject");
+}
+
+function orderNoteRoute(route = {}) {
+  return route.resource === "orders" && route.mutationAction === "remark";
+}
+
+function normalizeOrderNoteMutation(request = {}) {
+  const body = request.body;
+  assertPlainObject(body);
+  assertOnlyFields(body, new Set(["id", "content", "expectedVersion"]));
+  const id = cleanString(body.id, 128);
+  if (!id) throw new ApiError("ORDER_ID_REQUIRED", "缺少订单 ID", 400);
+  if (typeof body.content !== "string") throw new ApiError("NOTE_CONTENT_INVALID", "备注内容格式无效", 400);
+  const content = body.content.trim();
+  if (!content) throw new ApiError("NOTE_CONTENT_REQUIRED", "备注内容不能为空", 400);
+  if (content.length > 500) throw new ApiError("NOTE_CONTENT_TOO_LONG", "备注内容不能超过 500 个字符", 400);
+  if (typeof body.expectedVersion !== "number" || !Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 0) {
+    throw new ApiError("EXPECTED_VERSION_INVALID", "订单版本无效，请刷新后重试", 400);
+  }
+  return {
+    idempotencyKey: request.headers && (request.headers["idempotency-key"] || request.headers["Idempotency-Key"]),
+    input: { orderId: id, content, expectedVersion: body.expectedVersion }
+  };
+}
+
+function orderNoteActor(auth = {}) {
+  const principal = auth.principal || {};
+  const rawAdmin = auth.rawAdmin || {};
+  return {
+    ...inventoryWarningActor(auth),
+    name: cleanString(
+      principal.displayName || principal.name || principal.nickname
+      || rawAdmin.displayName || rawAdmin.name || rawAdmin.nickname,
+      80
+    )
+  };
+}
+
+function orderNoteApiError(error) {
+  if (error instanceof ApiError) return error;
+  const code = cleanString(error && error.code, 80) || "ORDER_NOTE_FAILED";
+  const allowed = new Set(["FORBIDDEN", "ORDER_NOT_FOUND", "ORDER_ID_REQUIRED", "NOTE_CONTENT_INVALID", "NOTE_CONTENT_REQUIRED", "NOTE_CONTENT_TOO_LONG", "EXPECTED_VERSION_INVALID", "DATA_VERSION_INVALID", "DATA_VERSION_CONFLICT", "IDEMPOTENCY_KEY_REQUIRED", "IDEMPOTENCY_KEY_INVALID", "IDEMPOTENCY_KEY_CONFLICT", "IDEMPOTENCY_PROCESSING"]);
+  if (!allowed.has(code)) return new ApiError("ORDER_NOTE_FAILED", "订单内部备注保存失败", 502);
+  const statusCode = ["FORBIDDEN"].includes(code) ? 403 : ["ORDER_NOT_FOUND"].includes(code) ? 404 : ["DATA_VERSION_INVALID", "DATA_VERSION_CONFLICT", "IDEMPOTENCY_KEY_CONFLICT", "IDEMPOTENCY_PROCESSING"].includes(code) ? 409 : 400;
+  const messages = { DATA_VERSION_CONFLICT: "订单已变化，请刷新后重新确认", DATA_VERSION_INVALID: "订单版本数据异常，请刷新后重试" };
+  return new ApiError(code, messages[code] || cleanString(error.message, 240) || "订单内部备注保存失败", statusCode, code === "DATA_VERSION_CONFLICT" ? error.details : undefined);
+}
+
+function orderNoteMutationResult(result = {}, requestId = "") {
+  const note = result && result.note;
+  const id = typeof note && note && typeof note.id === "string" ? note.id.trim() : "";
+  if (!id || typeof note.content !== "string" || typeof note.authorId !== "string" || typeof note.authorRole !== "string" || typeof note.authorName !== "string" || !Number.isSafeInteger(result.version) || result.version < 0 || typeof result.changed !== "boolean") {
+    throw new ApiError("INVALID_SERVICE_RESPONSE", "订单内部备注结果无效", 502);
+  }
+  const updatedAt = dateValue(result.updatedAt || note.createdAt);
+  if (!updatedAt) throw new ApiError("INVALID_SERVICE_RESPONSE", "订单内部备注结果无效", 502);
+  return { affected: result.changed ? 1 : 0, item: { id: "", note: { id, content: note.content, authorId: note.authorId, authorRole: note.authorRole, authorName: note.authorName, createdAt: dateValue(note.createdAt) || updatedAt }, version: result.version, updatedAt }, message: result.changed ? "订单内部备注已保存" : "订单内部备注未重复写入", requestId };
 }
 
 function normalizeOrderReviewMutation(request = {}) {
@@ -2214,18 +2802,20 @@ function isHttpEvent(event = {}) {
 
 function parseBody(event, http) {
   if (!http) {
-    if (event.data && typeof event.data === "object") return event.data;
-    if (event.payload && typeof event.payload === "object") return event.payload;
-    return event;
+    if (Object.hasOwn(event, "data")) return parseObject(event.data, { label: "请求内容" });
+    if (Object.hasOwn(event, "payload")) return parseObject(event.payload, { label: "请求内容" });
+    return parseObject(event, { label: "请求内容" });
   }
-  if (!event.body) return {};
-  if (typeof event.body === "object") return event.body;
+  if (event.body === undefined || event.body === "") return {};
+  if (typeof event.body === "object") return parseObject(event.body, { label: "请求内容" });
+  let parsed;
   try {
     const text = event.isBase64Encoded ? Buffer.from(event.body, "base64").toString("utf8") : event.body;
-    return JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch (err) {
     throw new ApiError("INVALID_JSON", "请求内容不是有效 JSON", 400);
   }
+  return parseObject(parsed, { label: "请求内容" });
 }
 
 function actionRoute(body = {}, event = {}) {
@@ -2265,7 +2855,7 @@ function buildRequest(event = {}) {
   const query = http
     ? { ...(event.queryStringParameters || {}) }
     : { ...(body.query && typeof body.query === "object" ? body.query : {}), ...(event.query && typeof event.query === "object" ? event.query : {}) };
-  const requestId = cleanString(headers["x-request-id"], 100) || crypto.randomUUID();
+  const requestId = normalizeRequestId(headers["x-request-id"], () => crypto.randomUUID());
   return {
     http,
     headers,
@@ -2324,6 +2914,8 @@ function formatResponse(request, config, payload, statusCode = 200) {
 
 function normalizeMainError(err) {
   if (err instanceof ApiError) return err;
+  if (err instanceof RequestValidationError) return new ApiError(err.code, err.message, err.statusCode, err.details);
+  if (err instanceof BatchContractError) return new ApiError(err.code, err.message, err.statusCode);
   if (err && err.statusCode === 503 && ["SECURITY_CONFIG_REQUIRED", "ACTION_SECURITY_CONFIG_REQUIRED"].includes(err.code)) {
     return new ApiError("SECURITY_CONFIG_REQUIRED", "管理员接口安全配置不完整", 503);
   }
@@ -2721,6 +3313,23 @@ async function dispatch(request, auth, config, dependencies = {}) {
       dependencies.paymentQueryService || defaultPaymentQueryService
     );
   }
+  if (route.action === "importItems") {
+    assertPermission(auth.principal, "inventory:import");
+    const service = dependencies.importService || defaultImportService;
+    return service.listItems({
+      actor: importMutationActor(auth),
+      importRecordId: route.id,
+      query: request.query || {}
+    });
+  }
+  if (route.action === "get" && route.resource === "imports") {
+    assertPermission(auth.principal, "inventory:import");
+    const service = dependencies.importService || defaultImportService;
+    return service.getDetail({
+      actor: importMutationActor(auth),
+      importRecordId: route.id
+    });
+  }
   if (route.action === "list") return listResource(route.resource, request.query, auth.principal);
   if (route.action === "get") return getResource(route.resource, route.id, auth.principal);
   if (route.action === "sync") return readSyncEvents(request.query, auth.principal);
@@ -2728,6 +3337,54 @@ async function dispatch(request, auth, config, dependencies = {}) {
     const permission = getMutationPermission(route.resource, route.mutationAction);
     assertPermission(auth.principal, permission);
     assertSessionCsrf({ session: auth.session, request, config });
+    if (settingsMutationRoute(route)) {
+      const normalized = normalizeSettingsMutation(request);
+      const service = dependencies.systemSettingsService || defaultSystemSettingsService;
+      let result;
+      try {
+        result = await service.saveSettings({
+          actor: inventoryWarningActor(auth),
+          input: normalized.input,
+          expectedVersion: normalized.expectedVersion,
+          idempotencyKey: normalized.idempotencyKey,
+          requestId: request.requestId,
+          strict: true
+        });
+      } catch (error) {
+        throw settingsMutationApiError(error);
+      }
+      return settingsMutationResult(result && result.ok === true && result.data ? result.data : result, request.requestId);
+    }
+    if (orderNoteRoute(route)) {
+      const normalized = normalizeOrderNoteMutation(request);
+      const service = dependencies.orderNoteService || defaultOrderNoteService;
+      let result;
+      try {
+        result = await service.appendNote({ actor: orderNoteActor(auth), input: normalized.input, idempotencyKey: normalized.idempotencyKey, requestId: request.requestId });
+      } catch (error) {
+        throw orderNoteApiError(error);
+      }
+      const data = result && result.ok === true && result.data ? result.data : result;
+      const envelope = orderNoteMutationResult(data, request.requestId);
+      envelope.item.id = normalized.input.orderId;
+      return envelope;
+    }
+    if (importRoute(route)) {
+      const normalized = normalizeImportMutation(request);
+      const service = dependencies.importService || defaultImportService;
+      let result;
+      try {
+        result = await service[normalized.action]({
+          actor: importMutationActor(auth),
+          ...normalized.input,
+          idempotencyKey: normalized.idempotencyKey,
+          requestId: request.requestId
+        });
+      } catch (error) {
+        throw importApiError(error);
+      }
+      return importMutationResult(result, request.requestId, normalized.action);
+    }
     if (paymentMutationRoute(route)) {
       assertWebPaymentMutation(auth.principal, route.mutationAction);
       const normalized = normalizePaymentMutation(request);
@@ -2737,7 +3394,8 @@ async function dispatch(request, auth, config, dependencies = {}) {
         result = await service.reviewWebPayment({
           actor: paymentMutationActor(auth),
           input: normalized.input,
-          idempotencyKey: normalized.idempotencyKey
+          idempotencyKey: normalized.idempotencyKey,
+          requestId: request.requestId
         });
       } catch (error) {
         throw paymentMutationApiError(error);
@@ -2856,14 +3514,59 @@ async function dispatch(request, auth, config, dependencies = {}) {
       return inventoryAdjustmentMutationResult(data, request.requestId);
     }
     if (inventoryWarningRoute(route)) {
-      const normalized = normalizeInventoryWarningMutation(request);
       const service = dependencies.inventoryWarningService || defaultInventoryWarningService;
+      if (route.mutationAction === "batch-warning") {
+        const normalized = normalizeInventoryWarningBatchMutation(request);
+        const actor = inventoryWarningActor(auth);
+        const idempotency = dependencies.batchIdempotency || inventoryWarningIdempotency;
+        const outcome = await idempotency.runIdempotentAction({
+          db,
+          actionType: "inventory_batch_warning",
+          idempotencyKey: normalized.idempotencyKey,
+          operatorIdentity: actor.id,
+          operatorType: "admin",
+          scope: route.resource,
+          scopeId: normalized.batch.batchId,
+          openid: actor.openid,
+          adminId: actor.id,
+          requestId: normalized.batch.requestId,
+          payload: normalized.batch,
+          allowRetryOnFailed: false,
+          failClosedOnFinalize: true
+        }, async () => executeBatch(normalized.batch, {
+          async handleItem(item, context) {
+            try {
+              const input = normalizeInventoryWarningBatchPayload(item);
+              const result = await service.setWarningStock({
+                actor,
+                input,
+                idempotencyKey: inventoryWarningBatchIdempotencyKey(normalized.idempotencyKey, item.id),
+                requestId: context.requestId,
+                batchId: context.batchId,
+                requireExpectedVersion: true
+              });
+              if (result && result.ok === false) {
+                throw Object.assign(new Error(result.message || "库存预警操作失败"), result);
+              }
+              const data = result && result.ok === true && result.data ? result.data : result;
+              assertInventoryWarningBatchServiceResult(data, item);
+              return { status: "success", code: "OK", retryable: false };
+            } catch (error) {
+              return inventoryWarningBatchFailure(error);
+            }
+          }
+        }));
+        if (!outcome || outcome.ok !== true) throw inventoryWarningBatchIdempotencyError(outcome);
+        return inventoryWarningBatchResponse(outcome.data, normalized.batch);
+      }
+      const normalized = normalizeInventoryWarningMutation(request);
       let result;
       try {
         result = await service.setWarningStock({
           actor: inventoryWarningActor(auth),
           input: normalized.input,
           idempotencyKey: normalized.idempotencyKey,
+          requestId: request.requestId,
           requireExpectedVersion: true
         });
       } catch (err) {
@@ -2884,6 +3587,7 @@ async function dispatch(request, auth, config, dependencies = {}) {
           actor: productPriceActor(auth),
           input: normalized.input,
           idempotencyKey: normalized.idempotencyKey,
+          requestId: request.requestId,
           requireExpectedVersion: true
         });
       } catch (error) {
@@ -2999,6 +3703,11 @@ exports._test = {
   inventoryWarningActor,
   inventoryWarningApiError,
   inventoryWarningMutationResult,
+  settingsMutationRoute,
+  normalizeSettingsMutation,
+  settingsMutationApiError,
+  settingsMutationResult,
+  defaultSystemSettingsService,
   defaultInventoryWarningService,
   productPriceRoute,
   normalizeProductPriceMutation,
@@ -3031,6 +3740,12 @@ exports._test = {
   inventoryAdjustmentMutationResult,
   inventoryAdjustmentApiError,
   defaultInventoryMutationService,
+  orderNoteRoute,
+  normalizeOrderNoteMutation,
+  orderNoteActor,
+  orderNoteApiError,
+  orderNoteMutationResult,
+  defaultOrderNoteService,
   defaultOrderQueryService,
   assertWebShipmentRead,
   shipmentQueryApiError,
@@ -3086,5 +3801,11 @@ exports._test = {
   analyticsApiError,
   projectProductAnalytics,
   readProductAnalytics,
-  defaultProductAnalyticsService
+  defaultProductAnalyticsService,
+  importRoute,
+  normalizeImportMutation,
+  importMutationActor,
+  importApiError,
+  importMutationResult,
+  defaultImportService
 };

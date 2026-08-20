@@ -732,3 +732,11 @@ test("admin filters, customer orderId, and unfiltered customer page-number reque
   assert.equal(filteredFirstPage.data.page, 1);
   assert.equal(typeof filteredFirstPage.data.nextCursor, "string");
 });
+
+test("customer response never exposes order internal note DTO fields from stored order shaped input", async () => {
+  fakeCloud.state.openid = "customer-openid";
+  fakeCloud.state.collections = { admin_users: [baseAdmin()], orders: [{ _id: "private-note-order", userOpenid: "customer-openid", status: "paid", createdAt: new Date(), internalNotes: [{ content: "内部备注正文", authorId: "admin-private", authorRole: "customer_service", authorName: "内部客服" }], adminRemark: "内部备注摘要" }], order_items: [], users: [], customer_accounts: [] };
+  const result = await getOrders.main({ summaryOnly: true });
+  const json = JSON.stringify(result.data.orders[0]);
+  for (const secret of ["内部备注正文", "admin-private", "customer_service", "内部客服", "内部备注摘要"]) assert.equal(json.includes(secret), false, secret);
+});

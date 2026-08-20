@@ -12,7 +12,7 @@ const MAX_LEGACY_SEARCH_ORDER_ITEMS = 5000;
 const LEGACY_PUBLIC_SENSITIVE_FIELDS = new Set([
   "adminNote", "adminNoteSummary", "adminNoteUpdatedAt", "adminNoteUpdatedBy", "adminNoteUpdatedByOpenid",
   "adminTags", "customerAdminTags", "customerAdminNoteSummary", "customerRiskLevel", "riskLevel", "riskLevelSnapshot",
-  "orderSource", "adminRemark", "customerRemark", "shipmentRemark", "internalTags", "defectDescription",
+  "orderSource", "adminRemark", "customerRemark", "shipmentRemark", "internalNotes", "content", "authorId", "authorRole", "authorName", "internalTags", "defectDescription",
   "idempotencyKey", "idempotencyActionType", "submitIdempotencyKey", "idempotencyRequestHash", "requestHash",
   "cartSubmitHash", "cartItemIds", "selectedCartItemIds",
   "customerPhoneSnapshot", "customerPhoneDisplay", "phone", "phoneNumber", "mobile", "fullPhone", "receiverPhone", "contactPhone",
@@ -284,6 +284,23 @@ function createOrderQueryService({ db, command }) {
     return { itemMap, users, accounts, products };
   }
 
+  async function orderInternalNotes(orderId) {
+    try {
+      const response = await db.collection("note_logs").where({ targetType: "order", targetId: orderId })
+        .orderBy("createdAt", "desc").limit(100).get();
+      return (Array.isArray(response.data) ? response.data : []).map((row) => {
+        const content = cleanText(row && (row.content || row.afterNote), 500);
+        const createdAt = dateIso(row && row.createdAt);
+        const id = cleanText(row && (row._id || row.id), 128);
+        if (!content || !createdAt || !id) return null;
+        return { id, content, authorId: cleanText(row.authorId || row.operatorId, 128), authorRole: cleanText(row.authorRole || row.operatorRole, 50), authorName: cleanText(row.authorName || row.operatorName, 80), createdAt };
+      }).filter(Boolean);
+    } catch (error) {
+      if (isMissingCollection(error)) return [];
+      throw new OrderQueryError("ORDER_READ_FAILED", "订单读取失败，请稍后重试", 503);
+    }
+  }
+
   function orderItems(order, itemMap, productMap = null) {
     const stored = itemMap[order._id] || [];
     if (stored.length) return productMap ? stored.map((item) => {
@@ -455,7 +472,9 @@ function createOrderQueryService({ db, command }) {
     }
     if (!order) throw new OrderQueryError("NOT_FOUND", "订单不存在", 404);
     const maps = await relatedMaps([order], true, false, { maxOrderItems: MAX_WEB_DETAIL_ORDER_ITEMS });
-    return webProjection(order, maps, principal, true);
+    const result = webProjection(order, maps, principal, true);
+    if (hasPermission(principal, "order:edit_remark")) result.internalNotes = await orderInternalNotes(safeId);
+    return result;
   }
 
   async function listLegacyOrders({ principal = null, userOpenid = "", filters = {}, page = 1, pageSize = 100, orderId = "", productId = "", requestedUserOpenid = "", summaryOnly = false }) {
@@ -623,6 +642,10 @@ function createOrderQueryService({ db, command }) {
         } else {
           delete legacy.adminNote;
           delete legacy.adminRemark;
+          delete legacy.internalNotes;
+          delete legacy.adminNoteUpdatedAt;
+          delete legacy.adminNoteUpdatedBy;
+          delete legacy.adminNoteUpdatedByOpenid;
           delete legacy.customerAdminNoteSummary;
           delete legacy.adminNoteSummary;
         }

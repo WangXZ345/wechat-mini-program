@@ -121,6 +121,41 @@ function validOrderSummary(id = "order-1") {
   };
 }
 
+it("sends the exact orders/remark body, version, CSRF, and idempotency key", async () => {
+  let mutationRequest: InternalAxiosRequestConfig | null = null;
+  const client = createClient((config) => {
+    if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope("access-remark", "csrf-remark") };
+    if (config.url === "/orders/remark") { mutationRequest = config; return { status: 200, data: { ok: true, data: { affected: 1, message: "订单内部备注已保存" } } }; }
+    throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+  });
+  const transport = new HttpBffTransport(client);
+  await transport.login({ account: "service.test", password: "Strong-Admin-2026!" });
+  await transport.mutate("orders", "remark", { id: "order-1", content: "跟进备注", expectedVersion: 7 }, { idempotencyKey: "orders:remark:7", expectedVersion: 7 });
+  expect(requestBody(mutationRequest!)).toEqual({ id: "order-1", content: "跟进备注", expectedVersion: 7 });
+  expect(header(mutationRequest!, "X-Admin-CSRF")).toBe("csrf-remark");
+  expect(header(mutationRequest!, "Idempotency-Key")).toBe("orders:remark:7");
+});
+
+it.each([
+  [500, "ORDER_NOTE_FAILED"],
+  [501, "SERVICE_NOT_MIGRATED"]
+] as const)("preserves orders/remark HTTP %i failure without a fallback write", async (status, code) => {
+  let remarkCalls = 0;
+  const client = createClient((config) => {
+    if (config.url === "/auth/login") return { status: 200, data: sessionEnvelope(`access-remark-${status}`, "csrf-remark") };
+    if (config.url === "/orders/remark") {
+      remarkCalls += 1;
+      return failure(code, status);
+    }
+    throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+  });
+  const transport = new HttpBffTransport(client);
+  await transport.login({ account: "service.test", password: "Strong-Admin-2026!" });
+  await expect(transport.mutate("orders", "remark", { id: "order-1", content: "失败不兜底", expectedVersion: 7 }, { idempotencyKey: `orders:remark:error:${status}`, expectedVersion: 7 }))
+    .rejects.toMatchObject({ code, status });
+  expect(remarkCalls).toBe(1);
+});
+
 function validShipmentSummary(id = "shipment-1") {
   return {
     id,
@@ -1942,5 +1977,59 @@ describe("HttpBffTransport refund mutation", () => {
       expectedVersion: 1
     })).rejects.toMatchObject({ code: "INVALID_REFUND_MUTATION_CONTRACT", status: 502 });
     expect(calls).toBe(1);
+  });
+});
+
+describe("HttpBffTransport import receipt reads", () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it("reads a second receipt page only with its opaque cursor", async () => {
+    const client = createClient((config) => {
+      expect(config.method).toBe("get");
+      expect(config.url).toBe("/imports/import-1/items");
+      expect(config.params).toEqual({ page: 2, pageSize: 50, cursor: "v1.receipt-cursor-01" });
+      return {
+        status: 200,
+        data: {
+          ok: true,
+          data: {
+            items: [{
+              id: "row-51",
+              row: 51,
+              status: "business_error",
+              code: "WRITE_FAILED",
+              retryable: true,
+              reused: false,
+              updatedAt: "2026-08-11T08:00:00.000Z"
+            }],
+            total: 51,
+            page: 2,
+            pageSize: 50,
+            nextCursor: null
+          }
+        }
+      };
+    });
+    const transport = new HttpBffTransport(client);
+
+    const result = await transport.getImportItems("import-1", { page: 2, pageSize: 50, cursor: "v1.receipt-cursor-01" });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.row).toBe(51);
+    expect(result.total).toBe(51);
+  });
+
+  it("rejects a non-first receipt page without the prior cursor before requesting", async () => {
+    let calls = 0;
+    const transport = new HttpBffTransport(createClient(() => {
+      calls += 1;
+      throw new Error("must not request");
+    }));
+    await expect(transport.getImportItems("import-1", { page: 2, pageSize: 50 })).rejects.toMatchObject({
+      code: "IMPORT_ITEMS_CURSOR_REQUIRED", status: 400
+    });
+    expect(calls).toBe(0);
   });
 });

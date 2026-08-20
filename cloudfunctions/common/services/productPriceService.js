@@ -1,4 +1,9 @@
 const crypto = require("crypto");
+const {
+  buildSyncEvent,
+  idempotencyDigest,
+  writeOperationBundle
+} = require("./operationOutbox");
 
 const ACTION_TYPE = "update_product_price";
 const REQUIRED_PERMISSION = "product:update_price";
@@ -164,6 +169,7 @@ function createProductPriceService({ db, idempotency, now = () => new Date(), ra
 
   async function ensureCollections() {
     await idempotency.ensureCollection(db, "price_logs");
+    await idempotency.ensureCollection(db, "admin_operation_logs");
     await idempotency.ensureCollection(db, "sync_events");
   }
 
@@ -181,7 +187,7 @@ function createProductPriceService({ db, idempotency, now = () => new Date(), ra
     return resultFromExistingLog(input.productId, product, existingLog.data[0], input.newPriceCents);
   }
 
-  async function execute({ actor, input, idempotencyKey, operationId }) {
+  async function execute({ actor, input, idempotencyKey, operationId, requestId, batchId }) {
     const businessKey = deterministicKey("product_price", `${actor.id}:${operationId}:${input.productId}`);
     return db.runTransaction(async (tx) => {
       let product;
@@ -226,6 +232,7 @@ function createProductPriceService({ db, idempotency, now = () => new Date(), ra
       }
 
       const timestamp = db.serverDate();
+      const auditTimestamp = now();
       const nextVersion = currentVersion + 1;
       const updateData = {
         price: input.newPriceCents,
@@ -241,8 +248,8 @@ function createProductPriceService({ db, idempotency, now = () => new Date(), ra
         data: {
           businessKey,
           sourceType: "manual",
-          sourceId: operationId,
-          idempotencyKey: idempotencyKey || "",
+          sourceId: deterministicKey("product_price_operation", operationId),
+          idempotencyDigest: idempotencyDigest(idempotencyKey),
           productId: input.productId,
           productIndex: product.productIndex || "",
           productName: product.name || "",
@@ -251,7 +258,6 @@ function createProductPriceService({ db, idempotency, now = () => new Date(), ra
           changeType: "set",
           changeValue: input.newPriceCents,
           operatorId: actor.id,
-          operatorOpenid: actor.openid,
           operatorRole: actor.role,
           sourceClient: actor.sourceClient,
           reason: input.reason,
@@ -260,26 +266,36 @@ function createProductPriceService({ db, idempotency, now = () => new Date(), ra
           createdAt: timestamp
         }
       });
-      await tx.collection("sync_events").add({
-        data: {
-          eventId: deterministicKey("product_price_event", businessKey),
-          eventType: "product.price_updated",
-          entityType: "product",
-          entityId: input.productId,
-          action: "change_price",
-          version: nextVersion,
-          changedFields: ["price", "updatedAt", "version"],
-          actorType: "admin",
-          actorRole: actor.role,
-          sourceClient: actor.sourceClient,
-          businessKey,
-          audience: "public",
-          isPublic: true,
-          audienceRoles: ["procurement", "super_admin"],
-          createdAt: timestamp,
-          expiresAt: new Date(now().getTime() + SYNC_EVENT_TTL_MS)
-        }
+      const operation = {
+        operator: actor,
+        action: "change_price",
+        resourceType: "product",
+        resourceId: input.productId,
+        requestId,
+        batchId,
+        idempotencyKey,
+        businessKey,
+        sourceClient: actor.sourceClient,
+        changedFields: ["price", "updatedAt", "version"],
+        before: { price: currentPrice, version: currentVersion },
+        after: { price: input.newPriceCents, version: nextVersion },
+        result: { status: "success", affected: 1, changed: true, reused: false },
+        timestamp: auditTimestamp
+      };
+      const event = buildSyncEvent({
+        ...operation,
+        eventId: deterministicKey("product_price_event", businessKey),
+        eventType: "product.price_updated",
+        entityType: "product",
+        entityId: input.productId,
+        version: nextVersion,
+        updatedAt: auditTimestamp,
+        audience: "public",
+        isPublic: true,
+        audienceRoles: ["procurement", "super_admin"],
+        ttlMs: SYNC_EVENT_TTL_MS
       });
+      await writeOperationBundle(tx, { operation, events: [event] });
 
       return resultFromProduct(input.productId, nextProduct, currentPrice);
     });
@@ -304,7 +320,9 @@ function createProductPriceService({ db, idempotency, now = () => new Date(), ra
         actor,
         input,
         idempotencyKey: "",
-        operationId: `legacy_${cleanString(randomId(), 80)}`
+        operationId: `legacy_${cleanString(randomId(), 80)}`,
+        requestId: cleanString(command.requestId, 128),
+        batchId: cleanString(command.batchId, 128)
       });
     }
 
@@ -342,7 +360,9 @@ function createProductPriceService({ db, idempotency, now = () => new Date(), ra
       actor,
       input,
       idempotencyKey,
-      operationId: idempotencyKey
+      operationId: idempotencyKey,
+      requestId: cleanString(command.requestId, 128),
+      batchId: cleanString(command.batchId, 128)
     }));
     if (!outcome || outcome.ok !== true) throw idempotencyFailure(outcome);
     return outcome.data;

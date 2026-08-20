@@ -1,4 +1,8 @@
+const crypto = require("crypto");
 const cloud = require("wx-server-sdk");
+const { normalizeRequestId, toPublicError } = require("./errorModel");
+const { readSessionIdleMinutes, assertSessionIdleLifetime } = require("./sessionPolicy");
+const { RequestValidationError, parseObject } = require("./requestValidation");
 const {
   AuthError,
   DEFAULT_SCRYPT_PARAMS,
@@ -109,13 +113,14 @@ function isHttpEvent(event = {}) {
 }
 
 function parseJsonBody(event = {}) {
-  if (event.body === undefined || event.body === null || event.body === "") return {};
-  if (typeof event.body === "object") return event.body;
+  if (event.body === undefined || event.body === "") return {};
+  if (typeof event.body === "object") return parseObject(event.body, { label: "请求内容" });
   try {
     const raw = event.isBase64Encoded ? Buffer.from(event.body, "base64").toString("utf8") : String(event.body);
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parseObject(parsed, { label: "请求内容" });
   } catch (err) {
+    if (err instanceof RequestValidationError) throw err;
     throw new AuthError("INVALID_JSON", "请求内容不是有效 JSON", 400);
   }
 }
@@ -128,12 +133,15 @@ function normalizeAction(value) {
 function buildRequest(event = {}) {
   const http = isHttpEvent(event);
   const headers = normalizeHeaders(event.headers || {});
+  const requestId = normalizeRequestId(headers["x-request-id"], () => crypto.randomUUID());
   if (Array.isArray(event.cookies) && !headers.cookie) headers.cookie = event.cookies.join("; ");
   const body = http
     ? parseJsonBody(event)
-    : (event.data && typeof event.data === "object" ? event.data
-      : event.payload && typeof event.payload === "object" ? event.payload
-        : event);
+    : Object.hasOwn(event, "data")
+      ? parseObject(event.data, { label: "请求内容" })
+      : Object.hasOwn(event, "payload")
+        ? parseObject(event.payload, { label: "请求内容" })
+        : parseObject(event, { label: "请求内容" });
   const path = cleanString(event.rawPath || event.path || event.requestContext && event.requestContext.http && event.requestContext.http.path, 300);
   const action = normalizeAction(body.action || event.action || path);
   const forwardedIp = cleanString(headers["x-forwarded-for"], 200).split(",")[0].trim();
@@ -153,7 +161,8 @@ function buildRequest(event = {}) {
     origin: cleanString(headers.origin, 300),
     sourceIp,
     userAgent: cleanString(headers["user-agent"] || body.userAgent, 512),
-    accessToken: bearer ? bearer[1].trim() : ""
+    accessToken: bearer ? bearer[1].trim() : "",
+    requestId
   };
 }
 
@@ -192,6 +201,7 @@ function responseHeaders(request, config) {
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer"
   };
+  if (request.requestId) headers["x-request-id"] = request.requestId;
   if (request.http && isOriginAllowed(request.origin, config.allowedOrigins)) {
     headers["access-control-allow-origin"] = request.origin;
     headers["access-control-allow-credentials"] = "true";
@@ -211,42 +221,52 @@ function formatResponse(request, config, payload, statusCode = 200, cookie = "",
   return { ...payload, statusCode, headers };
 }
 
-function failPayload(err) {
-  const authError = err instanceof AuthError
-    ? err
-    : new AuthError("AUTH_OPERATION_FAILED", "认证操作失败，请稍后重试", 500);
-  const payload = { ok: false, code: authError.code, message: authError.message };
-  if (authError.details && authError.details.retryAfterSeconds) {
-    payload.retryAfterSeconds = authError.details.retryAfterSeconds;
+function failPayload(err, requestId) {
+  const publicError = toPublicError(err, {
+    trusted: err instanceof AuthError || err instanceof RequestValidationError,
+    fallbackCode: "AUTH_OPERATION_FAILED",
+    fallbackMessage: "认证操作失败，请稍后重试"
+  });
+  const serverTime = new Date().toISOString();
+  const payload = {
+    ok: false,
+    code: publicError.code,
+    category: publicError.category,
+    message: publicError.message,
+    requestId,
+    serverTime,
+    error: { code: publicError.code, category: publicError.category, message: publicError.message, requestId },
+    meta: { requestId, serverTime }
+  };
+  if (err instanceof AuthError && err.details && err.details.retryAfterSeconds) {
+    payload.retryAfterSeconds = err.details.retryAfterSeconds;
+    payload.error.retryAfterSeconds = err.details.retryAfterSeconds;
   }
-  return { payload, statusCode: authError.statusCode };
+  return { payload, statusCode: publicError.statusCode };
 }
 
-async function writeSecurityLog(request, config, entry = {}) {
-  try {
-    const audit = requestAuditContext(request, config);
-    const metadata = entry.metadata || {};
-    await db.collection(COLLECTIONS.securityLogs).add({
-      data: {
-        eventType: cleanString(entry.eventType, 80),
-        outcome: ["success", "failure", "blocked"].includes(entry.outcome) ? entry.outcome : "failure",
-        code: cleanString(entry.code, 80),
-        adminId: cleanString(entry.adminId, 128),
-        sessionId: cleanString(entry.sessionId, 128),
-        targetSessionId: cleanString(metadata.targetSessionId, 128),
-        loginIdMasked: cleanString(entry.loginIdMasked, 80),
-        role: cleanString(entry.role, 50),
-        reason: cleanString(metadata.reason, 120),
-        ipHash: audit.ipHash,
-        userAgentHash: audit.userAgentHash,
-        deviceLabel: audit.deviceLabel,
-        originHash: audit.originHash,
-        createdAt: db.serverDate()
-      }
-    });
-  } catch (err) {
-    console.error("adminWebAuth security log failed", cleanString(err && err.message, 160));
-  }
+async function writeSecurityLog(request, config, entry = {}, store = db) {
+  const audit = requestAuditContext(request, config);
+  const metadata = entry.metadata || {};
+  await store.collection(COLLECTIONS.securityLogs).add({
+    data: {
+      requestId: cleanString(request && request.requestId, 128),
+      eventType: cleanString(entry.eventType, 80),
+      outcome: ["success", "failure", "blocked"].includes(entry.outcome) ? entry.outcome : "failure",
+      code: cleanString(entry.code, 80),
+      adminId: cleanString(entry.adminId, 128),
+      sessionId: cleanString(entry.sessionId, 128),
+      targetSessionId: cleanString(metadata.targetSessionId, 128),
+      loginIdMasked: cleanString(entry.loginIdMasked, 80),
+      role: cleanString(entry.role, 50),
+      reason: cleanString(metadata.reason, 120),
+      ipHash: audit.ipHash,
+      userAgentHash: audit.userAgentHash,
+      deviceLabel: audit.deviceLabel,
+      originHash: audit.originHash,
+      createdAt: store.serverDate()
+    }
+  });
 }
 
 async function getPrincipal(adminId) {
@@ -305,6 +325,11 @@ async function revokeAdminSessions(adminId, reason, excludeSessionId = "", sourc
 
 function assertSessionLifetime(session, nowMs, requireAccessLifetime) {
   if (!session || session.revokedAt) throw new AuthError("SESSION_REVOKED", "登录状态已失效", 401);
+  try {
+    assertSessionIdleLifetime(session, nowMs);
+  } catch (error) {
+    throw new AuthError(error.code, error.message, error.statusCode);
+  }
   if (toMillis(session.absoluteExpiresAt) <= nowMs || toMillis(session.refreshExpiresAt) <= nowMs) {
     throw new AuthError("SESSION_EXPIRED", "登录状态已过期", 401);
   }
@@ -406,6 +431,10 @@ async function createSessionForVerifiedCredential(verifiedCredential, verifiedPr
   const refreshToken = randomToken();
   const csrfToken = randomToken();
   const audit = requestAuditContext(request, config);
+  const systemSettings = source && typeof source.collection === "function"
+    ? await getDocumentOrNull("settings", "system_settings", source)
+    : null;
+  const idleTimeoutMinutes = readSessionIdleMinutes(systemSettings || {});
   const credentialId = cleanString(verifiedCredential && verifiedCredential._id, 128);
   const verifiedCredentialFingerprint = credentialSecurityFingerprint(verifiedCredential);
   const verifiedPrincipalFingerprint = principalFingerprint(verifiedPrincipal);
@@ -444,6 +473,7 @@ async function createSessionForVerifiedCredential(verifiedCredential, verifiedPr
       createdAt: new Date(now),
       updatedAt: new Date(now),
       lastActivityAt: new Date(now),
+      idleTimeoutMinutes,
       accessExpiresAt: new Date(now + config.accessTtlMs),
       refreshExpiresAt: new Date(now + config.refreshTtlMs),
       absoluteExpiresAt: new Date(now + config.absoluteTtlMs),
@@ -635,6 +665,8 @@ async function rotateSession(session, suppliedRefreshHash, request, config) {
   const nextCsrfHash = tokenHash(csrfToken, config.tokenPepper);
   const absoluteExpiresAt = toMillis(session.absoluteExpiresAt);
   const refreshExpiresAt = Math.min(now + config.refreshTtlMs, absoluteExpiresAt);
+  const systemSettings = await getDocumentOrNull("settings", "system_settings", db);
+  const idleTimeoutMinutes = readSessionIdleMinutes(systemSettings || {});
 
   await db.runTransaction(async (transaction) => {
     const current = await getDocumentOrNull(COLLECTIONS.sessions, session._id, transaction);
@@ -652,6 +684,7 @@ async function rotateSession(session, suppliedRefreshHash, request, config) {
         accessExpiresAt: new Date(now + config.accessTtlMs),
         refreshExpiresAt: new Date(refreshExpiresAt),
         lastActivityAt: new Date(now),
+        idleTimeoutMinutes,
         updatedAt: new Date(now)
       }
     });
@@ -993,9 +1026,17 @@ exports.main = async (event = {}) => {
         return { allowedOrigins: [], tokenPepper: "", passwordPepper: "", testLike: false };
       }
     })();
-    request = request || { http: isHttpEvent(event), origin: "", headers: {}, body: {}, sourceIp: "unknown", userAgent: "" };
-    const failure = failPayload(err);
-    if (!(err instanceof AuthError)) {
+    request = request || {
+      http: isHttpEvent(event),
+      origin: "",
+      headers: {},
+      body: {},
+      sourceIp: "unknown",
+      userAgent: "",
+      requestId: normalizeRequestId(normalizeHeaders(event.headers || {})["x-request-id"], () => crypto.randomUUID())
+    };
+    const failure = failPayload(err, request.requestId);
+    if (!(err instanceof AuthError) && !(err instanceof RequestValidationError)) {
       console.error("adminWebAuth failed", cleanString(err && err.message, 160));
     }
     const retryHeaders = failure.payload.retryAfterSeconds
@@ -1023,5 +1064,6 @@ exports._test = {
   revokeAdminSessions,
   persistCredentialAndAuthVersion,
   credentialSecurityFingerprint,
-  createSessionForVerifiedCredential
+  createSessionForVerifiedCredential,
+  writeSecurityLog
 };

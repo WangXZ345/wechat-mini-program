@@ -1,3 +1,5 @@
+const { toPublicError } = require("./errorModel");
+
 const RESOURCE_POLICIES = Object.freeze({
   dashboard: { permission: "dashboard:view_basic", collection: "" },
   products: { permission: "product:view", collection: "products", sortField: "updatedAt", searchFields: ["name", "productName", "brand", "sku", "productIndex", "skuCode", "searchText"] },
@@ -41,6 +43,11 @@ const MUTATION_POLICIES = Object.freeze({
     adjust: "inventory:update",
     "set-warning": "inventory:set_warning",
     "batch-warning": "inventory:set_warning"
+  }),
+  imports: Object.freeze({
+    preview: "inventory:import",
+    confirm: "inventory:import",
+    resume: "inventory:import"
   }),
   orders: Object.freeze({
     review: "order:review",
@@ -383,8 +390,22 @@ function projectResource(resource, row, principal, detail = false) {
       const projected = { id, sku: cleanString(row.productIndex || row.skuCode || row.sku || row.productCode, 80), name: cleanString(row.name || row.productName, 160), brand: cleanString(row.brand, 100), totalSales: finiteInteger(row.totalSales, 0), stockChangeCount: finiteInteger(row.stockChangeCount, 0), updatedAt: dateValue(row.updatedAt) };
       return assignCents(projected, "salePriceCents", row.price);
     }
-    case "imports":
-      return { id, importNo: cleanString(row.importNo || row.batchNo, 100), fileName: cleanString(row.fileName || row.originalFileName, 180), importType: cleanString(row.importType || row.type, 60), status: cleanString(row.status, 60), totalRows: finiteInteger(row.totalRows ?? row.totalCount, 0), successRows: finiteInteger(row.successRows ?? row.successCount, 0), failedRows: finiteInteger(row.failedRows ?? row.failedCount, 0), createdAt: dateValue(row.createdAt), updatedAt: dateValue(row.updatedAt) };
+    case "imports": {
+      const counts = row.counts && typeof row.counts === "object" && !Array.isArray(row.counts) ? row.counts : {};
+      return {
+        id,
+        importNo: cleanString(row.importNo || row.batchNo, 100),
+        fileName: cleanString(row.fileName || row.originalFileName, 180),
+        importType: cleanString(row.importType || row.type, 60),
+        status: cleanString(row.status, 60),
+        totalRows: finiteInteger(counts.total ?? row.totalRows ?? row.totalCount, 0),
+        successRows: finiteInteger(counts.success ?? row.successRows ?? row.successCount, 0),
+        failedRows: finiteInteger(counts.failed ?? row.failedRows ?? row.failedCount, 0),
+        skippedRows: finiteInteger(counts.skipped ?? row.skippedRows ?? row.skippedCount, 0),
+        createdAt: dateValue(row.createdAt),
+        updatedAt: dateValue(row.updatedAt)
+      };
+    }
     case "settings":
       return {
         id: "system",
@@ -396,6 +417,7 @@ function projectResource(resource, row, principal, detail = false) {
         allowMultiplePaymentRecords: row.allowMultiplePaymentRecords !== false,
         maxPaymentScreenshotCount: Math.max(1, finiteInteger(row.maxPaymentScreenshotCount, 3)),
         lowStockDefaultThreshold: Math.max(0, finiteInteger(row.lowStockDefaultThreshold, 50)),
+        sessionIdleMinutes: Math.max(5, Math.min(240, finiteInteger(row.sessionIdleMinutes, 30))),
         updatedAt: dateValue(row.updatedAt)
       };
     default:
@@ -487,6 +509,7 @@ function allowedSyncEntityTypes(principal) {
   const allowed = new Set(["system"]);
   if (hasPermission(principal, "product:view")) allowed.add("product");
   if (hasPermission(principal, "inventory:view")) allowed.add("inventory");
+  if (hasPermission(principal, "inventory:import")) allowed.add("import");
   if (hasPermission(principal, "order:view")) allowed.add("order");
   if (hasPermission(principal, "payment:view_screenshot")) allowed.add("payment");
   if (hasPermission(principal, "customer:view_account")) allowed.add("account");
@@ -534,6 +557,9 @@ function parseHttpRoute(path, method = "GET") {
   if (["auth", "sync", "dashboard", "analytics"].includes(parts[0])) throw new ApiError("ROUTE_NOT_FOUND", "接口不存在", 404);
   const resource = normalizeResource(parts[0]);
   if (!RESOURCE_POLICIES[resource]) throw new ApiError("ROUTE_NOT_FOUND", "接口不存在", 404);
+  if (resource === "imports" && parts.length === 3 && parts[2] === "items" && verb === "GET") {
+    return { action: "importItems", resource, id: cleanString(parts[1], 128) };
+  }
   if (parts.length === 1 && verb === "GET") return { action: "list", resource };
   if (parts.length === 2 && verb === "GET") return { action: "get", resource, id: cleanString(parts[1], 128) };
   if (parts.length === 2 && verb === "POST") return { action: "mutate", resource, mutationAction: cleanString(parts[1], 100) };
@@ -546,9 +572,25 @@ function successEnvelope(data, requestId) {
 }
 
 function errorEnvelope(error, requestId) {
-  const err = error instanceof ApiError ? error : new ApiError("INTERNAL_ERROR", "服务暂时不可用", 500);
+  const err = toPublicError(error, { trusted: error instanceof ApiError });
   const serverTime = new Date().toISOString();
-  return { statusCode: err.statusCode, payload: { ok: false, code: err.code, message: err.message, requestId, serverTime, error: { code: err.code, message: err.message, requestId }, meta: { requestId, serverTime } } };
+  const retryAfterSeconds = error instanceof ApiError && Number.isSafeInteger(error.details && error.details.retryAfterSeconds)
+    && error.details.retryAfterSeconds > 0 ? error.details.retryAfterSeconds : undefined;
+  const retryFields = retryAfterSeconds ? { retryAfterSeconds } : {};
+  return {
+    statusCode: err.statusCode,
+    payload: {
+      ok: false,
+      code: err.code,
+      category: err.category,
+      message: err.message,
+      ...retryFields,
+      requestId,
+      serverTime,
+      error: { code: err.code, category: err.category, message: err.message, requestId, ...retryFields },
+      meta: { requestId, serverTime }
+    }
+  };
 }
 
 module.exports = {

@@ -137,7 +137,7 @@ export const resourceDefinitions: Record<string, ResourceDefinition> = {
       { key: "set-warning", label: "预警值", permission: "inventory:set_warning", realEnabled: true },
       { key: "view-log", label: "日志", permission: "inventory:view_log" }
     ],
-    bulkActions: [{ key: "batch-warning", label: "批量预警值", permission: "inventory:set_warning", bulk: true }]
+    bulkActions: [{ key: "batch-warning", label: "批量预警值", permission: "inventory:set_warning", bulk: true, realEnabled: true }]
   },
   "inventory-alerts": {
     key: "inventory-alerts",
@@ -167,7 +167,7 @@ export const resourceDefinitions: Record<string, ResourceDefinition> = {
       { key: "set-warning", label: "调整预警", permission: "inventory:set_warning", realEnabled: true },
       { key: "adjust", label: "补充库存", permission: "inventory:update", realEnabled: true, type: "primary" }
     ],
-    bulkActions: [{ key: "batch-warning", label: "批量设置", permission: "inventory:set_warning", bulk: true }]
+    bulkActions: [{ key: "batch-warning", label: "批量设置", permission: "inventory:set_warning", bulk: true, realEnabled: true }]
   },
   orders: {
     key: "orders",

@@ -8,6 +8,13 @@ import type {
 } from "@/services/transport/inventory-adjustment-contract";
 import type { ShipmentDetail } from "@/services/transport/shipment-query-contract";
 import type { AccountDetail } from "@/services/transport/account-query-contract";
+import type { ImportReceiptPage, ImportReceiptQuery } from "@/services/transport/import-contract";
+
+export type ApiErrorCategory =
+  | "INVALID_ARGUMENT" | "UNAUTHENTICATED" | "FORBIDDEN" | "CSRF" | "RATE_LIMITED"
+  | "NOT_FOUND" | "INVALID_STATE" | "DATA_VERSION_CONFLICT" | "IDEMPOTENCY_CONFLICT"
+  | "FILE_PARSE_ERROR" | "VALIDATION_ERROR" | "INSUFFICIENT_STOCK" | "AMOUNT_LIMIT"
+  | "PARTIAL_SUCCESS" | "INTERNAL_ERROR";
 
 export interface ApiMeta {
   requestId?: string;
@@ -20,14 +27,18 @@ export interface ApiEnvelope<T> {
   ok: boolean;
   data?: T;
   code?: string;
+  category?: ApiErrorCategory;
   message?: string;
+  retryAfterSeconds?: number;
   requestId?: string;
   serverTime?: string;
   meta?: ApiMeta;
   error?: {
     code: string;
+    category?: ApiErrorCategory;
     message: string;
     requestId?: string;
+    retryAfterSeconds?: number;
   };
 }
 
@@ -144,6 +155,7 @@ export interface AdminTransport {
   createProduct(input: CreateProductInput, options: MutationOptions): Promise<MutationResult<ProductSummary>>;
   editProduct(input: EditProductInput, options: MutationOptions): Promise<MutationResult<ProductSummary>>;
   getInventorySnapshot(id: string): Promise<InventorySnapshot>;
+  getImportItems?(id: string, query: ImportReceiptQuery): Promise<ImportReceiptPage>;
   adjustInventory(
     resource: InventoryResource,
     input: InventoryAdjustmentInput,

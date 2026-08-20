@@ -140,7 +140,7 @@ test("only active procurement and super_admin actors pass the service boundary",
   }
 });
 
-test("successful write increments version and atomically records alert, inventory log and minimal outbox event", async () => {
+test("successful write increments version and atomically records alert, safe operation log and minimal outbox event", async () => {
   const db = createDatabase(baseState());
   const result = await serviceFor(db).setWarningStock(command());
   const state = db.snapshot();
@@ -161,7 +161,7 @@ test("successful write increments version and atomically records alert, inventor
   assert.equal(state.stock_alert_records[0].stock, 5);
   assert.equal(state.inventory_logs.length, 1);
   assert.equal(inventoryLog.operatorId, "admin-1");
-  assert.equal(inventoryLog.operatorOpenid, "trusted-openid");
+  assert.equal(Object.hasOwn(inventoryLog, "operatorOpenid"), false);
   assert.equal(inventoryLog.operatorRole, "procurement");
   assert.equal(inventoryLog.sourceClient, "admin_web");
   assert.equal(inventoryLog.warningStockBefore, 2);
@@ -171,6 +171,20 @@ test("successful write increments version and atomically records alert, inventor
   assert.equal(inventoryLog.changeAmount, 0);
   assert.equal(inventoryLog.versionBefore, 3);
   assert.equal(inventoryLog.versionAfter, 4);
+  assert.match(inventoryLog.idempotencyDigest, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(inventoryLog).includes("warning-key-0001"), false);
+  assert.equal(state.admin_operation_logs.length, 1);
+  const operation = state.admin_operation_logs[0];
+  assert.equal(operation.action, "set_warning");
+  assert.equal(operation.resourceType, "inventory");
+  assert.equal(operation.resourceId, "product-1");
+  assert.deepEqual(operation.changeSummary, {
+    changedFields: ["warningStock", "stockStatus", "updatedAt", "version"],
+    before: { warningStock: 2, stockStatus: "normal", version: 3 },
+    after: { warningStock: 6, stockStatus: "warning", version: 4 }
+  });
+  assert.equal(JSON.stringify(operation).includes("trusted-openid"), false);
+  assert.equal(JSON.stringify(operation).includes("warning-key-0001"), false);
   assert.equal(state.sync_events.length, 1);
   assert.deepEqual(event.changedFields, ["warningStock", "stockStatus", "updatedAt", "version"]);
   assert.deepEqual(event.audienceRoles, ["procurement", "super_admin"]);
@@ -181,6 +195,7 @@ test("successful write increments version and atomically records alert, inventor
   assert.equal(Object.hasOwn(event, "afterStock"), false);
   assert.equal(Object.hasOwn(event, "operatorOpenid"), false);
   assert.equal(Object.hasOwn(event, "openid"), false);
+  assert.equal(event.operationId, operation.operationId);
 });
 
 test("invalid persisted stock fails closed without normalizing stock or emitting inventory data", async () => {
@@ -273,6 +288,13 @@ test("sync event failure rolls back product, alert and inventory log", async () 
   assertDomainStateUnchanged(db.snapshot(), initial);
 });
 
+test("operation log failure rolls back product, alert, inventory log and outbox", async () => {
+  const initial = baseState();
+  const db = createDatabase(initial, { failAddCollection: "admin_operation_logs" });
+  await assert.rejects(serviceFor(db).setWarningStock(command()), /simulated admin_operation_logs write failure/);
+  assertDomainStateUnchanged(db.snapshot(), initial);
+});
+
 test("missing outbox collection fails closed without creating or partially writing domain data", async () => {
   const initial = baseState({ sync_events: undefined });
   const db = createDatabase(initial);
@@ -292,6 +314,7 @@ test("same idempotency key replays once while a changed payload conflicts", asyn
   assert.equal(first.duplicate, false);
   assert.equal(replay.duplicate, true);
   assert.equal(db.snapshot().inventory_logs.length, 1);
+  assert.equal(db.snapshot().admin_operation_logs.length, 1);
   assert.equal(db.snapshot().sync_events.length, 1);
 
   await assert.rejects(

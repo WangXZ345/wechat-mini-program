@@ -2,7 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const security = require("../security");
 const api = require("../index");
-const { assertBoundary, buildRequest, responseHeaders } = api._test;
+const { BatchContractError } = require("../lib/batchContract");
+const { errorEnvelope } = require("../lib/core");
+const { assertBoundary, buildRequest, normalizeMainError, responseHeaders } = api._test;
 
 const actionSecret = "a".repeat(32);
 const allowedOrigin = "https://admin.staging.example";
@@ -67,6 +69,37 @@ function validRemoteEnv() {
     ADMIN_WEB_ALLOWED_ORIGINS: allowedOrigin
   };
 }
+
+test("HTTP write bodies must be JSON objects", () => {
+  for (const body of ["[]", [], 0, false, null, "null", "0", "false"]) {
+    assert.throws(() => buildRequest({
+      httpMethod: "POST",
+      rawPath: "/api/admin/v1/orders/remark",
+      headers: { origin: allowedOrigin },
+      body
+    }), (error) => error.code === "INVALID_ARGUMENT" && error.statusCode === 400, JSON.stringify(body));
+  }
+});
+
+test("batch contract errors retain their fixed safe HTTP 4xx projection", () => {
+  const error = normalizeMainError(new BatchContractError(
+    "BATCH_ITEM_LIMIT_EXCEEDED",
+    "单次批量不能超过 50 项",
+    413
+  ));
+  const response = errorEnvelope(error, "request-batch-contract");
+  assert.equal(response.statusCode, 413);
+  assert.equal(response.payload.code, "BATCH_ITEM_LIMIT_EXCEEDED");
+  assert.equal(response.payload.category, "INVALID_ARGUMENT");
+  assert.equal(response.payload.message, "单次批量不能超过 50 项");
+});
+
+test("unsafe request ids are replaced before they reach response headers", () => {
+  const request = httpRequest({ headers: { origin: allowedOrigin, "x-request-id": "bad\r\nx-injected: yes" } });
+  assert.match(request.requestId, /^[0-9a-f-]{36}$/i);
+  assert.equal(request.requestId.includes("\r"), false);
+  assert.equal(responseHeaders(request, remoteConfig)["x-request-id"], request.requestId);
+});
 
 function responsePayload(response) {
   return response && typeof response.body === "string" && response.body

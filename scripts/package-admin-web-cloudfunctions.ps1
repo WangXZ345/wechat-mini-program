@@ -9,6 +9,34 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-FileHash {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$LiteralPath,
+
+    [Parameter()]
+    [ValidateSet("SHA256")]
+    [string]$Algorithm = "SHA256"
+  )
+
+  $stream = [System.IO.File]::OpenRead($LiteralPath)
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = $hasher.ComputeHash($stream)
+    $hash = ([System.BitConverter]::ToString($bytes)).Replace("-", "")
+  } finally {
+    $hasher.Dispose()
+    $stream.Dispose()
+  }
+
+  [pscustomobject]@{
+    Algorithm = $Algorithm
+    Hash = $hash
+    Path = [System.IO.Path]::GetFullPath($LiteralPath)
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
   $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 }
@@ -43,6 +71,65 @@ function Copy-SourceTree([string]$Source, [string]$Destination) {
       }
     } elseif (-not $_.Name.EndsWith(".tmp") -and $_.Name -notmatch '\.(test|spec)\.js$') {
       Copy-Item -LiteralPath $_.FullName -Destination $Destination
+    }
+  }
+}
+
+function Resolve-NodeRuntimePackage([string]$FromDirectory, [string]$PackageName) {
+  $cursor = [System.IO.Path]::GetFullPath($FromDirectory)
+  while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+    $candidate = if ((Split-Path -Leaf $cursor) -eq "node_modules") {
+      Join-Path $cursor $PackageName
+    } else {
+      Join-Path $cursor (Join-Path "node_modules" $PackageName)
+    }
+    if (Test-Path -LiteralPath $candidate -PathType Container) {
+      $item = Get-Item -LiteralPath $candidate -Force
+      if ($item.LinkType -and $item.Target) {
+        return [System.IO.Path]::GetFullPath([string]$item.Target[0])
+      }
+      return $item.FullName
+    }
+    $parent = Split-Path -Parent $cursor
+    if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $cursor) { break }
+    $cursor = $parent
+  }
+  throw "Required Node runtime package is not installed: $PackageName (from $FromDirectory)"
+}
+
+function Copy-NodeRuntimePackage(
+  [string]$SourcePackage,
+  [string]$DestinationNodeModules,
+  [System.Collections.Generic.HashSet[string]]$VisitedPackages
+) {
+  $packageJson = Join-Path $SourcePackage "package.json"
+  Assert-File $packageJson
+  $metadata = Get-Content -Raw -Encoding UTF8 -LiteralPath $packageJson | ConvertFrom-Json
+  $packageName = [string]$metadata.name
+  $packageVersion = [string]$metadata.version
+  if ([string]::IsNullOrWhiteSpace($packageName) -or [string]::IsNullOrWhiteSpace($packageVersion)) {
+    throw "Invalid Node runtime package metadata: $packageJson"
+  }
+  if ($VisitedPackages.Contains($packageName)) {
+    $existingMetadataPath = Join-Path (Join-Path $DestinationNodeModules $packageName) "package.json"
+    Assert-File $existingMetadataPath
+    $existingMetadata = Get-Content -Raw -Encoding UTF8 -LiteralPath $existingMetadataPath | ConvertFrom-Json
+    if ([string]$existingMetadata.version -ne $packageVersion) {
+      throw "Conflicting runtime package versions cannot be flattened: $packageName"
+    }
+    return
+  }
+
+  $destination = Join-Path $DestinationNodeModules $packageName
+  $destinationParent = Split-Path -Parent $destination
+  New-Item -ItemType Directory -Force -Path $destinationParent | Out-Null
+  Copy-SourceTree $SourcePackage $destination
+  [void]$VisitedPackages.Add($packageName)
+
+  if ($metadata.dependencies) {
+    foreach ($dependency in $metadata.dependencies.PSObject.Properties.Name) {
+      $dependencySource = Resolve-NodeRuntimePackage $SourcePackage $dependency
+      Copy-NodeRuntimePackage $dependencySource $DestinationNodeModules $VisitedPackages
     }
   }
 }
@@ -94,6 +181,9 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 $dashboardSource = Join-Path $root "cloudfunctions\adminDashboard"
 $apiSource = Join-Path $root "cloudfunctions\adminWebApi"
+$apiPackageSource = Join-Path $apiSource "package.json"
+$importFileParserSource = Join-Path $apiSource "lib\importFileParser.js"
+$importServiceSource = Join-Path $apiSource "lib\importService.js"
 $authSource = Join-Path $root "cloudfunctions\adminWebAuth"
 $batchTagsSource = Join-Path $root "cloudfunctions\batchUpdateProductTags"
 $cancelSource = Join-Path $root "cloudfunctions\cancelOrder"
@@ -117,12 +207,16 @@ $canonicalSecurity = Join-Path $authSource "security.js"
 $canonicalPermissions = Join-Path $root "cloudfunctions\common\permissions.js"
 $canonicalInventoryWarningService = Join-Path $root "cloudfunctions\common\services\inventoryWarningService.js"
 $canonicalProductPriceService = Join-Path $root "cloudfunctions\common\services\productPriceService.js"
+$canonicalOperationOutbox = Join-Path $root "cloudfunctions\common\services\operationOutbox.js"
 $canonicalProductStatusService = Join-Path $root "cloudfunctions\common\services\productStatusService.js"
 $canonicalProductTagService = Join-Path $root "cloudfunctions\common\services\productTagService.js"
 $canonicalProductWriteService = Join-Path $root "cloudfunctions\common\services\productWriteService.js"
 $canonicalInventoryMutationService = Join-Path $root "cloudfunctions\common\services\inventoryMutationService.js"
 $canonicalProductAnalyticsQueryService = Join-Path $root "cloudfunctions\common\services\productAnalyticsQueryService.js"
 $canonicalOrderQueryService = Join-Path $root "cloudfunctions\common\services\orderQueryService.js"
+$canonicalSystemSettingsService = Join-Path $root "cloudfunctions\common\services\systemSettingsService.js"
+$canonicalAdminSessionPolicy = Join-Path $root "cloudfunctions\common\services\adminSessionPolicy.js"
+$canonicalOrderNoteService = Join-Path $root "cloudfunctions\common\services\orderNoteService.js"
 $canonicalOrderReviewService = Join-Path $root "cloudfunctions\common\services\orderReviewService.js"
 $canonicalOrderApprovalService = Join-Path $root "cloudfunctions\common\services\orderApprovalService.js"
 $canonicalOrderStatusPolicy = Join-Path $root "cloudfunctions\common\orderStatusPolicy.js"
@@ -141,6 +235,9 @@ $canonicalSyncEvents = Join-Path $root "cloudfunctions\common\syncEvents.js"
 
 Assert-File (Join-Path $dashboardSource "index.js")
 Assert-File (Join-Path $apiSource "index.js")
+Assert-File $apiPackageSource
+Assert-File $importFileParserSource
+Assert-File $importServiceSource
 Assert-File (Join-Path $authSource "index.js")
 Assert-File (Join-Path $batchTagsSource "index.js")
 Assert-File (Join-Path $cancelSource "index.js")
@@ -171,6 +268,8 @@ Assert-File $canonicalProductWriteService
 Assert-File $canonicalInventoryMutationService
 Assert-File $canonicalProductAnalyticsQueryService
 Assert-File $canonicalOrderQueryService
+Assert-File $canonicalSystemSettingsService
+Assert-File $canonicalAdminSessionPolicy
 Assert-File $canonicalOrderReviewService
 Assert-File $canonicalOrderApprovalService
 Assert-File $canonicalOrderStatusPolicy
@@ -186,6 +285,22 @@ Assert-File $canonicalIdempotency
 Assert-File $canonicalRecommend
 Assert-File $canonicalStockAlert
 Assert-File $canonicalSyncEvents
+
+$apiPackageMetadata = Get-Content -Raw -Encoding UTF8 -LiteralPath $apiPackageSource | ConvertFrom-Json
+$apiDependencyNames = @($apiPackageMetadata.dependencies.PSObject.Properties.Name)
+if ($apiDependencyNames -contains "xlsx") {
+  throw "Unsafe xlsx dependency must not be present in adminWebApi"
+}
+if (-not ($apiDependencyNames -contains "jszip") -or [string]$apiPackageMetadata.dependencies.jszip -ne "3.10.1") {
+  throw "adminWebApi must pin jszip exactly to 3.10.1"
+}
+$jsZipSource = Resolve-NodeRuntimePackage $apiSource "jszip"
+$jsZipPackageSource = Join-Path $jsZipSource "package.json"
+Assert-File $jsZipPackageSource
+$jsZipMetadata = Get-Content -Raw -Encoding UTF8 -LiteralPath $jsZipPackageSource | ConvertFrom-Json
+if ([string]$jsZipMetadata.name -ne "jszip" -or [string]$jsZipMetadata.version -ne "3.10.1") {
+  throw "Installed jszip runtime must be version 3.10.1"
+}
 
 if (Test-Path -LiteralPath $output) {
   if ((Get-ChildItem -LiteralPath $output -Force | Measure-Object).Count -gt 0) {
@@ -233,6 +348,10 @@ Copy-SourceTree $recalculateAccountSource $recalculateAccountTarget
 Copy-SourceTree $shipmentGroupsSource $shipmentGroupsTarget
 Copy-SourceTree $adminListAccountsSource $adminListAccountsTarget
 Copy-SourceTree $adminAccountDetailSource $adminAccountDetailTarget
+$apiRuntimeNodeModules = Join-Path $apiTarget "node_modules"
+New-Item -ItemType Directory -Force -Path $apiRuntimeNodeModules | Out-Null
+$visitedRuntimePackages = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+Copy-NodeRuntimePackage $jsZipSource $apiRuntimeNodeModules $visitedRuntimePackages
 
 Copy-Item -LiteralPath $canonicalSecurity -Destination (Join-Path $apiTarget "security.js") -Force
 Copy-Item -LiteralPath $canonicalPermissions -Destination (Join-Path $dashboardTarget "permissions.js") -Force
@@ -248,6 +367,7 @@ Copy-Item -LiteralPath $canonicalPermissions -Destination (Join-Path $warningTar
 Copy-Item -LiteralPath $canonicalPermissions -Destination (Join-Path $reviewTarget "permissions.js") -Force
 Copy-Item -LiteralPath $canonicalInventoryWarningService -Destination (Join-Path $apiTarget "lib\inventoryWarningService.js") -Force
 Copy-Item -LiteralPath $canonicalProductPriceService -Destination (Join-Path $apiTarget "lib\productPriceService.js") -Force
+Copy-Item -LiteralPath $canonicalOperationOutbox -Destination (Join-Path $apiTarget "lib\operationOutbox.js") -Force
 Copy-Item -LiteralPath $canonicalProductStatusService -Destination (Join-Path $apiTarget "lib\productStatusService.js") -Force
 Copy-Item -LiteralPath $canonicalProductTagService -Destination (Join-Path $apiTarget "lib\productTagService.js") -Force
 Copy-Item -LiteralPath $canonicalProductTagService -Destination (Join-Path $batchTagsTarget "productTagService.js") -Force
@@ -263,6 +383,10 @@ Copy-Item -LiteralPath $canonicalProductStatusService -Destination (Join-Path $m
 Copy-Item -LiteralPath $canonicalProductAnalyticsQueryService -Destination (Join-Path $dashboardTarget "productAnalyticsQueryService.js") -Force
 Copy-Item -LiteralPath $canonicalProductAnalyticsQueryService -Destination (Join-Path $apiTarget "lib\productAnalyticsQueryService.js") -Force
 Copy-Item -LiteralPath $canonicalOrderQueryService -Destination (Join-Path $apiTarget "lib\orderQueryService.js") -Force
+Copy-Item -LiteralPath $canonicalSystemSettingsService -Destination (Join-Path $apiTarget "lib\systemSettingsService.js") -Force
+Copy-Item -LiteralPath $canonicalAdminSessionPolicy -Destination (Join-Path $apiTarget "lib\sessionPolicy.js") -Force
+Copy-Item -LiteralPath $canonicalAdminSessionPolicy -Destination (Join-Path $authTarget "sessionPolicy.js") -Force
+Copy-Item -LiteralPath $canonicalOrderNoteService -Destination (Join-Path $apiTarget "lib\orderNoteService.js") -Force
 Copy-Item -LiteralPath $canonicalOrderQueryService -Destination (Join-Path $ordersTarget "orderQueryService.js") -Force
 Copy-Item -LiteralPath $canonicalOrderReviewService -Destination (Join-Path $apiTarget "lib\orderReviewService.js") -Force
 Copy-Item -LiteralPath $canonicalOrderReviewService -Destination (Join-Path $reviewTarget "orderReviewService.js") -Force
@@ -290,6 +414,7 @@ Copy-Item -LiteralPath $canonicalRefundMutationService -Destination (Join-Path $
 Copy-Item -LiteralPath $canonicalInventoryMutationService -Destination (Join-Path $afterSalesTarget "common\services\inventoryMutationService.js") -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $afterSalesTarget "_utils") | Out-Null
 Copy-Item -LiteralPath $canonicalStockAlert -Destination (Join-Path $afterSalesTarget "_utils\stockAlert.js") -Force
+Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $afterSalesTarget "idempotency.js") -Force
 Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $afterSalesTarget "common\idempotency.js") -Force
 Copy-Item -LiteralPath $canonicalSyncEvents -Destination (Join-Path $afterSalesTarget "common\syncEvents.js") -Force
 Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $apiTarget "lib\idempotency.js") -Force
@@ -303,8 +428,10 @@ Copy-Item -LiteralPath $canonicalStockAlert -Destination (Join-Path $manageProdu
 Copy-Item -LiteralPath $canonicalStockAlert -Destination (Join-Path $cancelTarget "stockAlert.js") -Force
 Copy-Item -LiteralPath $canonicalStockAlert -Destination (Join-Path $unsoldTarget "stockAlert.js") -Force
 Copy-Item -LiteralPath $canonicalProductPriceService -Destination (Join-Path $priceTarget "productPriceService.js") -Force
+Copy-Item -LiteralPath $canonicalOperationOutbox -Destination (Join-Path $priceTarget "operationOutbox.js") -Force
 Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $priceTarget "idempotency.js") -Force
 Copy-Item -LiteralPath $canonicalInventoryWarningService -Destination (Join-Path $warningTarget "inventoryWarningService.js") -Force
+Copy-Item -LiteralPath $canonicalOperationOutbox -Destination (Join-Path $warningTarget "operationOutbox.js") -Force
 Copy-Item -LiteralPath $canonicalIdempotency -Destination (Join-Path $warningTarget "idempotency.js") -Force
 Copy-Item -LiteralPath $canonicalStockAlert -Destination (Join-Path $warningTarget "stockAlert.js") -Force
 Copy-Item -LiteralPath $canonicalRecommend -Destination (Join-Path $manageProductTarget "recommend.js") -Force
@@ -355,8 +482,15 @@ $productAnalyticsQueryServiceSourceHash = (Get-FileHash -LiteralPath $canonicalP
 $productAnalyticsQueryServiceDashboardHash = (Get-FileHash -LiteralPath (Join-Path $dashboardTarget "productAnalyticsQueryService.js") -Algorithm SHA256).Hash
 $productAnalyticsQueryServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\productAnalyticsQueryService.js") -Algorithm SHA256).Hash
 $orderQueryServiceSourceHash = (Get-FileHash -LiteralPath $canonicalOrderQueryService -Algorithm SHA256).Hash
+$systemSettingsServiceSourceHash = (Get-FileHash -LiteralPath $canonicalSystemSettingsService -Algorithm SHA256).Hash
+$adminSessionPolicySourceHash = (Get-FileHash -LiteralPath $canonicalAdminSessionPolicy -Algorithm SHA256).Hash
+$systemSettingsServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\systemSettingsService.js") -Algorithm SHA256).Hash
+$adminSessionPolicyApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\sessionPolicy.js") -Algorithm SHA256).Hash
+$adminSessionPolicyAuthHash = (Get-FileHash -LiteralPath (Join-Path $authTarget "sessionPolicy.js") -Algorithm SHA256).Hash
 $orderQueryServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\orderQueryService.js") -Algorithm SHA256).Hash
 $orderQueryServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $ordersTarget "orderQueryService.js") -Algorithm SHA256).Hash
+$orderNoteServiceSourceHash = (Get-FileHash -LiteralPath $canonicalOrderNoteService -Algorithm SHA256).Hash
+$orderNoteServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\orderNoteService.js") -Algorithm SHA256).Hash
 $orderReviewServiceSourceHash = (Get-FileHash -LiteralPath $canonicalOrderReviewService -Algorithm SHA256).Hash
 $orderReviewServiceApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\orderReviewService.js") -Algorithm SHA256).Hash
 $orderReviewServiceLegacyHash = (Get-FileHash -LiteralPath (Join-Path $reviewTarget "orderReviewService.js") -Algorithm SHA256).Hash
@@ -401,6 +535,7 @@ $idempotencyManageProductHash = (Get-FileHash -LiteralPath (Join-Path $managePro
 $idempotencyPriceHash = (Get-FileHash -LiteralPath (Join-Path $priceTarget "idempotency.js") -Algorithm SHA256).Hash
 $idempotencyLegacyHash = (Get-FileHash -LiteralPath (Join-Path $warningTarget "idempotency.js") -Algorithm SHA256).Hash
 $idempotencyReviewHash = (Get-FileHash -LiteralPath (Join-Path $reviewTarget "common\idempotency.js") -Algorithm SHA256).Hash
+$idempotencyAfterSalesTopLevelHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "idempotency.js") -Algorithm SHA256).Hash
 $idempotencyAfterSalesHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\idempotency.js") -Algorithm SHA256).Hash
 $stockAlertSourceHash = (Get-FileHash -LiteralPath $canonicalStockAlert -Algorithm SHA256).Hash
 $stockAlertApiHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\stockAlert.js") -Algorithm SHA256).Hash
@@ -417,6 +552,14 @@ $syncEventsPaymentUpdateHash = (Get-FileHash -LiteralPath (Join-Path $paymentUpd
 $syncEventsReaderHash = (Get-FileHash -LiteralPath (Join-Path $syncReaderTarget "common\syncEvents.js") -Algorithm SHA256).Hash
 $syncEventsReviewHash = (Get-FileHash -LiteralPath (Join-Path $reviewTarget "common\syncEvents.js") -Algorithm SHA256).Hash
 $syncEventsAfterSalesHash = (Get-FileHash -LiteralPath (Join-Path $afterSalesTarget "common\syncEvents.js") -Algorithm SHA256).Hash
+$importFileParserSourceHash = (Get-FileHash -LiteralPath $importFileParserSource -Algorithm SHA256).Hash
+$importFileParserTargetHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\importFileParser.js") -Algorithm SHA256).Hash
+$importServiceSourceHash = (Get-FileHash -LiteralPath $importServiceSource -Algorithm SHA256).Hash
+$importServiceTargetHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "lib\importService.js") -Algorithm SHA256).Hash
+$apiPackageSourceHash = (Get-FileHash -LiteralPath $apiPackageSource -Algorithm SHA256).Hash
+$apiPackageTargetHash = (Get-FileHash -LiteralPath (Join-Path $apiTarget "package.json") -Algorithm SHA256).Hash
+$jsZipPackageSourceHash = (Get-FileHash -LiteralPath $jsZipPackageSource -Algorithm SHA256).Hash
+$jsZipPackageTargetHash = (Get-FileHash -LiteralPath (Join-Path $apiRuntimeNodeModules "jszip\package.json") -Algorithm SHA256).Hash
 $dashboardConfigHash = (Get-FileHash -LiteralPath $dashboardConfig -Algorithm SHA256).Hash
 $apiConfigHash = (Get-FileHash -LiteralPath $apiConfig -Algorithm SHA256).Hash
 
@@ -449,6 +592,15 @@ if ($productAnalyticsQueryServiceSourceHash -ne $productAnalyticsQueryServiceDas
 }
 if ($orderQueryServiceSourceHash -ne $orderQueryServiceApiHash -or $orderQueryServiceSourceHash -ne $orderQueryServiceLegacyHash) {
   throw "Canonical order query service hash verification failed"
+}
+if ($systemSettingsServiceSourceHash -ne $systemSettingsServiceApiHash) {
+  throw "Canonical system settings service hash verification failed"
+}
+if ($adminSessionPolicySourceHash -ne $adminSessionPolicyApiHash -or $adminSessionPolicySourceHash -ne $adminSessionPolicyAuthHash) {
+  throw "Canonical admin session policy hash verification failed"
+}
+if ($orderNoteServiceSourceHash -ne $orderNoteServiceApiHash) {
+  throw "Canonical order note service hash verification failed"
 }
 if ($orderReviewServiceSourceHash -ne $orderReviewServiceApiHash -or $orderReviewServiceSourceHash -ne $orderReviewServiceLegacyHash) {
   throw "Canonical order review service hash verification failed"
@@ -486,7 +638,7 @@ if ($refundMutationServiceSourceHash -ne $refundMutationServiceApiHash -or $refu
 if ($inventoryMutationSourceHash -ne $inventoryMutationServiceAfterSalesHash -or $stockAlertSourceHash -ne $stockAlertAfterSalesHash) {
   throw "Canonical after-sales inventory adapter hash verification failed"
 }
-if ($idempotencySourceHash -ne $idempotencyApiHash -or $idempotencySourceHash -ne $idempotencyPaymentUpdateHash -or $idempotencySourceHash -ne $idempotencyBatchTagsHash -or $idempotencySourceHash -ne $idempotencyUnsoldHash -or $idempotencySourceHash -ne $idempotencyManageProductHash -or $idempotencySourceHash -ne $idempotencyPriceHash -or $idempotencySourceHash -ne $idempotencyLegacyHash -or $idempotencySourceHash -ne $idempotencyReviewHash -or $idempotencySourceHash -ne $idempotencyAfterSalesHash) {
+if ($idempotencySourceHash -ne $idempotencyApiHash -or $idempotencySourceHash -ne $idempotencyPaymentUpdateHash -or $idempotencySourceHash -ne $idempotencyBatchTagsHash -or $idempotencySourceHash -ne $idempotencyUnsoldHash -or $idempotencySourceHash -ne $idempotencyManageProductHash -or $idempotencySourceHash -ne $idempotencyPriceHash -or $idempotencySourceHash -ne $idempotencyLegacyHash -or $idempotencySourceHash -ne $idempotencyReviewHash -or $idempotencySourceHash -ne $idempotencyAfterSalesTopLevelHash -or $idempotencySourceHash -ne $idempotencyAfterSalesHash) {
   throw "Canonical idempotency helper hash verification failed"
 }
 if ($stockAlertSourceHash -ne $stockAlertApiHash -or $stockAlertSourceHash -ne $stockAlertManageProductHash -or $stockAlertSourceHash -ne $stockAlertCancelHash -or $stockAlertSourceHash -ne $stockAlertUnsoldHash -or $stockAlertSourceHash -ne $stockAlertLegacyHash) {
@@ -497,6 +649,18 @@ if ($recommendSourceHash -ne $recommendManageProductHash -or $recommendSourceHas
 }
 if ($syncEventsSourceHash -ne $syncEventsApiHash -or $syncEventsSourceHash -ne $syncEventsPaymentUpdateHash -or $syncEventsSourceHash -ne $syncEventsReaderHash -or $syncEventsSourceHash -ne $syncEventsReviewHash -or $syncEventsSourceHash -ne $syncEventsAfterSalesHash) {
   throw "Canonical sync events helper hash verification failed"
+}
+if ($importFileParserSourceHash -ne $importFileParserTargetHash) {
+  throw "adminWebApi import parser hash verification failed"
+}
+if ($importServiceSourceHash -ne $importServiceTargetHash) {
+  throw "adminWebApi import service hash verification failed"
+}
+if ($apiPackageSourceHash -ne $apiPackageTargetHash) {
+  throw "adminWebApi package hash verification failed"
+}
+if ($jsZipPackageSourceHash -ne $jsZipPackageTargetHash) {
+  throw "Bundled jszip runtime hash verification failed"
 }
 
 $refundBusinessKeyMigrationNote = "Legacy rows without the indexed business key are excluded by the partial filter; backfill keys and resolve duplicates before replacing this with a full unique index."
@@ -616,6 +780,7 @@ $manifest = [ordered]@{
   canonicalInventoryMutationServiceSha256 = $inventoryMutationSourceHash
   canonicalProductAnalyticsQueryServiceSha256 = $productAnalyticsQueryServiceSourceHash
   canonicalOrderQueryServiceSha256 = $orderQueryServiceSourceHash
+  canonicalOrderNoteServiceSha256 = $orderNoteServiceSourceHash
   canonicalOrderReviewServiceSha256 = $orderReviewServiceSourceHash
   canonicalOrderApprovalServiceSha256 = $orderApprovalServiceSourceHash
   canonicalOrderStatusPolicySha256 = $orderStatusPolicySourceHash
@@ -632,6 +797,12 @@ $manifest = [ordered]@{
   canonicalRecommendSha256 = $recommendSourceHash
   canonicalStockAlertSha256 = $stockAlertSourceHash
   canonicalSyncEventsSha256 = $syncEventsSourceHash
+  adminWebApiImportParserSha256 = $importFileParserSourceHash
+  adminWebApiImportServiceSha256 = $importServiceSourceHash
+  adminWebApiPackageSha256 = $apiPackageSourceHash
+  jszipVersion = [string]$jsZipMetadata.version
+  jszipPackageSha256 = $jsZipPackageSourceHash
+  jszipRuntimeBundled = $true
   analyticsTimeoutSeconds = 60
   adminDashboardConfigSha256 = $dashboardConfigHash
   adminWebApiConfigSha256 = $apiConfigHash
@@ -666,6 +837,11 @@ $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -En
   RecommendHashVerified = $true
   StockAlertHashVerified = $true
   SyncEventsHashVerified = $true
+  ImportFileParserHashVerified = $true
+  ImportServiceHashVerified = $true
+  AdminWebApiPackageHashVerified = $true
+  JSZipRuntimeHashVerified = $true
+  JSZipRuntimeBundled = $true
   AnalyticsTimeoutVerified = $true
   ForbiddenFileCount = 0
   UploadPerformed = $false

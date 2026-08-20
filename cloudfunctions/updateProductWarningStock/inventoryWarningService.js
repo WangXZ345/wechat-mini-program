@@ -1,4 +1,9 @@
 const crypto = require("crypto");
+const {
+  buildSyncEvent,
+  idempotencyDigest,
+  writeOperationBundle
+} = require("./operationOutbox");
 
 const ACTION_TYPE = "update_warning_stock";
 const REQUIRED_PERMISSION = "inventory:set_warning";
@@ -173,7 +178,7 @@ function createInventoryWarningService({ db, stockAlert, idempotency, now = () =
     throw new Error("inventory warning service requires idempotency helpers");
   }
 
-  async function execute({ actor, input, idempotencyKey, operationId, legacyAutoHideWhenOutOfStock }) {
+  async function execute({ actor, input, idempotencyKey, operationId, requestId, batchId, legacyAutoHideWhenOutOfStock }) {
     const businessKey = deterministicKey("warning_stock", `${actor.id}:${operationId}:${input.productId}`);
     return db.runTransaction(async (tx) => {
       let product;
@@ -217,6 +222,7 @@ function createInventoryWarningService({ db, stockAlert, idempotency, now = () =
       }
 
       const timestamp = db.serverDate();
+      const auditTimestamp = now();
       const nextVersion = currentVersion + 1;
       const overrides = {
         stock: currentStock,
@@ -251,8 +257,8 @@ function createInventoryWarningService({ db, stockAlert, idempotency, now = () =
         data: {
           businessKey,
           sourceType: ACTION_TYPE,
-          sourceId: operationId,
-          idempotencyKey: idempotencyKey || "",
+          sourceId: deterministicKey("inventory_warning_operation", operationId),
+          idempotencyDigest: idempotencyDigest(idempotencyKey),
           productId: input.productId,
           beforeStock: currentStock,
           afterStock: currentStock,
@@ -261,7 +267,6 @@ function createInventoryWarningService({ db, stockAlert, idempotency, now = () =
           operationReason: input.reason,
           relatedOrderId: "",
           operatorId: actor.id,
-          operatorOpenid: actor.openid,
           operatorRole: actor.role,
           sourceClient: actor.sourceClient,
           stockStatusBefore: cleanString(product.stockStatus, 40),
@@ -274,24 +279,34 @@ function createInventoryWarningService({ db, stockAlert, idempotency, now = () =
           createdAt: timestamp
         }
       });
-      await tx.collection("sync_events").add({
-        data: {
-          eventId: deterministicKey("inventory_warning", businessKey),
-          eventType: "inventory.warning_updated",
-          entityType: "inventory",
-          entityId: input.productId,
-          action: "set_warning",
-          version: nextVersion,
-          changedFields: ["warningStock", "stockStatus", "updatedAt", "version"],
-          actorType: "admin",
-          actorRole: actor.role,
-          sourceClient: actor.sourceClient,
-          businessKey,
-          audienceRoles: ["procurement", "super_admin"],
-          createdAt: timestamp,
-          expiresAt: new Date(now().getTime() + SYNC_EVENT_TTL_MS)
-        }
+      const operation = {
+        operator: actor,
+        action: "set_warning",
+        resourceType: "inventory",
+        resourceId: input.productId,
+        requestId,
+        batchId,
+        idempotencyKey,
+        businessKey,
+        sourceClient: actor.sourceClient,
+        changedFields: ["warningStock", "stockStatus", "updatedAt", "version"],
+        before: { warningStock: currentWarningThreshold, stockStatus: cleanString(product.stockStatus, 40), version: currentVersion },
+        after: { warningStock: input.warningThreshold, stockStatus: updateData.stockStatus, version: nextVersion },
+        result: { status: "success", affected: 1, changed: true, reused: false },
+        timestamp: auditTimestamp
+      };
+      const event = buildSyncEvent({
+        ...operation,
+        eventId: deterministicKey("inventory_warning", businessKey),
+        eventType: "inventory.warning_updated",
+        entityType: "inventory",
+        entityId: input.productId,
+        version: nextVersion,
+        updatedAt: auditTimestamp,
+        audienceRoles: ["procurement", "super_admin"],
+        ttlMs: SYNC_EVENT_TTL_MS
       });
+      await writeOperationBundle(tx, { operation, events: [event] });
 
       return resultFromProduct(input.productId, nextProduct);
     });
@@ -319,6 +334,8 @@ function createInventoryWarningService({ db, stockAlert, idempotency, now = () =
         input,
         idempotencyKey: "",
         operationId: `legacy_${cleanString(randomId(), 80)}`,
+        requestId: cleanString(command.requestId, 128),
+        batchId: cleanString(command.batchId, 128),
         legacyAutoHideWhenOutOfStock
       });
     }
@@ -353,6 +370,8 @@ function createInventoryWarningService({ db, stockAlert, idempotency, now = () =
       input,
       idempotencyKey,
       operationId: idempotencyKey,
+      requestId: cleanString(command.requestId, 128),
+      batchId: cleanString(command.batchId, 128),
       legacyAutoHideWhenOutOfStock
     }));
     if (!outcome || outcome.ok !== true) throw idempotencyFailure(outcome);

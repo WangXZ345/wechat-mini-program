@@ -65,6 +65,7 @@ import {
   isCurrentRefundMutationSnapshot,
   type RefundMutationAction
 } from "@/services/transport/refund-mutation-contract";
+import { parseBatchResult, summarizeBatchResult } from "@/services/transport/batch-result-model";
 import { createIdempotencyKey, formatDateTime, formatMoney } from "@/utils/format";
 
 type Row = Record<string, unknown> & { id: string; version?: number };
@@ -104,6 +105,8 @@ const activeAction = ref<ResourceActionDefinition | null>(null);
 const actionForm = reactive<{ value: number | null; note: string }>({ value: null, note: "" });
 const actionIdempotencyKey = ref("");
 const actionAttemptFingerprint = ref("");
+const batchRequestId = ref("");
+const batchId = ref("");
 const actionExpectedWarningThreshold = ref<number | null>(null);
 const actionExpectedPriceCents = ref<number | null>(null);
 const actionExpectedIsActive = ref<boolean | null>(null);
@@ -171,6 +174,14 @@ function isRowActionAvailable(action: ResourceActionDefinition, row: Record<stri
 
 function isValidWarningThreshold(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 99_999;
+}
+
+function isValidWarningBatchSelection(value: Row[]): boolean {
+  return value.length >= 1 && value.length <= 50
+    && value.every((row) => typeof row.id === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.id)
+      && isValidWarningThreshold(row.warningThreshold)
+      && Number.isSafeInteger(row.version) && Number(row.version) >= 0)
+    && new Set(value.map((row) => row.id)).size === value.length;
 }
 
 function isValidPriceCents(value: unknown): value is number {
@@ -309,6 +320,10 @@ function beginAction(action: ResourceActionDefinition, row?: Record<string, unkn
     ElMessage.error("所选商品的标签或版本数据异常，请刷新后重试");
     return;
   }
+  if (action.key === "batch-warning" && !isValidWarningBatchSelection(selection.value)) {
+    ElMessage.error("所选商品的预警值或版本异常，请刷新后重试");
+    return;
+  }
   activeAction.value = action;
   selectedRow.value = row ? row as Row : null;
   const currentValue = action.key.includes("warning") ? row?.warningThreshold : 0;
@@ -330,6 +345,8 @@ function beginAction(action: ResourceActionDefinition, row?: Record<string, unkn
     ? row.amountCents
     : action.key === "change-price"
     ? actionExpectedPriceCents.value === null ? null : actionExpectedPriceCents.value / 100
+    : action.key === "batch-warning"
+      ? 0
     : action.key.includes("warning")
       ? isValidWarningThreshold(currentValue) ? currentValue : null
       : typeof currentValue === "number" && Number.isSafeInteger(currentValue) ? currentValue : null;
@@ -345,6 +362,8 @@ function beginAction(action: ResourceActionDefinition, row?: Record<string, unkn
   returnInspectionForm.restockQuantity = 0;
   actionForm.note = "";
   actionIdempotencyKey.value = createIdempotencyKey(`${definition.value.key}:${action.key}`);
+  batchRequestId.value = action.key === "batch-warning" ? createIdempotencyKey(`${definition.value.key}:batch-request`) : "";
+  batchId.value = action.key === "batch-warning" ? createIdempotencyKey(`${definition.value.key}:batch`) : "";
   actionAttemptFingerprint.value = "";
   actionOpen.value = true;
 }
@@ -390,6 +409,10 @@ async function confirmAction(): Promise<void> {
   }
   if (action.key === "set-warning"
     && !isValidWarningThreshold(actionForm.value)) {
+    ElMessage.warning("预警值必须是 0 到 99999 的整数");
+    return;
+  }
+  if (action.key === "batch-warning" && !isValidWarningThreshold(actionForm.value)) {
     ElMessage.warning("预警值必须是 0 到 99999 的整数");
     return;
   }
@@ -446,6 +469,33 @@ async function confirmAction(): Promise<void> {
   }
   operationLoading.value = true;
   try {
+    const expectedVersion = selectedRow.value?.version;
+    const batchItems = action.key === "batch-warning"
+      ? selection.value.map((item) => ({
+          id: item.id,
+          key: item.id,
+          version: item.version!,
+          payload: {
+            warningThreshold: actionForm.value,
+            expectedWarningThreshold: item.warningThreshold,
+            reason: actionForm.note
+          }
+        }))
+      : null;
+    if (batchItems) {
+      const attemptFingerprint = JSON.stringify({
+        resource: definition.value.key,
+        action: action.key,
+        payload: { items: batchItems },
+        expectedVersion: expectedVersion ?? null
+      });
+      if (actionAttemptFingerprint.value && actionAttemptFingerprint.value !== attemptFingerprint) {
+        actionIdempotencyKey.value = createIdempotencyKey(`${definition.value.key}:${action.key}`);
+        batchRequestId.value = createIdempotencyKey(`${definition.value.key}:batch-request`);
+        batchId.value = createIdempotencyKey(`${definition.value.key}:batch`);
+      }
+      actionAttemptFingerprint.value = attemptFingerprint;
+    }
     const payload: Record<string, unknown> = isPaymentReviewAction(action)
       ? paymentMutationInputFromRow(action.key, selectedRow.value!, actionForm.note)
       : isAfterSaleReviewAction(action)
@@ -505,6 +555,12 @@ async function confirmAction(): Promise<void> {
           expectedWarningThreshold: actionExpectedWarningThreshold.value,
           reason: actionForm.note
         }
+      : action.key === "batch-warning"
+      ? {
+          requestId: batchRequestId.value,
+          batchId: batchId.value,
+          items: batchItems
+        }
       : definition.value.key === "orders" && (action.key === "review" || action.key === "reject")
       ? {
           id: selectedRow.value!.id,
@@ -517,24 +573,50 @@ async function confirmAction(): Promise<void> {
           value: actionForm.value,
           remark: actionForm.note
         };
-    const expectedVersion = selectedRow.value?.version;
-    const attemptFingerprint = JSON.stringify({
-      resource: definition.value.key,
-      action: action.key,
-      payload,
-      expectedVersion: expectedVersion ?? null
-    });
-    if (actionAttemptFingerprint.value && actionAttemptFingerprint.value !== attemptFingerprint) {
-      actionIdempotencyKey.value = createIdempotencyKey(`${definition.value.key}:${action.key}`);
+    if (!batchItems) {
+      const attemptFingerprint = JSON.stringify({
+        resource: definition.value.key,
+        action: action.key,
+        payload,
+        expectedVersion: expectedVersion ?? null
+      });
+      if (actionAttemptFingerprint.value && actionAttemptFingerprint.value !== attemptFingerprint) {
+        actionIdempotencyKey.value = createIdempotencyKey(`${definition.value.key}:${action.key}`);
+      }
+      actionAttemptFingerprint.value = attemptFingerprint;
     }
-    actionAttemptFingerprint.value = attemptFingerprint;
     const rawResult = await transport.mutate<Row>(definition.value.key, action.key, payload, {
       idempotencyKey: actionIdempotencyKey.value,
       expectedVersion
     });
+    let batchResult = null;
+    if (action.key === "batch-warning" && transport.mode === "http") {
+      try {
+        batchResult = parseBatchResult(rawResult, {
+          requestId: batchRequestId.value,
+          batchId: batchId.value,
+          items: batchItems || []
+        });
+      } catch {
+        ElMessage.error("批量响应无效");
+        return;
+      }
+    }
     const result = action.key === "batch-tags"
       ? parseProductTagMutationResult(rawResult, selection.value.map((item) => item.id.trim()))
       : rawResult;
+    if (batchResult) {
+      const summary = summarizeBatchResult(batchResult);
+      const failed = summary.failures.map((failure) => `${failure.id}：${failure.reason}`).join("；");
+      const message = failed ? `${summary.detail}；${failed}` : summary.detail;
+      if (summary.tone === "success") ElMessage.success(message);
+      else if (summary.tone === "warning") ElMessage.warning(message);
+      else ElMessage.error(message);
+      syncRefreshPending = false;
+      actionOpen.value = false;
+      await load();
+      return;
+    }
     if (isPaymentReviewAction(action) && result.accountRecalculationPending === true) {
       ElMessage.warning("付款已审核，客户账款汇总将在稍后更新");
     } else if (definition.value.key === "orders" && (action.key === "review" || action.key === "reject") && result.accountRecalculationPending === true) {

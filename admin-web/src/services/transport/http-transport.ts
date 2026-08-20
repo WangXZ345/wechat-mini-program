@@ -61,6 +61,11 @@ import {
   parseRefundMutationResult,
   type RefundMutationAction
 } from "./refund-mutation-contract";
+import {
+  parseImportReceiptPage,
+  type ImportReceiptPage,
+  type ImportReceiptQuery
+} from "./import-contract";
 
 const SYNC_REQUEST_TIMEOUT_MS = 45_000;
 
@@ -176,6 +181,20 @@ export class HttpBffTransport implements AdminTransport {
   async getInventorySnapshot(id: string): Promise<InventorySnapshot> {
     const raw = await this.safeGet<unknown>(`/inventory/${encodeURIComponent(id)}`);
     return inventorySnapshotFromResourceRow(raw);
+  }
+
+  async getImportItems(id: string, query: ImportReceiptQuery): Promise<ImportReceiptPage> {
+    if (typeof id !== "string" || !id || id.length > 128
+      || !Number.isSafeInteger(query.page) || query.page < 1 || query.page > 100000
+      || !Number.isSafeInteger(query.pageSize) || query.pageSize < 1 || query.pageSize > 100
+      || query.page === 1 && query.cursor !== undefined) {
+      throw new ApiError("导入明细分页参数无效", "IMPORT_ITEMS_QUERY_INVALID", 400);
+    }
+    if (query.page > 1 && (typeof query.cursor !== "string" || !/^v1\.[A-Za-z0-9_-]{16,4096}$/.test(query.cursor))) {
+      throw new ApiError("请从导入明细第一页开始按顺序翻页", "IMPORT_ITEMS_CURSOR_REQUIRED", 400);
+    }
+    const raw = await this.safeGet<unknown>(`/imports/${encodeURIComponent(id)}/items`, { params: query });
+    return parseImportReceiptPage(raw, query);
   }
 
   async adjustInventory(

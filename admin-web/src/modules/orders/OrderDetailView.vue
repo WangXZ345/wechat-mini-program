@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElAlert, ElButton, ElEmpty, ElSkeleton, ElTag } from "element-plus";
+import { ElAlert, ElButton, ElEmpty, ElInput, ElSkeleton, ElTag } from "element-plus";
 import { ArrowLeft, RefreshCw } from "lucide-vue-next";
 import PageHeader from "@/components/PageHeader.vue";
 import { statusLabels } from "@/config/resources";
 import { toApiError } from "@/services/http/api-error";
 import { transport } from "@/services/transport";
 import type { ApiError } from "@/services/http/api-error";
-import type { OrderDetail, OrderLine } from "@/services/transport/order-query-contract";
+import type { OrderDetail, OrderInternalNote, OrderLine } from "@/services/transport/order-query-contract";
 import { formatDateTime, formatMoney } from "@/utils/format";
 
 const route = useRoute();
@@ -16,9 +16,47 @@ const router = useRouter();
 const order = ref<OrderDetail | null>(null);
 const loading = ref(false);
 const error = ref<ApiError | null>(null);
+const noteContent = ref("");
+const noteError = ref("");
+const savingNote = ref(false);
+const noteIdempotencyKey = ref("");
 
 const address = computed(() => order.value?.shippingAddress || order.value?.shippingAddressMasked || null);
 const hasSensitiveSection = computed(() => Boolean(order.value?.adminRemark || order.value?.riskLevelSnapshot));
+const canEditNotes = computed(() => order.value?.internalNotes !== undefined);
+const trimmedNoteContent = computed(() => noteContent.value.trim());
+const noteTooLong = computed(() => trimmedNoteContent.value.length > 500);
+const canSubmitNote = computed(() => Boolean(trimmedNoteContent.value) && !noteTooLong.value && !savingNote.value);
+
+function newIdempotencyKey(): string {
+  return globalThis.crypto?.randomUUID?.() || `order-remark-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function onNoteInput(): void {
+  noteError.value = "";
+  noteIdempotencyKey.value = newIdempotencyKey();
+}
+
+async function submitNote(): Promise<void> {
+  if (!order.value || !canSubmitNote.value) return;
+  const content = trimmedNoteContent.value;
+  if (!noteIdempotencyKey.value) noteIdempotencyKey.value = newIdempotencyKey();
+  savingNote.value = true;
+  noteError.value = "";
+  try {
+    const response = await transport.mutate("orders", "remark", { id: order.value.id, content, expectedVersion: order.value.version }, { idempotencyKey: noteIdempotencyKey.value, expectedVersion: order.value.version }) as { item?: { note?: OrderInternalNote; version?: number; updatedAt?: string } };
+    const item = response && response.item;
+    if (!item?.note || typeof item.version !== "number") throw new Error("订单内部备注响应无效");
+    order.value = { ...order.value, version: item.version, updatedAt: item.updatedAt || order.value.updatedAt, adminRemark: item.note.content, internalNotes: [item.note, ...(order.value.internalNotes || [])].slice(0, 100) };
+    noteContent.value = "";
+    noteIdempotencyKey.value = "";
+  } catch (reason) {
+    const apiError = toApiError(reason);
+    noteError.value = apiError.code === "DATA_VERSION_CONFLICT" ? "订单已更新，请刷新后再提交备注。" : apiError.message;
+  } finally {
+    savingNote.value = false;
+  }
+}
 
 function statusLabel(value: string): string {
   return statusLabels[value] || value || "-";
@@ -141,6 +179,18 @@ onMounted(() => void load());
         <dl class="compact-list">
           <div v-if="order.riskLevelSnapshot"><dt>下单时风险等级</dt><dd><el-tag :type="statusType(order.riskLevelSnapshot)" effect="light">{{ statusLabel(order.riskLevelSnapshot) }}</el-tag></dd></div>
           <div v-if="order.adminRemark"><dt>管理员备注</dt><dd>{{ order.adminRemark }}</dd></div>
+        </dl>
+      </section>
+
+      <section v-if="canEditNotes" class="surface detail-section" data-testid="order-internal-notes">
+        <div class="section-heading"><h2>内部备注</h2><span>{{ trimmedNoteContent.length }}/500</span></div>
+        <el-input v-model="noteContent" type="textarea" :rows="3" maxlength="501" placeholder="记录仅后台可见的订单跟进信息" @input="onNoteInput" />
+        <el-alert v-if="noteTooLong" title="备注不能超过 500 个字符" type="error" :closable="false" />
+        <el-alert v-else-if="noteError" :title="noteError" type="error" :closable="false" />
+        <div class="note-actions"><el-button type="primary" :loading="savingNote" :disabled="!canSubmitNote" data-testid="submit-internal-note" @click="submitNote">保存备注</el-button></div>
+        <p v-if="!(order.internalNotes || []).length" class="section-empty">暂无内部备注。</p>
+        <dl v-else class="compact-list">
+          <div v-for="note in order.internalNotes" :key="note.id"><dt>{{ note.authorName || note.authorRole || "管理员" }}</dt><dd>{{ note.content }}<small>{{ formatDateTime(note.createdAt) }}</small></dd></div>
         </dl>
       </section>
     </template>
@@ -316,6 +366,10 @@ onMounted(() => void load());
   color: var(--color-text-secondary);
   line-height: 20px;
 }
+
+.note-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.note-actions + .section-empty { margin-bottom: 0; }
+.compact-list small { display: block; margin-top: 4px; color: var(--color-text-secondary); font-size: 12px; }
 
 @media (max-width: 900px) {
   .summary-grid {

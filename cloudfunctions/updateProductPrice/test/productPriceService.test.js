@@ -77,7 +77,7 @@ test("normalizes actor and strict Web input without coercing integer cents", () 
   );
 });
 
-test("writes product, price log and public sync outbox atomically", async () => {
+test("writes product, safe operation log and public sync outbox atomically", async () => {
   const setup = service();
   const result = await setup.service.setPrice(command());
   const state = setup.db.snapshot();
@@ -96,8 +96,8 @@ test("writes product, price log and public sync outbox atomically", async () => 
     _id: state.price_logs[0]._id,
     businessKey: state.price_logs[0].businessKey,
     sourceType: "manual",
-    sourceId: "product-price-key-0001",
-    idempotencyKey: "product-price-key-0001",
+    sourceId: state.price_logs[0].sourceId,
+    idempotencyDigest: state.price_logs[0].idempotencyDigest,
     productId: "product-1",
     productIndex: "P000001",
     productName: "测试商品",
@@ -106,7 +106,6 @@ test("writes product, price log and public sync outbox atomically", async () => 
     changeType: "set",
     changeValue: 7200,
     operatorId: "admin-1",
-    operatorOpenid: "openid-1",
     operatorRole: "procurement",
     sourceClient: "admin_web",
     reason: "季度调价",
@@ -114,6 +113,24 @@ test("writes product, price log and public sync outbox atomically", async () => 
     versionAfter: 4,
     createdAt: new Date("2026-07-11T08:00:00.000Z")
   });
+  assert.match(state.price_logs[0].sourceId, /^product_price_operation:/);
+  assert.match(state.price_logs[0].idempotencyDigest, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(state.price_logs[0]).includes("product-price-key-0001"), false);
+  assert.equal(state.admin_operation_logs.length, 1);
+  const operation = state.admin_operation_logs[0];
+  assert.equal(operation.operatorId, "admin-1");
+  assert.equal(operation.operatorRole, "procurement");
+  assert.equal(operation.action, "change_price");
+  assert.equal(operation.resourceType, "product");
+  assert.equal(operation.resourceId, "product-1");
+  assert.match(operation.idempotencyDigest, /^[a-f0-9]{64}$/);
+  assert.deepEqual(operation.changeSummary, {
+    changedFields: ["price", "updatedAt", "version"],
+    before: { price: 6900, version: 3 },
+    after: { price: 7200, version: 4 }
+  });
+  assert.equal(JSON.stringify(operation).includes("openid-1"), false);
+  assert.equal(JSON.stringify(operation).includes("product-price-key-0001"), false);
   assert.equal(state.sync_events.length, 1);
   assert.equal(state.sync_events[0].eventType, "product.price_updated");
   assert.equal(state.sync_events[0].entityType, "product");
@@ -122,6 +139,7 @@ test("writes product, price log and public sync outbox atomically", async () => 
   assert.deepEqual(state.sync_events[0].changedFields, ["price", "updatedAt", "version"]);
   assert.equal(state.sync_events[0].audience, "public");
   assert.equal(state.sync_events[0].isPublic, true);
+  assert.equal(state.sync_events[0].operationId, operation.operationId);
 });
 
 test("same idempotency key replays one committed change and conflicting payload is rejected", async () => {
@@ -131,6 +149,7 @@ test("same idempotency key replays one committed change and conflicting payload 
   assert.equal(first.duplicate, false);
   assert.equal(repeated.duplicate, true);
   assert.equal(setup.db.snapshot().price_logs.length, 1);
+  assert.equal(setup.db.snapshot().admin_operation_logs.length, 1);
   assert.equal(setup.db.snapshot().sync_events.length, 1);
   await assert.rejects(
     setup.service.setPrice(command({ input: { ...command().input, newPriceCents: 7300 } })),
@@ -211,6 +230,7 @@ test("unchanged price does not increment version or emit logs", async () => {
   assert.equal(result.changed, false);
   assert.equal(result.version, 3);
   assert.equal(setup.db.snapshot().price_logs.length, 0);
+  assert.equal(setup.db.snapshot().admin_operation_logs.length, 0);
   assert.equal(setup.db.snapshot().sync_events.length, 0);
   assert.equal(setup.db.snapshot().products[0].version, 3);
 });
@@ -225,8 +245,8 @@ test("legacy mode may omit idempotency and optimistic-lock fields", async () => 
   });
   const state = setup.db.snapshot();
   assert.equal(result.afterPrice, 7000);
-  assert.equal(state.price_logs[0].idempotencyKey, "");
-  assert.match(state.price_logs[0].sourceId, /^legacy_/);
+  assert.equal(state.price_logs[0].idempotencyDigest, "");
+  assert.match(state.price_logs[0].sourceId, /^product_price_operation:/);
   assert.equal(state.price_logs[0].sourceClient, "miniprogram");
   assert.equal(state.price_logs[0].reason.length, 120);
 });
@@ -235,6 +255,7 @@ test("missing log collections are ensured before the transaction", async () => {
   const setup = service({ products: baseState().products });
   await setup.service.setPrice(command());
   assert.equal(setup.db.snapshot().price_logs.length, 1);
+  assert.equal(setup.db.snapshot().admin_operation_logs.length, 1);
   assert.equal(setup.db.snapshot().sync_events.length, 1);
 });
 
@@ -242,6 +263,13 @@ test("sync outbox failure rolls back the product and price log", async () => {
   const setup = service(baseState(), { database: { failAddCollection: "sync_events" } });
   const initial = setup.db.snapshot();
   await assert.rejects(setup.service.setPrice(command()), /simulated sync_events write failure/);
+  assertDomainStateUnchanged(setup.db.snapshot(), initial);
+});
+
+test("operation log failure rolls back product, price log and outbox", async () => {
+  const setup = service(baseState(), { database: { failAddCollection: "admin_operation_logs" } });
+  const initial = setup.db.snapshot();
+  await assert.rejects(setup.service.setPrice(command()), /simulated admin_operation_logs write failure/);
   assertDomainStateUnchanged(setup.db.snapshot(), initial);
 });
 

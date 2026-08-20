@@ -162,6 +162,7 @@ test("dispatch derives actor only from the validated session and maps MutationRe
       reason: "季度调价"
     },
     idempotencyKey: "product-price-key-0001",
+    requestId: "request-price-1",
     requireExpectedVersion: true
   });
   assert.deepEqual(result, {

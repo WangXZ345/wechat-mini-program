@@ -59,9 +59,10 @@ test("settings projection keeps a stable public id and strict defaults", () => {
     allowMultiplePaymentRecords: true,
     maxPaymentScreenshotCount: 7,
     lowStockDefaultThreshold: 50,
+    sessionIdleMinutes: 30,
     updatedAt: null
   });
-  assert.equal(Object.hasOwn(projected, "sessionIdleMinutes"), false);
+  assert.equal(projected.sessionIdleMinutes, 30);
 
   const explicitlyDisabled = projectResource("settings", {
     _id: "system_settings",
@@ -72,6 +73,27 @@ test("settings projection keeps a stable public id and strict defaults", () => {
   assert.equal(explicitlyDisabled.enableOfflineQrPayment, false);
   assert.equal(explicitlyDisabled.enableBankTransfer, false);
   assert.equal(explicitlyDisabled.allowMultiplePaymentRecords, false);
+});
+
+test("imports projection reads canonical nested counts and omits internal execution metadata", () => {
+  const projected = projectResource("imports", {
+    _id: "import-1",
+    fileName: "inventory.csv",
+    type: "inventory",
+    status: "partial",
+    counts: { total: 60, success: 50, failed: 3, skipped: 7, retryable: 10 },
+    operatorId: "secret-admin",
+    dedupeKey: "secret-dedupe",
+    mapping: { name: "商品名称" }
+  }, { role: "procurement", status: "active", permissions: ["inventory:import"] }, true);
+
+  assert.equal(projected.totalRows, 60);
+  assert.equal(projected.successRows, 50);
+  assert.equal(projected.failedRows, 3);
+  assert.equal(projected.skippedRows, 7);
+  assert.equal(Object.hasOwn(projected, "operatorId"), false);
+  assert.equal(Object.hasOwn(projected, "dedupeKey"), false);
+  assert.equal(Object.hasOwn(projected, "mapping"), false);
 });
 
 test("role boundaries remove injected procurement finance permissions", () => {
@@ -221,6 +243,7 @@ test("HTTP routes match AdminTransport generic paths", () => {
   assert.deepEqual(parseHttpRoute("/api/admin/v1/analytics/products", "GET"), { action: "productAnalytics" });
   assert.deepEqual(parseHttpRoute("/api/admin/v1/orders", "GET"), { action: "list", resource: "orders" });
   assert.deepEqual(parseHttpRoute("/api/admin/v1/orders/order-1", "GET"), { action: "get", resource: "orders", id: "order-1" });
+  assert.deepEqual(parseHttpRoute("/api/admin/v1/imports/import-1/items", "GET"), { action: "importItems", resource: "imports", id: "import-1" });
   assert.deepEqual(parseHttpRoute("/api/admin/v1/payments", "GET"), { action: "paymentList" });
   assert.deepEqual(parseHttpRoute("/api/admin/v1/payments/payment-1", "GET"), { action: "paymentDetail", id: "payment-1" });
   assert.deepEqual(parseHttpRoute("/api/admin/v1/settings/system", "GET"), { action: "get", resource: "settings", id: "system" });
@@ -325,5 +348,7 @@ test("envelopes always carry request and server metadata", () => {
   const failure = errorEnvelope(new ApiError("SERVICE_NOT_MIGRATED", "not ready", 501), "req-2");
   assert.equal(failure.statusCode, 501);
   assert.equal(failure.payload.error.code, "SERVICE_NOT_MIGRATED");
+  assert.equal(failure.payload.category, "INTERNAL_ERROR");
+  assert.equal(failure.payload.error.category, "INTERNAL_ERROR");
   assert.equal(failure.payload.meta.requestId, "req-2");
 });

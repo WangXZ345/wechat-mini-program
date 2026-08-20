@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
+const { createRequire } = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
 const {
@@ -21,6 +22,32 @@ const deploymentDocumentPath = path.join(
   "docs/web-admin-test-deployment-and-rollback.md"
 );
 let fixture;
+
+function copyInstalledRuntimePackage(packageName, fromDirectory, destinationNodeModules, visited = new Map()) {
+  const packageJsonPath = require.resolve(`${packageName}/package.json`, { paths: [fromDirectory] });
+  const packageDirectory = path.dirname(packageJsonPath);
+  const metadata = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  if (visited.has(metadata.name)) {
+    assert.equal(visited.get(metadata.name), metadata.version, `runtime package version conflict: ${metadata.name}`);
+    return;
+  }
+  visited.set(metadata.name, metadata.version);
+  const destination = path.join(destinationNodeModules, metadata.name);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.cpSync(packageDirectory, destination, {
+    recursive: true,
+    filter(sourcePath) {
+      const name = path.basename(sourcePath);
+      const relative = path.relative(packageDirectory, sourcePath);
+      return !relative.split(path.sep).includes("node_modules")
+        && !["test", "tests", "__tests__", ".github"].includes(name)
+        && !/\.(?:test|spec)\.js$/i.test(name);
+    }
+  });
+  for (const dependency of Object.keys(metadata.dependencies || {})) {
+    copyInstalledRuntimePackage(dependency, packageDirectory, destinationNodeModules, visited);
+  }
+}
 
 function readPackagingScript() {
   return fs.readFileSync(scriptPath, "utf8");
@@ -39,6 +66,11 @@ function fixtureRoot() {
       return !sourcePath.split(path.sep).includes("node_modules");
     }
   });
+  copyInstalledRuntimePackage(
+    "jszip",
+    path.join(source, "adminWebApi"),
+    path.join(target, "adminWebApi", "node_modules")
+  );
   fixture = { tempRoot, root };
   return fixture;
 }
@@ -214,6 +246,7 @@ test("guarded package copies the canonical return inspection and inventory adapt
   assert.match(script, /Copy-Item -LiteralPath \$canonicalReturnInspectionService -Destination \(Join-Path \$afterSalesTarget "common\\services\\returnInspectionService\.js"\) -Force/);
   assert.match(script, /Copy-Item -LiteralPath \$canonicalInventoryMutationService -Destination \(Join-Path \$afterSalesTarget "common\\services\\inventoryMutationService\.js"\) -Force/);
   assert.match(script, /Copy-Item -LiteralPath \$canonicalStockAlert -Destination \(Join-Path \$afterSalesTarget "_utils\\stockAlert\.js"\) -Force/);
+  assert.match(script, /Copy-Item -LiteralPath \$canonicalIdempotency -Destination \(Join-Path \$afterSalesTarget "idempotency\.js"\) -Force/);
   assert.match(script, /Copy-Item -LiteralPath \$canonicalIdempotency -Destination \(Join-Path \$afterSalesTarget "common\\idempotency\.js"\) -Force/);
   assert.match(script, /Copy-Item -LiteralPath \$canonicalSyncEvents -Destination \(Join-Path \$afterSalesTarget "common\\syncEvents\.js"\) -Force/);
   assert.match(script, /returnInspectionServiceSourceHash -ne \$returnInspectionServiceApiHash/);
@@ -391,10 +424,17 @@ test("guarded package executes in isolation and emits an auditable refund manife
   assert.deepEqual(deploymentDocumentFunctions(), manifest.functions);
   assert.equal(manifest.uploadPerformed, false);
   assert.equal(manifest.forbiddenFileCount, 0);
+  assert.equal(manifest.jszipVersion, "3.10.1");
+  assert.equal(manifest.jszipRuntimeBundled, true);
   assert.deepEqual(
     manifest.refundMutationRequiredUniqueIndexes,
     JSON.parse(JSON.stringify(REFUND_MUTATION_REQUIRED_UNIQUE_INDEXES))
   );
+
+  const candidateRequire = createRequire(path.join(result.output, "adminWebApi/lib/importFileParser.js"));
+  assert.equal(candidateRequire("jszip/package.json").version, "3.10.1");
+  assert.equal(typeof candidateRequire("./importFileParser.js").parseImportFile, "function");
+  assert.equal(typeof candidateRequire("./importService.js").createImportService, "function");
 
   const canonicalHash = sha256(
     path.join(fixtureRoot().root, "cloudfunctions/common/services/refundMutationService.js")
@@ -402,6 +442,12 @@ test("guarded package executes in isolation and emits an auditable refund manife
   const apiHash = sha256(path.join(result.output, "adminWebApi/lib/refundMutationService.js"));
   const afterSalesHash = sha256(
     path.join(result.output, "afterSales/common/services/refundMutationService.js")
+  );
+  const canonicalIdempotencyHash = sha256(
+    path.join(fixtureRoot().root, "cloudfunctions/common/idempotency.js")
+  );
+  const afterSalesTopLevelIdempotencyHash = sha256(
+    path.join(result.output, "afterSales/idempotency.js")
   );
   const canonicalApprovalHash = sha256(
     path.join(fixtureRoot().root, "cloudfunctions/common/services/orderApprovalService.js")
@@ -427,6 +473,8 @@ test("guarded package executes in isolation and emits an auditable refund manife
   assert.equal(manifest.canonicalRefundMutationServiceSha256, canonicalHash);
   assert.equal(apiHash, canonicalHash);
   assert.equal(afterSalesHash, canonicalHash);
+  assert.equal(manifest.canonicalIdempotencySha256, canonicalIdempotencyHash);
+  assert.equal(afterSalesTopLevelIdempotencyHash, canonicalIdempotencyHash);
   assert.equal(manifest.canonicalOrderApprovalServiceSha256, canonicalApprovalHash);
   assert.equal(apiApprovalHash, canonicalApprovalHash);
   assert.equal(reviewApprovalHash, canonicalApprovalHash);

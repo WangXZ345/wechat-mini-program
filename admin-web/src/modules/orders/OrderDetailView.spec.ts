@@ -5,7 +5,7 @@ import { ApiError } from "@/services/http/api-error";
 import type { OrderDetail } from "@/services/transport/order-query-contract";
 import OrderDetailView from "./OrderDetailView.vue";
 
-const transportMock = vi.hoisted(() => ({ get: vi.fn() }));
+const transportMock = vi.hoisted(() => ({ get: vi.fn(), mutate: vi.fn() }));
 const routerMock = vi.hoisted(() => ({ back: vi.fn() }));
 
 vi.mock("@/services/transport", () => ({ transport: transportMock }));
@@ -157,5 +157,51 @@ describe("OrderDetailView", () => {
 
     expect(wrapper.text()).toContain("订单不存在或已不可见");
     expect(wrapper.find('[data-testid="order-summary"]').exists()).toBe(false);
+  });
+
+  it("shows the editor only for permission-gated internalNotes, disables blank submit, and submits the real mutation contract", async () => {
+    transportMock.get.mockResolvedValue({ ...structuredClone(detail), internalNotes: [] });
+    transportMock.mutate.mockResolvedValue({ item: { id: "order-1", note: { id: "note-1", content: "<img src=x onerror=alert(1)>", authorId: "admin-1", authorRole: "customer_service", authorName: "客服", createdAt: "2026-08-15T00:00:00.000Z" }, version: 8, updatedAt: "2026-08-15T00:00:00.000Z" } });
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-testid="order-internal-notes"]').text()).toContain("内部备注");
+    const textarea = wrapper.get("textarea");
+    expect(wrapper.get('[data-testid="submit-internal-note"]').attributes("disabled")).toBeDefined();
+    await textarea.setValue("<img src=x onerror=alert(1)>");
+    await wrapper.get('[data-testid="submit-internal-note"]').trigger("click");
+    await flushPromises();
+    expect(transportMock.mutate).toHaveBeenCalledWith("orders", "remark", { id: "order-1", content: "<img src=x onerror=alert(1)>", expectedVersion: 7 }, expect.objectContaining({ idempotencyKey: expect.any(String), expectedVersion: 7 }));
+    expect(wrapper.text()).toContain("<img src=x onerror=alert(1)>");
+    expect(wrapper.find("img").exists()).toBe(false);
+  });
+
+  it("reuses the key after a failed request and presents a version conflict", async () => {
+    transportMock.get.mockResolvedValue({ ...structuredClone(detail), internalNotes: [] });
+    transportMock.mutate
+      .mockRejectedValueOnce(new ApiError("版本冲突", "DATA_VERSION_CONFLICT", 409))
+      .mockResolvedValueOnce({ item: { id: "order-1", note: { id: "note-2", content: "重试", authorId: "admin-1", authorRole: "customer_service", authorName: "客服", createdAt: "2026-08-15T00:00:00.000Z" }, version: 8, updatedAt: "2026-08-15T00:00:00.000Z" } });
+    const wrapper = await mountPage();
+    await wrapper.get("textarea").setValue("重试");
+    await wrapper.get('[data-testid="submit-internal-note"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("订单已更新，请刷新后再提交备注");
+    const firstKey = transportMock.mutate.mock.calls[0]?.[3]?.idempotencyKey;
+    await wrapper.get('[data-testid="submit-internal-note"]').trigger("click");
+    await flushPromises();
+    expect(transportMock.mutate.mock.calls[1]?.[3]?.idempotencyKey).toBe(firstKey);
+  });
+
+  it("reuses the unchanged note key after a non-conflict request failure", async () => {
+    transportMock.get.mockResolvedValue({ ...structuredClone(detail), internalNotes: [] });
+    transportMock.mutate
+      .mockRejectedValueOnce(new ApiError("网络暂不可用", "NETWORK_ERROR", 503))
+      .mockResolvedValueOnce({ item: { id: "order-1", note: { id: "note-3", content: "网络重试", authorId: "admin-1", authorRole: "customer_service", authorName: "客服", createdAt: "2026-08-15T00:00:00.000Z" }, version: 8, updatedAt: "2026-08-15T00:00:00.000Z" } });
+    const wrapper = await mountPage();
+    await wrapper.get("textarea").setValue("网络重试");
+    await wrapper.get('[data-testid="submit-internal-note"]').trigger("click");
+    await flushPromises();
+    const firstKey = transportMock.mutate.mock.calls[0]?.[3]?.idempotencyKey;
+    await wrapper.get('[data-testid="submit-internal-note"]').trigger("click");
+    await flushPromises();
+    expect(transportMock.mutate.mock.calls[1]?.[3]?.idempotencyKey).toBe(firstKey);
   });
 });

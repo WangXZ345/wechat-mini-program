@@ -156,6 +156,7 @@ function baseState(overrides = {}) {
       updatedAt: new Date("2026-07-10T08:00:00.000Z")
     }],
     price_logs: [],
+    admin_operation_logs: [],
     sync_events: [],
     ...clone(overrides)
   };
@@ -164,6 +165,7 @@ function baseState(overrides = {}) {
 function assertDomainStateUnchanged(actual, expected) {
   assert.deepEqual(actual.products, expected.products);
   assert.deepEqual(actual.price_logs, expected.price_logs);
+  assert.deepEqual(actual.admin_operation_logs, expected.admin_operation_logs);
   assert.deepEqual(actual.sync_events, expected.sync_events);
 }
 

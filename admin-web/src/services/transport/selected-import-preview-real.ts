@@ -3,5 +3,5 @@ import type { ImportMode, ImportPreviewRow } from "@/modules/imports/mock-import
 export function buildMockImportPreview(_mode: ImportMode, _fileName = ""): ImportPreviewRow[] {
   void _mode;
   void _fileName;
-  return [];
+  throw new Error("Mock import preview cannot run in real data mode");
 }

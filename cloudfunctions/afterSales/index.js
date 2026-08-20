@@ -1211,10 +1211,10 @@ async function legacyConfirmReturnReceived(event = {}) {
     return { afterSaleId: afterSale._id, afterSaleStatus: "received" };
     });
     const finalResult = firstSuccessData(result);
-    await finishIdempotentAction(db, begin.recordId, { data: finalResult });
+    await finishIdempotentAction(db, begin.recordId, { data: finalResult }, begin.executionToken);
     return finalResult;
   } catch (err) {
-    await failIdempotentAction(db, begin.recordId, err);
+    await failIdempotentAction(db, begin.recordId, err, begin.executionToken);
     throw err;
   }
 }
@@ -1771,10 +1771,10 @@ async function processOfflineRefund(event = {}) {
     }).catch(() => null);
   }
   const finalResult = firstSuccessData(result);
-  await finishIdempotentAction(db, begin.recordId, { data: finalResult });
+  await finishIdempotentAction(db, begin.recordId, { data: finalResult }, begin.executionToken);
   return finalResult;
   } catch (err) {
-    await failIdempotentAction(db, begin.recordId, err);
+    await failIdempotentAction(db, begin.recordId, err, begin.executionToken);
     throw err;
   }
 }
@@ -1912,10 +1912,10 @@ async function completeAfterSale(event = {}) {
       return { afterSaleId: afterSale._id, afterSaleStatus: "completed" };
     });
     const finalResult = firstSuccessData(result);
-    await finishIdempotentAction(db, begin.recordId, { data: finalResult });
+    await finishIdempotentAction(db, begin.recordId, { data: finalResult }, begin.executionToken);
     return finalResult;
   } catch (err) {
-    await failIdempotentAction(db, begin.recordId, err);
+    await failIdempotentAction(db, begin.recordId, err, begin.executionToken);
     throw err;
   }
 }

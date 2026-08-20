@@ -5,6 +5,7 @@ const API_ROOT = "/api/admin/v1";
 const ALLOWED_METHODS = new Set(["GET", "OPTIONS", "POST"]);
 const ALLOW_METHODS = "GET, POST, OPTIONS";
 const DEFAULT_MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+const DEFAULT_MAX_IMPORT_REQUEST_BODY_BYTES = 15 * 1024 * 1024;
 const MAX_UPSTREAM_ERROR_BODY_BYTES = 64 * 1024;
 const REQUEST_HEADERS = new Set([
   "accept",
@@ -155,7 +156,19 @@ function writeLocalError(request, response, statusCode, code, extraHeaders = {})
   });
 }
 
-function requestBodyLimit(config) {
+function isImportUploadPath(target) {
+  const pathname = String(target || "").split("?", 1)[0];
+  return pathname === `${API_ROOT}/imports/preview`
+    || pathname === `${API_ROOT}/imports/confirm`
+    || pathname === `${API_ROOT}/imports/resume`;
+}
+
+function requestBodyLimit(config, target) {
+  if (isImportUploadPath(target)) {
+    return Number.isSafeInteger(config.maxImportRequestBodyBytes) && config.maxImportRequestBodyBytes > 0
+      ? config.maxImportRequestBodyBytes
+      : DEFAULT_MAX_IMPORT_REQUEST_BODY_BYTES;
+  }
   return Number.isSafeInteger(config.maxRequestBodyBytes) && config.maxRequestBodyBytes > 0
     ? config.maxRequestBodyBytes
     : DEFAULT_MAX_REQUEST_BODY_BYTES;
@@ -429,7 +442,7 @@ export function createProxyHandler(config, requestUpstream = httpsRequest) {
       );
       return true;
     }
-    const maxRequestBodyBytes = requestBodyLimit(config);
+    const maxRequestBodyBytes = requestBodyLimit(config, parsed.target);
     if ((declaredBodyLength(request) ?? 0) > maxRequestBodyBytes) {
       writeLocalError(request, response, 413, "BFF_REQUEST_TOO_LARGE");
       return true;

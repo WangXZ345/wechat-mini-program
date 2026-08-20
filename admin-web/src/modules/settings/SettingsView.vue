@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { onMounted, reactive, ref } from "vue";
 import {
   ElAlert,
   ElButton,
@@ -37,7 +37,7 @@ const loading = ref(false);
 const saving = ref(false);
 const error = ref<ApiError | null>(null);
 const loaded = ref(false);
-const readOnly = computed(() => transport.mode === "http");
+const baseline = ref<SettingsRecord | null>(null);
 const form = reactive<SettingsRecord>({
   id: "system",
   version: 0,
@@ -57,6 +57,7 @@ async function load(): Promise<void> {
   try {
     const result = await transport.get<SettingsRecord>("settings", "system");
     Object.assign(form, result);
+    baseline.value = structuredClone(result);
     loaded.value = true;
   } catch (reason) {
     error.value = toApiError(reason);
@@ -66,6 +67,21 @@ async function load(): Promise<void> {
 }
 
 async function save(): Promise<void> {
+  const input = {
+    enableOfflineQrPayment: form.enableOfflineQrPayment,
+    enableBankTransfer: form.enableBankTransfer,
+    enableWechatPay: form.enableWechatPay,
+    requirePaymentProofForOfflinePayment: form.requirePaymentProofForOfflinePayment,
+    allowMultiplePaymentRecords: form.allowMultiplePaymentRecords,
+    maxPaymentScreenshotCount: form.maxPaymentScreenshotCount,
+    lowStockDefaultThreshold: form.lowStockDefaultThreshold,
+    sessionIdleMinutes: form.sessionIdleMinutes ?? 30,
+    expectedVersion: form.version
+  };
+  if (baseline.value && Object.entries(input).every(([key, value]) => key === "expectedVersion" || baseline.value![key as keyof SettingsRecord] === value)) {
+    ElMessage.info("系统设置未发生变化");
+    return;
+  }
   try {
     await ElMessageBox.confirm(
       "这些设置会影响付款、库存预警或管理员会话。",
@@ -77,11 +93,13 @@ async function save(): Promise<void> {
   }
   saving.value = true;
   try {
-    const result = await transport.mutate<SettingsRecord>("settings", "update", { ...form }, {
-      idempotencyKey: createIdempotencyKey("settings:update"),
-      expectedVersion: form.version
+    const result = await transport.mutate<SettingsRecord>("settings", "update", input, {
+      idempotencyKey: createIdempotencyKey("settings:update")
     });
-    if (result.item) Object.assign(form, result.item);
+    if (result.item) {
+      Object.assign(form, result.item);
+      baseline.value = structuredClone(result.item);
+    }
     ElMessage.success(result.message);
   } catch (reason) {
     const apiError = toApiError(reason);
@@ -99,10 +117,8 @@ onMounted(() => void load());
     <page-header title="系统设置" description="维护付款、库存预警和管理员会话的基础规则">
       <span v-if="loaded" class="updated-at">版本 {{ form.version }} · {{ formatDateTime(form.updatedAt) }}</span>
       <el-button :icon="RefreshCw" :loading="loading" @click="load">重新加载</el-button>
-      <el-button type="primary" :icon="Save" :loading="saving" :disabled="!loaded || readOnly" @click="save">保存设置</el-button>
+      <el-button type="primary" :icon="Save" :loading="saving" :disabled="!loaded" @click="save">保存设置</el-button>
     </page-header>
-
-    <el-alert v-if="readOnly" title="当前页面为只读，设置写入尚未开放" type="warning" :closable="false" show-icon />
 
     <div v-if="error" class="settings-state surface">
       <el-alert :title="error.message" :description="`错误码：${error.code}`" type="error" :closable="false" show-icon />
@@ -111,12 +127,12 @@ onMounted(() => void load());
 
     <section v-else class="surface settings-surface">
       <el-skeleton v-if="loading && !loaded" animated :rows="10" />
-      <el-form v-else label-position="left" label-width="290px" :disabled="readOnly">
+      <el-form v-else label-position="left" label-width="290px">
         <section class="settings-section">
           <header><div><h2>付款规则</h2><p>配置付款方式与凭证要求</p></div><el-tag type="warning" effect="plain">敏感设置</el-tag></header>
           <el-form-item label="允许线下二维码付款"><el-switch v-model="form.enableOfflineQrPayment" /></el-form-item>
           <el-form-item label="允许银行卡转账"><el-switch v-model="form.enableBankTransfer" /></el-form-item>
-          <el-form-item label="启用微信支付"><el-switch v-model="form.enableWechatPay" /></el-form-item>
+          <el-form-item label="启用微信支付"><el-switch v-model="form.enableWechatPay" disabled /></el-form-item>
           <el-form-item label="线下付款必须上传凭证"><el-switch v-model="form.requirePaymentProofForOfflinePayment" /></el-form-item>
           <el-form-item label="允许同一订单多笔付款记录"><el-switch v-model="form.allowMultiplePaymentRecords" /></el-form-item>
           <el-form-item label="单次最多付款截图数"><el-input-number v-model="form.maxPaymentScreenshotCount" :min="1" :max="9" controls-position="right" /></el-form-item>

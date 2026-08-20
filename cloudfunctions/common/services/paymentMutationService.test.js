@@ -12,6 +12,14 @@ const sharedIdempotency = require("../idempotency");
 
 const FIXED_DATE = new Date("2026-07-14T00:00:00.000Z");
 
+function operationIdForKey(value) {
+  return `payment_operation:${crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 40)}`;
+}
+
+function keyDigest(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 16);
+}
+
 function bareService() {
   return createPaymentMutationService({ db: {} });
 }
@@ -162,15 +170,19 @@ function database(initial = {}, options = {}) {
     return Object.entries(where).every(([key, expected]) => row[key] === expected);
   }
 
-  function collection(target, name) {
+  function collection(target, name, inTransaction = false) {
     if (!target[name]) target[name] = [];
     const queryState = { where: {}, limit: Infinity, orderBy: null };
     const query = {
-      where(where) { queryState.where = where || {}; return query; },
+      where(where) {
+        if (inTransaction && options.transactionDocOnly) throw new Error("CloudBase transactions do not support where");
+        queryState.where = where || {};
+        return query;
+      },
       limit(limit) { queryState.limit = limit; return query; },
       orderBy(field, direction) { queryState.orderBy = { field, direction }; return query; },
       async get() {
-        if (options.observe) options.observe({ operation: "get", collection: name, where: structuredClone(queryState.where), limit: queryState.limit });
+        if (options.observe) options.observe({ operation: "get", collection: name, where: structuredClone(queryState.where), limit: queryState.limit, inTransaction });
         if (options.failOn && options.failOn({ operation: "get", collection: name })) throw new Error(`forced ${name}.get failure`);
         let rows = target[name].filter((row) => matches(row, queryState.where));
         if (queryState.orderBy) {
@@ -209,6 +221,8 @@ function database(initial = {}, options = {}) {
             return { stats: { updated: 1 } };
           },
           async set({ data }) {
+            if (options.observe) options.observe({ operation: "set", collection: name, id, data: structuredClone(data) });
+            if (options.failOn && options.failOn({ operation: "set", collection: name, id, data })) throw new Error(`forced ${name}.set failure`);
             const index = target[name].findIndex((item) => item._id === id);
             const row = { ...structuredClone(data), _id: id };
             if (index >= 0) target[name][index] = row;
@@ -223,11 +237,11 @@ function database(initial = {}, options = {}) {
 
   const db = {
     serverDate: options.serverDate || (() => new Date(FIXED_DATE)),
-    collection(name) { return collection(state, name); },
+    collection(name) { return collection(state, name, false); },
     async createCollection(name) { if (!state[name]) state[name] = []; },
     async runTransaction(executor) {
       const draft = structuredClone(state);
-      const tx = { collection: (name) => collection(draft, name), serverDate: db.serverDate };
+      const tx = { collection: (name) => collection(draft, name, true), serverDate: db.serverDate };
       const result = await executor(tx);
       state = draft;
       return result;
@@ -408,7 +422,8 @@ test("Web confirmation calculates the unpaid cents server-side and closes the or
   assert.equal(state.payment_records[0].reviewUnpaidAmount, 0);
   assert.equal(state.payment_records[0].reviewPaymentMethod, "offline_qr");
   assert.equal(state.payment_records[0].reviewRemark, "已核对到账");
-  assert.equal(state.payment_records[0].reviewIdempotencyKey, "confirm-key-0001");
+  assert.equal(state.payment_records[0].reviewIdempotencyKeyDigest, keyDigest("confirm-key-0001"));
+  assert.equal(Object.hasOwn(state.payment_records[0], "reviewIdempotencyKey"), false);
   assert.match(state.payment_records[0].reviewBusinessKey, /^payment_mutation:/);
   assert.deepEqual({ paid: state.orders[0].paidAmount, unpaid: state.orders[0].unpaidAmount, status: state.orders[0].status, payment: state.orders[0].paymentStatus, delivery: state.orders[0].deliveryStatus, version: state.orders[0].version }, { paid: 1000, unpaid: 0, status: "paid", payment: "paid", delivery: "waiting_shipping", version: 5 });
   assert.deepEqual({ paid: state.customer_accounts[0].totalPaidAmount, unpaid: state.customer_accounts[0].totalUnpaidAmount }, { paid: 1000, unpaid: 0 });
@@ -426,7 +441,7 @@ test("Web confirmation calculates the unpaid cents server-side and closes the or
   assert.equal(recalculationContext.userOpenid, "openid-private");
   assert.equal(result.accountRecalculationPending, false);
   assert.equal(state.orders[0].accountRecalculationPending, false);
-  assert.equal(state.orders[0].accountRecalculationOwner, "confirm-key-0001");
+  assert.equal(state.orders[0].accountRecalculationOwner, operationIdForKey("confirm-key-0001"));
   assert.equal(state.orders[0].accountRecalculationExpectedVersion, 5);
   assert.deepEqual({
     root: state.admin_operation_logs[0].rootOperationId,
@@ -435,8 +450,37 @@ test("Web confirmation calculates the unpaid cents server-side and closes the or
     index: state.admin_operation_logs[0].operationMemberIndex,
     seed: state.admin_operation_logs[0].operationSeedOrderId,
     requestedStatus: state.admin_operation_logs[0].requestedPaymentStatus
-  }, { root: "confirm-key-0001", kind: "web_payment", count: 1, index: 0, seed: "order-1", requestedStatus: "paid" });
+  }, { root: operationIdForKey("confirm-key-0001"), kind: "web_payment", count: 1, index: 0, seed: "order-1", requestedStatus: "paid" });
   assert.deepEqual(state.orders[0].paidMarkedAt, FIXED_DATE);
+});
+
+test("Web confirmation keeps every CloudBase transaction query doc-addressable", async () => {
+  const db = database(fixture(), { transactionDocOnly: true });
+  const result = await confirm(paymentService(db, { idempotency: sharedIdempotency }), {}, "doc-only-web-payment");
+  assert.equal(result.status, "paid");
+  assert.equal(db.snapshot().payment_records[0].version, 3);
+});
+
+test("Web recalculation completion also keeps its CloudBase transaction doc-addressable", async () => {
+  const db = database(fixture(), { transactionDocOnly: true });
+  const result = await confirm(paymentService(db, {
+    idempotency: sharedIdempotency,
+    async recalculateAccount() { return { ok: true }; }
+  }), {}, "doc-only-web-recalculation");
+  assert.equal(result.accountRecalculationPending, false);
+  assert.equal(db.snapshot().orders[0].accountRecalculationPending, false);
+});
+
+test("Web confirmation persists only a digest of the client idempotency key", async () => {
+  const key = "private-client-idempotency-key";
+  const db = database(fixture());
+  await confirm(paymentService(db, { idempotency: sharedIdempotency }), {}, key);
+  const state = db.snapshot();
+  for (const collectionName of ["payment_records", "admin_operation_logs", "account_logs", "delivery_logs"]) {
+    assert.equal(JSON.stringify(state[collectionName]).includes(key), false, `${collectionName} leaked the raw key`);
+  }
+  assert.match(state.payment_records[0].reviewIdempotencyKeyDigest, /^[a-f0-9]{16}$/);
+  assert.equal(Object.hasOwn(state.payment_records[0], "reviewIdempotencyKey"), false);
 });
 
 test("public mutation timestamps stay real Dates when CloudBase serverDate is a write command", async () => {
@@ -603,7 +647,8 @@ test("post-commit reads and marker cleanup failures never turn a committed payme
 });
 
 test("transaction fails closed on an existing mutation audit or delivery business key", async () => {
-  const auditDb = database(fixture({ state: { admin_operation_logs: [{ _id: "audit-existing", businessKey: "payment_mutation:conflicting-business-key:payment-1:confirm" }] } }));
+  const auditOperationId = operationIdForKey("conflicting-business-key");
+  const auditDb = database(fixture({ state: { admin_operation_logs: [{ _id: "audit-existing", businessKey: `payment_mutation:${auditOperationId}:payment-1:confirm` }] } }));
   await assert.rejects(
     () => confirm(paymentService(auditDb), {}, "conflicting-business-key"),
     (error) => error.code === "BUSINESS_LOG_CONFLICT"
@@ -612,7 +657,7 @@ test("transaction fails closed on an existing mutation audit or delivery busines
 
   const deliveryOperations = [];
   const deliveryDb = database(
-    fixture({ state: { delivery_logs: [{ _id: "delivery-existing", businessKey: "payment_delivery:conflicting-delivery-key:payment-1" }] } }),
+    fixture({ state: { delivery_logs: [{ _id: "delivery-existing", businessKey: `payment_delivery:${operationIdForKey("conflicting-delivery-key")}:payment-1` }] } }),
     { observe: (entry) => deliveryOperations.push(entry) }
   );
   await assert.rejects(
@@ -629,7 +674,7 @@ test("transaction fails closed on an existing mutation audit or delivery busines
   assert.equal(deliveryOperations[deliveryPreflightIndex].limit, 2);
   assert.equal(firstBusinessWriteIndex, -1);
 
-  const accountLogDb = database(fixture({ state: { account_logs: [{ _id: "account-log-existing", businessKey: "payment_receipt:conflicting-account-key:payment-1" }] } }));
+  const accountLogDb = database(fixture({ state: { account_logs: [{ _id: "account-log-existing", businessKey: `payment_receipt:${operationIdForKey("conflicting-account-key")}:payment-1` }] } }));
   await assert.rejects(
     () => confirm(paymentService(accountLogDb), {}, "conflicting-account-key"),
     (error) => error.code === "ACCOUNT_LOG_CONFLICT"
@@ -639,7 +684,7 @@ test("transaction fails closed on an existing mutation audit or delivery busines
 
 test("unchanged delivery status preflights its business key before writes and remains recoverable", async () => {
   const key = "delivery-unchanged-preflight";
-  const businessKey = `payment_delivery:${key}:payment-1`;
+  const businessKey = `payment_delivery:${operationIdForKey(key)}:payment-1`;
   const protectedCollections = ["payment_records", "customer_accounts", "account_logs", "orders", "delivery_logs", "sync_events"];
 
   const conflictingOperations = [];
@@ -708,8 +753,8 @@ test("legacy batch preflights every child delivery key before any business write
       orderId: "order-2",
       orderNo: "SO-002"
     };
-    const firstBusinessKey = `payment_delivery:${key}:order-1:payment-1`;
-    const secondBusinessKey = `payment_delivery:${key}:order-2:payment-2`;
+    const firstBusinessKey = `payment_delivery:${operationIdForKey(key)}:order-1:payment-1`;
+    const secondBusinessKey = `payment_delivery:${operationIdForKey(key)}:order-2:payment-2`;
     const operations = [];
     const db = database(fixture({
       state: {
@@ -894,6 +939,22 @@ test("Web confirmation rejects stale latest record, order state, record status, 
     await assert.rejects(() => confirm(paymentService(db), input), (error) => error.code === code);
     assert.equal(db.snapshot().admin_operation_logs.length, 0);
   }
+});
+
+test("the real payment mutation path returns only safe current-version guidance on a stale write", async () => {
+  const db = database(fixture());
+  await assert.rejects(
+    () => confirm(paymentService(db, { idempotency: sharedIdempotency }), { expectedVersion: 1 }, "payment-cas-key-0001"),
+    (error) => {
+      assert.equal(error.code, "DATA_VERSION_CONFLICT");
+      assert.equal(error.statusCode, 409);
+      assert.deepEqual(error.details, { currentVersion: 2, refreshRequired: true });
+      assert.equal(JSON.stringify(error).includes("openid-private"), false);
+      assert.equal(JSON.stringify(error).includes("cloud://private-proof"), false);
+      return true;
+    }
+  );
+  assert.equal(db.snapshot().admin_operation_logs.length, 0);
 });
 
 test("idempotent replay is read-only, changed payload conflicts, and processing recovery uses one matching business log", async () => {
@@ -1299,10 +1360,10 @@ test("failure of any transactional companion write rolls back payment, order, ac
     ["payment_records", "update"],
     ["orders", "update"],
     ["customer_accounts", "update"],
-    ["account_logs", "add"],
-    ["delivery_logs", "add"],
-    ["admin_operation_logs", "add"],
-    ["sync_events", "add"]
+    ["account_logs", "set"],
+    ["delivery_logs", "set"],
+    ["admin_operation_logs", "set"],
+    ["sync_events", "set"]
   ];
   for (const [collection, operation] of failures) {
     const db = database(fixture(), { failOn: (entry) => entry.collection === collection && entry.operation === operation });
@@ -1330,14 +1391,14 @@ test("customer account creation and the second sync event are both inside the ro
   let syncAdds = 0;
   const secondSyncDb = database(fixture(), {
     failOn(entry) {
-      if (entry.collection === "sync_events" && entry.operation === "add") {
+      if (entry.collection === "sync_events" && entry.operation === "set") {
         syncAdds += 1;
         return syncAdds === 2;
       }
       return false;
     }
   });
-  await assert.rejects(() => confirm(paymentService(secondSyncDb), {}, "rollback-second-sync"), /forced sync_events\.add failure/);
+  await assert.rejects(() => confirm(paymentService(secondSyncDb), {}, "rollback-second-sync"), /forced sync_events\.set failure/);
   const state = secondSyncDb.snapshot();
   assert.equal(state.payment_records[0].status, "pending_confirm");
   assert.equal(state.orders[0].status, "pending_payment_confirm");
@@ -1410,7 +1471,7 @@ test("legacy batch requires stable dual customer identity and accepts exactly 10
   assert.equal(audits.length, 100);
   assert.deepEqual(new Set(audits.map((log) => log.operationMemberIndex)), new Set(Array.from({ length: 100 }, (_, index) => index)));
   for (const audit of audits) {
-    assert.equal(audit.rootOperationId, "batch-boundary-100");
+    assert.equal(audit.rootOperationId, operationIdForKey("batch-boundary-100"));
     assert.equal(audit.operationKind, "legacy_payment");
     assert.equal(audit.operationMemberCount, 100);
     assert.equal(audit.operationSeedOrderId, "order-0");
@@ -1477,22 +1538,22 @@ test("account recalculation marker ownership prevents an older A completion from
   const operationA = updatePartial("recalc-owner-A", 100);
   await waitForRecalculationCount(1);
   const afterA = db.snapshot().orders[0];
-  assert.deepEqual({ pending: afterA.accountRecalculationPending, owner: afterA.accountRecalculationOwner, expectedVersion: afterA.accountRecalculationExpectedVersion }, { pending: true, owner: "recalc-owner-A", expectedVersion: 5 });
+  assert.deepEqual({ pending: afterA.accountRecalculationPending, owner: afterA.accountRecalculationOwner, expectedVersion: afterA.accountRecalculationExpectedVersion }, { pending: true, owner: operationIdForKey("recalc-owner-A"), expectedVersion: 5 });
 
   const operationB = updatePartial("recalc-owner-B", 100);
   await waitForRecalculationCount(2);
   const afterB = db.snapshot().orders[0];
-  assert.deepEqual({ pending: afterB.accountRecalculationPending, owner: afterB.accountRecalculationOwner, expectedVersion: afterB.accountRecalculationExpectedVersion }, { pending: true, owner: "recalc-owner-B", expectedVersion: 6 });
+  assert.deepEqual({ pending: afterB.accountRecalculationPending, owner: afterB.accountRecalculationOwner, expectedVersion: afterB.accountRecalculationExpectedVersion }, { pending: true, owner: operationIdForKey("recalc-owner-B"), expectedVersion: 6 });
 
   pendingRecalculations[0]({ ok: true });
   const resultA = await operationA;
   assert.equal(resultA.accountRecalculationPending, true);
-  assert.deepEqual({ pending: db.snapshot().orders[0].accountRecalculationPending, owner: db.snapshot().orders[0].accountRecalculationOwner }, { pending: true, owner: "recalc-owner-B" });
+  assert.deepEqual({ pending: db.snapshot().orders[0].accountRecalculationPending, owner: db.snapshot().orders[0].accountRecalculationOwner }, { pending: true, owner: operationIdForKey("recalc-owner-B") });
 
   pendingRecalculations[1]({ ok: true });
   const resultB = await operationB;
   assert.equal(resultB.accountRecalculationPending, false);
-  assert.deepEqual({ pending: db.snapshot().orders[0].accountRecalculationPending, owner: db.snapshot().orders[0].accountRecalculationOwner, expectedVersion: db.snapshot().orders[0].accountRecalculationExpectedVersion }, { pending: false, owner: "recalc-owner-B", expectedVersion: 6 });
+  assert.deepEqual({ pending: db.snapshot().orders[0].accountRecalculationPending, owner: db.snapshot().orders[0].accountRecalculationOwner, expectedVersion: db.snapshot().orders[0].accountRecalculationExpectedVersion }, { pending: false, owner: operationIdForKey("recalc-owner-B"), expectedVersion: 6 });
 });
 
 test("completed idempotent replay preserves success or pending without recalculating again", async () => {
@@ -1551,7 +1612,7 @@ test("processing recovery returns A frozen partial result after B advances the s
   const source = database(fixture());
   await paymentService(source).updateLegacyPayment({ actor: actor(), input: inputA, idempotencyKey: keyA, allowMissingIdempotencyKey: true });
   const afterA = source.snapshot();
-  const auditA = afterA.admin_operation_logs.find((log) => log.rootOperationId === keyA);
+  const auditA = afterA.admin_operation_logs.find((log) => log.rootOperationId === operationIdForKey(keyA));
   assert.ok(auditA);
   afterA.idempotency_records = [staleProcessingRecord(
     "payment_legacy_partial_paid",
@@ -1801,14 +1862,14 @@ test("the immutable operation journal freezes public result and recovery evidenc
   });
   assert.deepEqual(audit.journal.receipt, {
     required: true,
-    businessKey: `payment_receipt:${key}:payment-1`,
+    businessKey: `payment_receipt:${operationIdForKey(key)}:payment-1`,
     accountId: "account-1",
     beforePaymentMutationVersion: 0,
     afterPaymentMutationVersion: 1
   });
   assert.deepEqual(audit.journal.delivery, {
     changed: true,
-    businessKey: `payment_delivery:${key}:payment-1`,
+    businessKey: `payment_delivery:${operationIdForKey(key)}:payment-1`,
     beforeStatus: "pending",
     afterStatus: "waiting_shipping"
   });
@@ -1816,9 +1877,9 @@ test("the immutable operation journal freezes public result and recovery evidenc
   assert.match(audit.journal.sync.adminEventId, /^payment_event_admin:/);
   assert.deepEqual(audit.journal.recalculation, {
     required: true,
-    owner: key,
+    owner: operationIdForKey(key),
     expectedOrderVersion: 5,
-    completionBusinessKey: `payment_recalculation:${key}:order-1`
+    completionBusinessKey: `payment_recalculation:${operationIdForKey(key)}:order-1`
   });
   assert.equal(state.customer_accounts[0].paymentMutationVersion, 1);
   assert.deepEqual({
@@ -1843,7 +1904,7 @@ test("sync event IDs are both checked with limit(2) before either event is added
     return `${prefix}:${crypto.createHash("sha256").update(businessKey).digest("hex").slice(0, 40)}`;
   }
   const key = "sync-event-preflight";
-  const businessKey = `payment_mutation:${key}:payment-1:confirm`;
+  const businessKey = `payment_mutation:${operationIdForKey(key)}:payment-1:confirm`;
   const ownerEventId = eventId("payment_event_owner", businessKey);
   const adminEventId = eventId("payment_event_admin", businessKey);
   const cases = [
@@ -1865,7 +1926,7 @@ test("sync event IDs are both checked with limit(2) before either event is added
       { eventId: ownerEventId, limit: 2 },
       { eventId: adminEventId, limit: 2 }
     ], `${name} must preflight both deterministic IDs`);
-    assert.equal(operations.some((entry) => entry.collection === "sync_events" && entry.operation === "add"), false, `${name} must fail before the first sync add`);
+    assert.equal(operations.some((entry) => entry.collection === "sync_events" && ["add", "set"].includes(entry.operation)), false, `${name} must fail before the first sync write`);
     const state = db.snapshot();
     assert.equal(state.payment_records[0].status, "pending_confirm");
     assert.equal(state.orders[0].status, "pending_payment_confirm");

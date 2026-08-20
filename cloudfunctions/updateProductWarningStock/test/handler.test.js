@@ -116,14 +116,19 @@ test("forged legacy body identity cannot enter inventory log or outbox audit fie
   });
   const state = db.snapshot();
   const inventoryLog = state.inventory_logs[0];
+  const operation = state.admin_operation_logs[0];
   const event = state.sync_events[0];
 
   assert.equal(response.ok, true);
   assert.equal(inventoryLog.operatorId, "trusted-mini-openid");
-  assert.equal(inventoryLog.operatorOpenid, "trusted-mini-openid");
+  assert.equal(Object.hasOwn(inventoryLog, "operatorOpenid"), false);
   assert.equal(inventoryLog.operatorRole, "procurement");
   assert.equal(inventoryLog.sourceClient, "miniprogram");
   assert.equal(JSON.stringify(inventoryLog).includes("forged"), false);
+  assert.equal(operation.operatorId, "trusted-mini-openid");
+  assert.equal(operation.operatorRole, "procurement");
+  assert.equal(Object.hasOwn(operation, "operatorOpenid"), false);
+  assert.equal(JSON.stringify(operation).includes("forged"), false);
   assert.equal(Object.hasOwn(event, "openid"), false);
   assert.equal(Object.hasOwn(event, "operatorOpenid"), false);
   assert.equal(JSON.stringify(event).includes("forged"), false);

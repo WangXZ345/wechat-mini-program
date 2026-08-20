@@ -789,7 +789,7 @@ describe("OperationsView real inventory warning action", () => {
       ...definition.bulkActions
     ].filter((action) => action.realEnabled).map((action) => `${definition.key}:${action.key}`));
 
-    expect(enabled).toEqual(["products:create", "products:edit", "products:change-price", "products:toggle-status", "products:batch-enable", "products:batch-tags", "inventory:adjust", "inventory:set-warning", "inventory-alerts:set-warning", "inventory-alerts:adjust", "orders:review", "orders:reject", "payments:confirm", "payments:reject", "after-sales:approve", "after-sales:reject", "after-sales:receive", "after-sales:inspect", "refunds:process", "refunds:reject"]);
+    expect(enabled).toEqual(["products:create", "products:edit", "products:change-price", "products:toggle-status", "products:batch-enable", "products:batch-tags", "inventory:adjust", "inventory:set-warning", "inventory:batch-warning", "inventory-alerts:set-warning", "inventory-alerts:adjust", "inventory-alerts:batch-warning", "orders:review", "orders:reject", "payments:confirm", "payments:reject", "after-sales:approve", "after-sales:reject", "after-sales:receive", "after-sales:inspect", "refunds:process", "refunds:reject"]);
   });
 
   it("enables row adjustment and set-warning while keeping unsafe top-level and bulk actions disabled", async () => {
@@ -800,6 +800,8 @@ describe("OperationsView real inventory warning action", () => {
     expect(actionButton(wrapper, "row", "adjust").attributes("disabled")).toBeUndefined();
     expect(actionButton(wrapper, "row", "view-log").attributes("disabled")).toBeDefined();
     expect(actionButton(wrapper, "bulk", "batch-warning").attributes("disabled")).toBeDefined();
+    await selectRows(wrapper, [{ ...baseRow }]);
+    expect(actionButton(wrapper, "bulk", "batch-warning").attributes("disabled")).toBeUndefined();
     expect(wrapper.text()).toContain("部分写操作尚未开放");
   });
 
@@ -861,7 +863,8 @@ describe("OperationsView real inventory warning action", () => {
       expect.objectContaining({ expectedVersion: 0 })
     );
     expect(actionButton(wrapper, "row", "adjust").attributes("disabled")).toBeUndefined();
-    expect(actionButton(wrapper, "bulk", "batch-warning").attributes("disabled")).toBeDefined();
+    await selectRows(wrapper, [{ ...baseRow }]);
+    expect(actionButton(wrapper, "bulk", "batch-warning").attributes("disabled")).toBeUndefined();
   });
 
   it("reuses the dedicated adjustment dialog from an inventory alert row", async () => {
@@ -875,6 +878,118 @@ describe("OperationsView real inventory warning action", () => {
       productId: "product-1",
       resource: "inventory-alerts"
     });
+  });
+
+  it("submits exact warning snapshots and shows the partial result without claiming full success", async () => {
+    const selectedRows = [
+      { ...baseRow, id: "product-1", version: 0, warningThreshold: 0 },
+      { ...baseRow, id: "product-2", version: 4, warningThreshold: 7 }
+    ];
+    transportMock.list.mockResolvedValue({ items: selectedRows, total: 2, page: 1, pageSize: 20, nextCursor: null });
+    transportMock.mutate.mockImplementation(async (_resource, _action, payload) => ({
+      requestId: String(payload.requestId),
+      batchId: String(payload.batchId),
+      overallStatus: "partial",
+      counts: { total: 2, success: 1, skipped: 0, validation: 0, not_allowed: 0, conflict: 1, permission: 0, business_error: 0, failed: 1, retryable: 1 },
+      items: [
+        { id: "product-1", key: "product-1", version: 0, status: "success", code: "OK", message: "处理成功", retryable: false, reused: false },
+        { id: "product-2", key: "product-2", version: 4, status: "conflict", code: "DATA_VERSION_CONFLICT", message: "数据已更新，请刷新后重试", retryable: true, reused: false }
+      ]
+    }));
+    const wrapper = await mountPage();
+    await selectRows(wrapper, selectedRows);
+    await actionButton(wrapper, "bulk", "batch-warning").trigger("click");
+    await setWarningValue(wrapper, 12);
+    await setReason(wrapper, "季度阈值复核");
+    await confirm(wrapper);
+
+    const [resource, action, payload, options] = transportMock.mutate.mock.calls[0]!;
+    expect(resource).toBe("inventory");
+    expect(action).toBe("batch-warning");
+    expect(payload).toMatchObject({
+      requestId: expect.stringMatching(/^inventory:batch-request:/),
+      batchId: expect.stringMatching(/^inventory:batch:/),
+      items: [
+        { id: "product-1", key: "product-1", version: 0, payload: { warningThreshold: 12, expectedWarningThreshold: 0, reason: "季度阈值复核" } },
+        { id: "product-2", key: "product-2", version: 4, payload: { warningThreshold: 12, expectedWarningThreshold: 7, reason: "季度阈值复核" } }
+      ]
+    });
+    expect(options.idempotencyKey).toMatch(/^inventory:batch-warning:/);
+    expect(messageMock.warning).toHaveBeenCalledWith("成功 1 项，跳过 0 项，失败 1 项；可重试 1 项；product-2：数据冲突：数据已更新，请刷新后重试");
+    expect(messageMock.success).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(ElDialog).props("modelValue")).toBe(false);
+    expect(transportMock.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps all batch correlation identifiers stable on retry and rotates all before a changed attempt", async () => {
+    const selectedRows = [{ ...baseRow, id: "product-1", version: 0, warningThreshold: 0 }];
+    transportMock.list.mockResolvedValue({ items: selectedRows, total: 1, page: 1, pageSize: 20, nextCursor: null });
+    transportMock.mutate
+      .mockRejectedValueOnce(new ApiError("网络不可用", "NETWORK_ERROR"))
+      .mockRejectedValueOnce(new ApiError("网络不可用", "NETWORK_ERROR"))
+      .mockRejectedValueOnce(new ApiError("网络不可用", "NETWORK_ERROR"))
+      .mockResolvedValueOnce({
+        requestId: "batch-response-1", batchId: "batch-response-1", overallStatus: "success",
+        counts: { total: 1, success: 1, skipped: 0, validation: 0, not_allowed: 0, conflict: 0, permission: 0, business_error: 0, failed: 0, retryable: 0 },
+        items: [{ id: "product-1", key: "product-1", version: 0, status: "success", code: "OK", message: "处理成功", retryable: false, reused: false }]
+      });
+    const wrapper = await mountPage();
+    await selectRows(wrapper, selectedRows);
+    await actionButton(wrapper, "bulk", "batch-warning").trigger("click");
+    await setWarningValue(wrapper, 8);
+    await confirm(wrapper);
+    await confirm(wrapper);
+    const [, , firstPayload, firstOptions] = transportMock.mutate.mock.calls[0]!;
+    const [, , retryPayload, retryOptions] = transportMock.mutate.mock.calls[1]!;
+    expect(retryOptions.idempotencyKey).toBe(firstOptions.idempotencyKey);
+    expect(retryPayload.requestId).toBe(firstPayload.requestId);
+    expect(retryPayload.batchId).toBe(firstPayload.batchId);
+
+    await setWarningValue(wrapper, 9);
+    await confirm(wrapper);
+    await confirm(wrapper);
+    const [, , changedPayload, changedOptions] = transportMock.mutate.mock.calls[2]!;
+    const [, , changedRetryPayload, changedRetryOptions] = transportMock.mutate.mock.calls[3]!;
+    expect(changedOptions.idempotencyKey).not.toBe(firstOptions.idempotencyKey);
+    expect(changedPayload.requestId).not.toBe(firstPayload.requestId);
+    expect(changedPayload.batchId).not.toBe(firstPayload.batchId);
+    expect(changedRetryOptions.idempotencyKey).toBe(changedOptions.idempotencyKey);
+    expect(changedRetryPayload.requestId).toBe(changedPayload.requestId);
+    expect(changedRetryPayload.batchId).toBe(changedPayload.batchId);
+  });
+
+  it("keeps the dialog open for malformed batch responses and rejects over-limit or unauthorized selections", async () => {
+    const wrapper = await mountPage();
+    await selectRows(wrapper, [{ ...baseRow }]);
+    await actionButton(wrapper, "bulk", "batch-warning").trigger("click");
+    transportMock.mutate.mockResolvedValue({ malformed: true });
+    await confirm(wrapper);
+    expect(messageMock.error).toHaveBeenCalledWith("批量响应无效");
+    expect(wrapper.findComponent(ElDialog).props("modelValue")).toBe(true);
+
+    wrapper.getComponent(ElDialog).vm.$emit("update:modelValue", false);
+    await selectRows(wrapper, Array.from({ length: 51 }, (_, index) => ({ ...baseRow, id: `product-${index}`, version: index })));
+    await actionButton(wrapper, "bulk", "batch-warning").trigger("click");
+    expect(messageMock.error).toHaveBeenCalledWith("所选商品的预警值或版本异常，请刷新后重试");
+    authMock.can.mockImplementation((permission?: string) => !permission || permission === "inventory:view");
+    await selectRows(wrapper, [{ ...baseRow }]);
+    expect(actionButton(wrapper, "bulk", "batch-warning").attributes("disabled")).toBeDefined();
+  });
+
+  it.each([
+    ["empty id", { ...baseRow, id: "" }, null],
+    ["invalid warning threshold", { ...baseRow, warningThreshold: null }, null],
+    ["invalid version", { ...baseRow, version: -1 }, null],
+    ["duplicate id", { ...baseRow }, { ...baseRow }]
+  ] as const)("rejects an invalid batch warning selection: %s", async (_label, first, second) => {
+    const selectedRows = second ? [first as TestRow, second as TestRow] : [first as TestRow];
+    const wrapper = await mountPage();
+    await selectRows(wrapper, selectedRows);
+    await actionButton(wrapper, "bulk", "batch-warning").trigger("click");
+
+    expect(messageMock.error).toHaveBeenCalledWith("所选商品的预警值或版本异常，请刷新后重试");
+    expect(transportMock.mutate).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(ElDialog).props("modelValue")).toBe(false);
   });
 
   it("submits the exact payload, preserves version zero, accepts zero, closes, and refreshes once", async () => {

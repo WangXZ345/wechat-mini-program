@@ -5,6 +5,8 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
 const _ = db.command;
 const { requirePermission } = require("./auth");
+const { createSystemSettingsService } = require("./systemSettingsService");
+const idempotency = require("./idempotency");
 
 async function requireAdmin() {
   const openid = cloud.getWXContext().OPENID;
@@ -134,7 +136,11 @@ function normalizeSystemSettings(input = {}) {
 exports.main = async (event) => {
   try {
     const permissionAdmin = await requirePermission("system:settings");
-    const admin = { openid: permissionAdmin.openid, adminId: permissionAdmin._id || permissionAdmin.id };
+    const admin = {
+      ...permissionAdmin,
+      openid: permissionAdmin.openid,
+      adminId: permissionAdmin._id || permissionAdmin.id
+    };
     const methods = Array.isArray(event.paymentMethods)
       ? event.paymentMethods.map((item) => String(item).trim()).filter(Boolean)
       : [];
@@ -162,16 +168,27 @@ exports.main = async (event) => {
     }
 
     if (event.systemSettings) {
-      const systemSettings = normalizeSystemSettings(event.systemSettings);
-      await db.collection("settings").doc("system_settings").set({
-        data: {
-          ...systemSettings,
-          updatedAt: db.serverDate(),
-          updatedBy: admin.adminId,
-          updatedByOpenid: admin.openid
-        }
+      const systemInput = Object.fromEntries(Object.entries({
+        enableOfflineQrPayment: event.systemSettings.enableOfflineQrPayment,
+        enableBankTransfer: event.systemSettings.enableBankTransfer,
+        enableWechatPay: event.systemSettings.enableWechatPay,
+        requirePaymentProofForOfflinePayment: event.systemSettings.requirePaymentProofForOfflinePayment,
+        allowMultiplePaymentRecords: event.systemSettings.allowMultiplePaymentRecords,
+        maxPaymentScreenshotCount: event.systemSettings.maxPaymentScreenshotCount,
+        lowStockDefaultThreshold: event.systemSettings.lowStockDefaultThreshold,
+        sessionIdleMinutes: event.systemSettings.sessionIdleMinutes
+      }).filter(([, value]) => value !== undefined));
+      const actor = { id: admin.adminId, role: admin.role, status: admin.status, isActive: admin.isActive, permissions: admin.permissions, sourceClient: "admin_web" };
+      const settingsService = createSystemSettingsService({ db, idempotency });
+      const saved = await settingsService.saveSettings({
+        actor,
+        input: systemInput,
+        expectedVersion: event.systemSettings.expectedVersion,
+        idempotencyKey: event.systemSettings.idempotencyKey,
+        requestId: event.requestId,
+        strict: false
       });
-      result.systemSettings = systemSettings;
+      result.systemSettings = saved;
     }
 
     return { ok: true, data: result };
